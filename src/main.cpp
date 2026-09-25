@@ -140,6 +140,7 @@ int main(int argc, char *argv[]) {
      *
      *  BOOTCADE_UPDATE_DAT=1       recharge la base depuis les groupes DAT
      *                              actifs (la boite « Update DAT » elle-meme) ;
+     *                              =fbneo ou =mame : ce seul emulateur ;
      *  BOOTCADE_ROM_SCAN=<emu>     scan de la bibliotheque d'un emulateur autre
      *                              que FinalBurn Neo (RomScanner::scan_into_cache) ;
      *  BOOTCADE_ROM_AUDIT=<groupe> audit de l'onglet Bibliotheque pour ce
@@ -151,12 +152,13 @@ int main(int argc, char *argv[]) {
         const char* upd  = std::getenv("BOOTCADE_UPDATE_DAT");
         const char* scan = std::getenv("BOOTCADE_ROM_SCAN");
         const char* grp  = std::getenv("BOOTCADE_ROM_AUDIT");
-        const bool any = (upd && *upd == '1') || (scan && *scan) || (grp && *grp);
-        if (upd && *upd == '1') {
+        const bool any = (upd && *upd) || (scan && *scan) || (grp && *grp);
+        if (upd && *upd) {
             Gtk::Window host;
             const auto t0 = std::chrono::steady_clock::now();
+            const std::string scope = std::string(upd) == "1" ? std::string() : std::string(upd);
             DATUpdateDialog dialog(host, database, "the active DAT groups",
-                                   DatSource::files_to_load(DatSource::load_groups()));
+                                   DATUpdateDialog::files_for_update(scope), scope);
             dialog.start_update();
             dialog.run();
             std::cout << "[UPDATEDAT] seconds=" << std::chrono::duration_cast<std::chrono::milliseconds>(

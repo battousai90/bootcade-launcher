@@ -216,6 +216,9 @@ void ROMScanDialog::worker_thread() {
         }
         m_progress_dispatcher();
         m_db->cleanupRomCache(m_roms_paths);
+        // And the archives of a directory that no library holds any more.
+        if (int n = RomScanner::prune_zip_cache(m_db))
+            add_log_message(std::to_string(n) + " archive(s) no longer in any library : forgotten", Level::Muted);
 
         // Pre-scan: compute per-directory file counts and mtimes to avoid
         // deep scans for folders that haven't changed since last snapshot.

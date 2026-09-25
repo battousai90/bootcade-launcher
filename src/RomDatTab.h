@@ -53,7 +53,9 @@ public:
     // The database must be rebuilt from the (selected) DAT files. `confirm`
     // is false when the tab just changed the folder or a selection and the
     // reload is the natural continuation; true for the explicit menu entry.
-    sigc::signal<void, bool>& signal_reload_database() { return m_sig_reload; }
+    // The string is the emulator whose games are to be reloaded (that of the
+    // group the change was made in) ; empty for every emulator.
+    sigc::signal<void, bool, std::string>& signal_reload_database() { return m_sig_reload; }
     // The first group's folder changed : Settings keeps the same key.
     sigc::signal<void, std::string>& signal_folder_changed() { return m_sig_folder; }
     // FBNeo should write its DATs into the folder : the owner runs GenerateDAT
@@ -106,12 +108,15 @@ private:
     void groups_changed();
     // Selections and enabled groups change what the database holds : one
     // reload, shortly after the last change, however many ticks in a row.
-    void schedule_reload();
+    void schedule_reload(const std::string& emulator);
+    // The emulator of the group with that id ; empty when there is none.
+    std::string emulator_of_group(const std::string& id) const;
     // The database holds the union of what active groups select. A change
     // that leaves that union as it was (a file another group already loads)
     // needs no reload : compare with the union taken before the change.
     std::vector<std::string> union_files() const { return DatSource::files_to_load(m_groups); }
-    bool reload_if_union_changed(const std::vector<std::string>& before);
+    bool reload_if_union_changed(const std::vector<std::string>& before,
+                                 const std::string& emulator);
 
     void apply_source_ui();
     void on_source_changed();
@@ -244,7 +249,10 @@ private:
     std::vector<std::string> m_job_written, m_job_before;
     DatSource::Group         m_job_group;
 
-    sigc::signal<void, bool>        m_sig_reload;
+    sigc::signal<void, bool, std::string> m_sig_reload;
+    // What the reload the timer holds covers : changes in groups of two
+    // emulators reload both.
+    std::string         m_reload_emulator;
     sigc::signal<void, std::string> m_sig_folder;
     sigc::signal<void, std::string> m_sig_generate;
     sigc::signal<void>              m_sig_groups;

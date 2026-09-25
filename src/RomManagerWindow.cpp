@@ -137,7 +137,7 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
         e.fbneo_executable = fbneo_executable();
         return e;
     });
-    m_dat->signal_reload_database().connect([this](bool confirm) { m_sig_update_dat.emit(confirm); });
+    m_dat->signal_reload_database().connect([this](bool confirm, std::string emulator) { m_sig_update_dat.emit(confirm, emulator); });
     m_dat->signal_folder_changed().connect([this](std::string folder) { m_sig_dat_path_changed.emit(folder); });
     m_dat->signal_generate_requested().connect([this](std::string folder) {
         const std::string exe = fbneo_executable();
@@ -149,7 +149,7 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
         // returns, the folder has changed and the database follows.
         GenerateDAT::execute(*this, exe, folder);
         m_dat->refresh();
-        m_sig_update_dat.emit(false);
+        m_sig_update_dat.emit(false, "fbneo");
     });
 
     m_library = Gtk::make_managed<RomLibraryTab>(m_db, [this] {

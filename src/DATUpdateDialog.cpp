@@ -5,12 +5,15 @@
 #include "RomScanner.h"
 #include "DatSource.h"
 #include "RomResolve.h"
+#include <algorithm>
 #include <set>
 #include <thread>
 #include <iostream>
 #include <filesystem>
 #include <ctime>
+#include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // Le temps laisse pour lire le « Terminé ! » avant que la boite ne se ferme
@@ -18,10 +21,10 @@
 static constexpr unsigned int kAutoCloseSeconds = 4;
 
 DATUpdateDialog::DATUpdateDialog(Gtk::Window& parent, std::shared_ptr<DatabaseManager> db, const std::string& dat_path,
-                                 std::vector<std::string> files)
+                                 std::vector<std::string> files, std::string emulator)
     : Gtk::Dialog()
     , m_db(db)
-    , m_dat_path(dat_path), m_files(std::move(files))
+    , m_dat_path(dat_path), m_files(std::move(files)), m_emulator(std::move(emulator))
 {
     namespace ui = SettingsUi;
 
@@ -84,6 +87,16 @@ DATUpdateDialog::DATUpdateDialog(Gtk::Window& parent, std::shared_ptr<DatabaseMa
     show_all_children();
 }
 
+std::vector<std::string> DATUpdateDialog::files_for_update(const std::string& emulator,
+                                                          std::vector<std::string>* conflicts) {
+    auto groups = DatSource::load_groups();
+    if (!emulator.empty())
+        groups.erase(std::remove_if(groups.begin(), groups.end(),
+                                    [&](const DatSource::Group& g) { return g.emulator != emulator; }),
+                     groups.end());
+    return DatSource::files_to_load(groups, conflicts);
+}
+
 DATUpdateDialog::~DATUpdateDialog() {
     // Avant tout le reste : un minuteur encore arme se declencherait sur un
     // objet en cours de destruction.
@@ -137,7 +150,9 @@ void DATUpdateDialog::worker_thread() {
         // games table, so unchanged games keep their availability status without a
         // full ROM re-scan (see Phase 4).
         log("Snapshotting current game statuses for diff...");
-        std::unordered_map<std::string, std::string> old_snapshot = m_db->snapshotStatusSignatures();
+        if (!m_emulator.empty())
+            log("Updating the " + m_emulator + " games only : the other emulators' games are left as they are");
+        std::unordered_map<std::string, std::string> old_snapshot = m_db->snapshotStatusSignatures(m_emulator);
         log("Captured " + std::to_string(old_snapshot.size()) + " game statuses", Level::Muted);
 
         // Favourites and play history survive the wipe on their own: the games
@@ -147,13 +162,14 @@ void DATUpdateDialog::worker_thread() {
         log(std::to_string(m_db->protectedPlayerStats())
             + " game(s) with play history : carried across the rebuild");
 
-        if (!m_db->clearAllData()) {
+        if (!m_db->clearGames(m_emulator)) {
             log("Error clearing database", Level::Error);
             m_failed.store(true);
             m_update_finished.store(true);
             m_finished_dispatcher();
             return;
         }
+        m_database_changed.store(true);
         // NOTE: rom_cache and directory snapshots are intentionally PRESERVED.
         // The physical ROM files on disk are unaffected by a DAT refresh, so their
         // cached CRC/metadata stays valid. Only games whose ROM definition actually
@@ -219,39 +235,58 @@ void DATUpdateDialog::worker_thread() {
         // the ROM cache only for games that are new or whose definition changed.
         log("Applying diff (restoring statuses for unchanged games)...");
         std::vector<std::string> changed_zip_names;
-        int restored = m_db->applyPreservedStatuses(old_snapshot, changed_zip_names);
+        std::vector<std::string> changed_keys;
+        int restored = m_db->applyPreservedStatuses(old_snapshot, changed_zip_names, m_emulator, &changed_keys);
         log("Restored " + std::to_string(restored) + " game statuses : no re-scan needed", Level::Ok);
-        log(std::to_string(changed_zip_names.size()) + " new/changed games to re-evaluate");
+        log(std::to_string(changed_keys.size()) + " new/changed games to re-evaluate");
 
-        // Re-derive statuses for new/changed games directly from the content-addressed
-        // cache (zip_contents) : zero disk I/O. Resolves everything, including clones
-        // whose ROMs live in a parent ZIP, provided that ZIP was scanned at least once.
-        update_progress(0.98, "", "Re-matching from cache...");
-        log("Re-matching games from ROM content cache (no disk read)...");
-        int rematched = RomScanner::rematch_from_cache(m_db);
-        log("Re-matched " + std::to_string(rematched) + " games from cache", Level::Ok);
-
-        // The other emulators' sets have no per-file scan to fall back on :
-        // their whole verdict is derived from the cache, over their own ROM
-        // directories (see RomScanner::scan_into_cache). Done here too, so a
-        // freshly imported MAME DAT shows what the cache already knows.
-        {
-            std::set<std::string> others;
-            for (const auto& g : DatSource::load_groups())
-                if (g.active && g.emulator != "fbneo") others.insert(g.emulator);
-            for (const auto& emu : others) {
-                if (m_cancelled.load() || m_db->getGameCount(emu) == 0) continue;
-                const auto roots = DatSource::roms_paths_for(emu);
-                if (roots.empty()) continue;
-                auto r = RomResolve::resolve_all_from_cache(m_db, roots, RomResolve::load_style(emu), emu);
-                log("Resolved " + std::to_string(r.evaluated) + " " + emu + " sets from cache ("
-                    + std::to_string(r.available) + " available)", Level::Ok);
+        // Judge the new/changed games from the ROM content cache, one emulator
+        // at a time, over that emulator's own ROM directories. The cache is
+        // trusted as it stands : the scans drop from it what left the disk,
+        // so no file is checked here. Unchanged games keep the status
+        // restored above.
+        std::map<std::string, std::unordered_set<std::string>> changed_by_emu;
+        for (const auto& key : changed_keys) {
+            // "name\x1fsystem\x1femulator" (DatabaseManager::snapshotStatusSignatures)
+            const size_t last = key.rfind('\x1f');
+            if (last == std::string::npos) continue;
+            changed_by_emu[key.substr(last + 1)].insert(key.substr(0, last));
+        }
+        size_t total = 0, done_before = 0;
+        for (const auto& [emu, keys] : changed_by_emu) total += keys.size();
+        for (const auto& [emu, keys] : changed_by_emu) {
+            if (m_cancelled.load()) break;
+            const auto roots = DatSource::roms_paths_for(emu);
+            if (roots.empty()) {
+                log("No ROM directory set for " + emu + " : its " + std::to_string(keys.size())
+                    + " new/changed games stay missing until a scan", Level::Muted);
+                continue;
             }
+            update_progress(0.96, "", "Re-matching from cache...");
+            log("Re-matching " + std::to_string(keys.size()) + " " + emu + " games from the ROM content cache...");
+            auto r = RomResolve::resolve_changed_from_cache(
+                m_db, roots, RomResolve::load_style(emu), emu, keys,
+                [&](size_t done, size_t of) {
+                    // The share of this emulator in the last 4 % of the bar.
+                    const double part = total ? (double)keys.size() / (double)total : 1.0;
+                    const double base = total ? (double)done_before / (double)total : 0.0;
+                    update_progress(0.96 + 0.04 * (base + part * (of ? (double)done / (double)of : 1.0)), "",
+                                    "Re-matching from cache... " + std::to_string(done) + " / " + std::to_string(of));
+                    return !m_cancelled.load();
+                });
+            done_before += keys.size();
+            log(emu + " : " + std::to_string(r.evaluated) + " sets judged, " + std::to_string(r.available)
+                + " available, " + std::to_string(r.incorrect) + " incorrect, " + std::to_string(r.missing)
+                + " missing", Level::Ok);
+            if (r.cancelled)
+                log("Re-matching stopped : the games not judged yet stay missing until the next scan", Level::Warn);
         }
 
         // Fallback: for anything the cache could not resolve, invalidate its cache
         // entry so a subsequent ROM scan re-reads just those files.
         m_db->invalidateRomCacheForFiles(changed_zip_names);
+
+        if (m_cancelled.load()) { m_update_finished.store(true); m_finished_dispatcher(); return; }
 
         update_progress(1.0, "", "Complete!");
         log("Update completed. Statuses are up to date : a full re-scan is no longer required.", Level::Ok);

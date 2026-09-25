@@ -95,6 +95,9 @@ public:
     std::vector<Game> getRecentlyPlayed(int limit = 20);
 
     bool clearAllData();
+    // One emulator's games, with their ROMs and disks ; empty = every game.
+    // A DAT update of FinalBurn Neo leaves MAME's sets and statuses alone.
+    bool clearGames(const std::string& emulator);
     bool gameExists(const std::string& game_name);
 
     // Transaction management
@@ -126,14 +129,20 @@ public:
     int countFavorites();
     int countPlayedGames();
 
-    std::unordered_map<std::string, std::string> snapshotStatusSignatures();
+    // `emulator` narrows the snapshot to one emulator's games ; empty = all.
+    std::unordered_map<std::string, std::string> snapshotStatusSignatures(const std::string& emulator = "");
     // After a DAT reload, restore statuses for every game whose (name, system) and
     // ROM signature are unchanged versus the given snapshot. Games that are new or
     // whose signature changed keep the default 'missing' status and have their ZIP
     // filename ("<name>.zip") appended to changed_zip_names so the caller can
     // invalidate exactly those cache entries. Returns the number of restored games.
+    // `emulator` limits the pass to the games that were reloaded (empty = all);
+    // `changed_keys`, when given, receives the snapshot key of every game that
+    // is new or whose ROM definition changed : the only ones left to judge.
     int applyPreservedStatuses(const std::unordered_map<std::string, std::string>& old_snapshot,
-                               std::vector<std::string>& changed_zip_names);
+                               std::vector<std::string>& changed_zip_names,
+                               const std::string& emulator = "",
+                               std::vector<std::string>* changed_keys = nullptr);
     // Remove rom_cache rows whose filename matches any of the given ZIP filenames,
     // forcing those (and only those) ZIPs to be re-read on the next scan.
     bool invalidateRomCacheForFiles(const std::vector<std::string>& zip_filenames);
@@ -153,6 +162,13 @@ public:
     // canonical paths zip_contents stores.
     bool stampZipContents(const std::string& filepath, long long file_size, long long last_modified);
     std::unordered_map<std::string, std::pair<long long, long long>> getZipContentStamps();
+    // Every archive zip_contents describes (canonical paths), and forgetting
+    // some : their contents and their stamp. Scans call this for files gone
+    // from the disk or out of every library, so that the cache only ever
+    // describes files that are there and whoever reads it (a DAT update) need
+    // not check the disk file by file. Returns how many paths were forgotten.
+    std::vector<std::string> getZipContentPaths();
+    int forgetZipContents(const std::vector<std::string>& filepaths);
 
     // DAT file management
     bool registerDatFile(const std::string& filename, const std::string& filepath, time_t last_modified, size_t file_size, int games_count);

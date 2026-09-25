@@ -3451,6 +3451,10 @@ void MainWindow::scan_fbneo_library() {
 }
 
 void MainWindow::on_update_dat_clicked() {
+    confirm_update_dat("");
+}
+
+void MainWindow::confirm_update_dat(const std::string& emulator) {
     std::cout << "[INFO] Update DAT requested" << std::endl;
 
     // Confirmation dialog with custom styling
@@ -3464,7 +3468,7 @@ void MainWindow::on_update_dat_clicked() {
         return;
     }
 
-    do_update_dat();
+    do_update_dat(emulator);
 }
 
 void MainWindow::ask_dat_resync() {
@@ -3485,20 +3489,28 @@ void MainWindow::ask_dat_resync() {
     if (confirm.show_and_confirm()) do_update_dat();
 }
 
-void MainWindow::do_update_dat() {
+void MainWindow::do_update_dat(const std::string& emulator) {
     // The dialog runs a nested loop : a second request arriving meanwhile
     // (the DAT tab's deferred reload, a download finishing) waits its turn
     // rather than opening a dialog over the dialog.
-    if (m_dat_update_running) { m_dat_update_again = true; return; }
+    if (m_dat_update_running) {
+        // Two requests for different emulators : the queued reload covers both.
+        if (!m_dat_update_again) m_dat_update_again_emulator = emulator;
+        else if (m_dat_update_again_emulator != emulator) m_dat_update_again_emulator.clear();
+        m_dat_update_again = true;
+        return;
+    }
     m_dat_update_running = true;
+    std::string scope = emulator;
     do {
         m_dat_update_again = false;
-        run_update_dat_once();
+        run_update_dat_once(scope);
+        scope = m_dat_update_again_emulator;
     } while (m_dat_update_again);
     m_dat_update_running = false;
 }
 
-void MainWindow::run_update_dat_once() {
+void MainWindow::run_update_dat_once(const std::string& emulator) {
     std::string dat_path = m_settings_panel.get_dat_path();
     if (dat_path.empty()) {
         SettingsUi::notice(*this, _("Error"),
@@ -3510,14 +3522,14 @@ void MainWindow::run_update_dat_once() {
     // The database is the union of what the active DAT groups select : a
     // file no group wants stays out, a file two groups share loads once.
     std::vector<std::string> conflicts;
-    std::vector<std::string> files = DatSource::files_to_load(DatSource::load_groups(), &conflicts);
+    std::vector<std::string> files = DATUpdateDialog::files_for_update(emulator, &conflicts);
     for (const auto& c : conflicts) std::cerr << "[DAT] conflict: " << c << std::endl;
-    DATUpdateDialog dialog(*this, m_database, dat_path, files);
+    DATUpdateDialog dialog(*this, m_database, dat_path, files, emulator);
     dialog.start_update();
     
     int result = dialog.run();
     
-    if (!dialog.was_cancelled()) {
+    if (dialog.database_changed()) {
         // Reload games from database and refresh interface
         std::cout << "[INFO] Reloading games after DAT update..." << std::endl;
         m_cached_games = load_all_catalogs();
@@ -6013,7 +6025,8 @@ void MainWindow::on_download_latest_fbneo() {
     // it silently skipped the database reload entirely: the DAT files on disk
     // were current, but the games table (and the audit reading it) stayed on
     // the old snapshot with no error or indication anything was wrong.
-    do_update_dat();
+    // A new FinalBurn Neo build changes FinalBurn Neo's DATs only.
+    do_update_dat("fbneo");
 }
 
 void MainWindow::on_generate_dat_files() {
@@ -7453,8 +7466,8 @@ void MainWindow::on_rom_manager() {
             m_settings_panel.save_to_file(AppContext::get_config_path());
         });
 
-        m_rom_manager->signal_update_dat().connect([this](bool confirm) {
-            if (confirm) on_update_dat_clicked(); else do_update_dat();
+        m_rom_manager->signal_update_dat().connect([this](bool confirm, std::string emulator) {
+            if (confirm) confirm_update_dat(emulator); else do_update_dat(emulator);
         });
 
         // "Move to library" already moved files straight into existing ROM

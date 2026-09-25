@@ -54,7 +54,8 @@ public:
     // Emitted when the database must be rebuilt from the DAT files : true asks
     // the owner to confirm first (the explicit menu entry), false follows a
     // change the DAT tab just made to the folder.
-    sigc::signal<void, bool>&        signal_update_dat()       { return m_sig_update_dat; }
+    // (confirm, emulator whose games reload ; empty = every emulator)
+    sigc::signal<void, bool, std::string>& signal_update_dat() { return m_sig_update_dat; }
     // Emitted after "Move to library" moves files in place : no new path to add,
     // just a rescan of the existing ROM directories.
     // Both scan signals carry the emulator whose library is to be scanned.
@@ -121,7 +122,7 @@ private:
     sigc::signal<void, std::string> m_sig_dat_path_changed;
     sigc::signal<void, std::string> m_sig_outbox_path_changed;
     sigc::signal<void, std::string> m_sig_quarantine_path_changed;
-    sigc::signal<void, bool>        m_sig_update_dat;
+    sigc::signal<void, bool, std::string> m_sig_update_dat;
     sigc::signal<void, std::string> m_sig_scan_requested;
     sigc::signal<void, std::string> m_sig_rescan_requested;
 };

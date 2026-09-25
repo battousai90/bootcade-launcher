@@ -1597,6 +1597,37 @@ std::vector<Game> DatabaseManager::getAllGamesWithName(const std::string& game_n
     return games;
 }
 
+bool DatabaseManager::clearGames(const std::string& emulator) {
+    if (emulator.empty()) return clearAllData();
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    // Children first : foreign_keys is ON, and disks has no key of its own
+    // to cascade from.
+    const char* sqls[] = {
+        "DELETE FROM disks WHERE game_id IN (SELECT id FROM games WHERE emulator = ?);",
+        "DELETE FROM roms WHERE game_id IN (SELECT id FROM games WHERE emulator = ?);",
+        "DELETE FROM games WHERE emulator = ?;",
+    };
+    bool own_tx = beginTransaction();
+    for (const char* sql : sqls) {
+        sqlite3_stmt* stmt;
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "[ERROR] clearGames: " << sqlite3_errmsg(m_db) << std::endl;
+            if (own_tx) rollbackTransaction();
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, emulator.c_str(), -1, SQLITE_TRANSIENT);
+        const int rc = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        if (rc != SQLITE_DONE) {
+            std::cerr << "[ERROR] clearGames: " << sqlite3_errmsg(m_db) << std::endl;
+            if (own_tx) rollbackTransaction();
+            return false;
+        }
+    }
+    if (own_tx) commitTransaction();
+    return true;
+}
+
 bool DatabaseManager::clearAllData() {
     const char* sql = "DELETE FROM disks; DELETE FROM roms; DELETE FROM games;";
     char* err_msg = nullptr;
@@ -2199,7 +2230,7 @@ int DatabaseManager::countPlayedGames() {
     return n;
 }
 
-std::unordered_map<std::string, std::string> DatabaseManager::snapshotStatusSignatures() {
+std::unordered_map<std::string, std::string> DatabaseManager::snapshotStatusSignatures(const std::string& emulator) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     std::unordered_map<std::string, std::string> out;
 
@@ -2212,6 +2243,7 @@ std::unordered_map<std::string, std::string> DatabaseManager::snapshotStatusSign
     const char* sql =
         "SELECT g.name, g.system, g.status, r.name, r.size, r.crc, g.emulator "
         "FROM games g LEFT JOIN roms r ON r.game_id = g.id "
+        "WHERE (? = '' OR g.emulator = ?) "
         "ORDER BY g.emulator, g.name, g.system, r.name, r.size, r.crc;";
 
     sqlite3_stmt* stmt;
@@ -2219,6 +2251,8 @@ std::unordered_map<std::string, std::string> DatabaseManager::snapshotStatusSign
         std::cerr << "[ERROR] snapshotStatusSignatures prepare failed: " << sqlite3_errmsg(m_db) << std::endl;
         return out;
     }
+    sqlite3_bind_text(stmt, 1, emulator.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, emulator.c_str(), -1, SQLITE_TRANSIENT);
 
     std::string cur_key, cur_status, cur_sig;
     bool have_game = false;
@@ -2261,9 +2295,13 @@ std::unordered_map<std::string, std::string> DatabaseManager::snapshotStatusSign
 
 int DatabaseManager::applyPreservedStatuses(
         const std::unordered_map<std::string, std::string>& old_snapshot,
-        std::vector<std::string>& changed_zip_names) {
-    // Signatures of the freshly reloaded database (statuses are all 'missing' here).
-    std::unordered_map<std::string, std::string> current = snapshotStatusSignatures();
+        std::vector<std::string>& changed_zip_names,
+        const std::string& emulator,
+        std::vector<std::string>* changed_keys) {
+    // Signatures of the freshly reloaded games (statuses are all 'missing' here).
+    // Only the emulator that was reloaded : the other one was not touched and
+    // still holds its own statuses.
+    std::unordered_map<std::string, std::string> current = snapshotStatusSignatures(emulator);
 
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     int restored = 0;
@@ -2308,6 +2346,7 @@ int DatabaseManager::applyPreservedStatuses(
         if (!preserved && gemu == "fbneo") {
             changed_zip_names.push_back(gname + ".zip");
         }
+        if (!preserved && changed_keys) changed_keys->push_back(key);
     }
 
     if (own_tx) commitTransaction();
@@ -2427,6 +2466,44 @@ bool DatabaseManager::getAllZipContents(std::vector<ZipContentRow>& out) {
     }
     sqlite3_finalize(stmt);
     return true;
+}
+
+std::vector<std::string> DatabaseManager::getZipContentPaths() {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::vector<std::string> out;
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(m_db, "SELECT DISTINCT filepath FROM zip_contents;", -1, &stmt, nullptr) != SQLITE_OK)
+        return out;
+    while (sqlite3_step(stmt) == SQLITE_ROW) out.push_back(safe_column_text(stmt, 0));
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+int DatabaseManager::forgetZipContents(const std::vector<std::string>& filepaths) {
+    if (filepaths.empty()) return 0;
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    sqlite3_stmt* del_rows;
+    sqlite3_stmt* del_stamp;
+    if (sqlite3_prepare_v2(m_db, "DELETE FROM zip_contents WHERE filepath = ?;", -1, &del_rows, nullptr) != SQLITE_OK)
+        return 0;
+    if (sqlite3_prepare_v2(m_db, "DELETE FROM zip_contents_stamp WHERE filepath = ?;", -1, &del_stamp, nullptr) != SQLITE_OK) {
+        sqlite3_finalize(del_rows);
+        return 0;
+    }
+    bool own_tx = beginTransaction();
+    int forgotten = 0;
+    for (const auto& path : filepaths) {
+        for (sqlite3_stmt* st : {del_rows, del_stamp}) {
+            sqlite3_reset(st);
+            sqlite3_bind_text(st, 1, path.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(st);
+        }
+        ++forgotten;
+    }
+    if (own_tx) commitTransaction();
+    sqlite3_finalize(del_rows);
+    sqlite3_finalize(del_stamp);
+    return forgotten;
 }
 
 // ==================== ROM CACHE MANAGEMENT ====================
@@ -2923,6 +3000,11 @@ bool DatabaseManager::cleanupRomCache(const std::vector<std::string>& rom_paths)
     }
 
     std::vector<std::string> files_to_remove;
+    // The subset that is gone from the disk : their contents leave
+    // zip_contents too. A file merely outside FinalBurn Neo's directories may
+    // still be another emulator's, and RomScanner::prune_zip_cache decides
+    // for those.
+    std::vector<std::string> files_gone;
 
     // Precompute canonical rom_paths so we can check whether a cached filepath
     // is still under any of the configured ROM directories.
@@ -2974,6 +3056,7 @@ bool DatabaseManager::cleanupRomCache(const std::vector<std::string>& rom_paths)
         if (!exists_on_disk) {
             remove_entry = true;
             files_to_remove.push_back(filepath);
+            files_gone.push_back(filepath);
             continue;
         }
 
@@ -3023,6 +3106,7 @@ bool DatabaseManager::cleanupRomCache(const std::vector<std::string>& rom_paths)
                 sqlite3_finalize(delete_stmt);
             }
         }
+        forgetZipContents(files_gone);
     }
 
     return true;

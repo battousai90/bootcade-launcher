@@ -303,28 +303,27 @@ DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& root
 
 // ── CacheIndex ──────────────────────────────────────────────────────────────
 
-CacheIndex::CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roots_in) {
+bool under_any_root(const std::string& path, const std::vector<std::string>& roots) {
+    for (std::string root : roots) {
+        while (root.size() > 1 && root.back() == '/') root.pop_back();
+        if (root.empty()) continue;
+        if (path.size() > root.size() && path.compare(0, root.size(), root) == 0 && path[root.size()] == '/')
+            return true;
+    }
+    return false;
+}
+
+CacheIndex::CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roots_in,
+                       OnDisk on_disk) {
     std::error_code ec;
     std::vector<DatabaseManager::ZipContentRow> rows;
     db->getAllZipContents(rows);
 
-    std::vector<fs::path> roots;
+    // The roots are canonicalised once ; the paths of the cache already are,
+    // so they are compared as strings : no disk access per archive.
+    std::vector<std::string> roots;
     for (const auto& r : roots_in)
-        if (!r.empty()) roots.push_back(fs::weakly_canonical(fs::path(r), ec));
-
-    auto under_roots = [&](const fs::path& p) {
-        if (roots.empty()) return true;
-        for (const auto& root : roots) {
-            auto it_r = root.begin(), end_r = root.end();
-            auto it_p = p.begin(), end_p = p.end();
-            bool ok = true;
-            for (; it_r != end_r; ++it_r, ++it_p) {
-                if (it_p == end_p || *it_p != *it_r) { ok = false; break; }
-            }
-            if (ok) return true;
-        }
-        return false;
-    };
+        if (!r.empty()) roots.push_back(fs::weakly_canonical(fs::path(r), ec).string());
 
     // One DAT, one folder named after it. Compared without case : RomVault
     // and the user name folders as they like ("Mame" for the DAT "MAME").
@@ -334,8 +333,10 @@ CacheIndex::CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<st
     for (const auto& r : rows) {
         auto u = usable.find(r.filepath);
         if (u == usable.end()) {
-            fs::path p = fs::weakly_canonical(fs::path(r.filepath), ec);
-            bool ok = fs::exists(p, ec) && under_roots(p);
+            // The root first : a string compare, where exists() is a disk
+            // access, and on a USB drive a slow one.
+            bool ok = roots.empty() || under_any_root(r.filepath, roots);
+            if (ok && on_disk == OnDisk::Verify) ok = fs::exists(fs::path(r.filepath), ec);
             u = usable.emplace(r.filepath, ok).first;
             if (ok) {
                 m_by_stem[lower(fs::path(r.filepath).stem().string())].push_back(r.filepath);
@@ -464,30 +465,34 @@ int resolve_inherited_from_cache(std::shared_ptr<DatabaseManager> db,
 
 // ── Every status of one emulator, from the cache ────────────────────────────
 
-CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
-                                          const std::vector<std::string>& roots,
-                                          SetStyle style,
-                                          const std::string& emulator,
-                                          const std::function<bool(size_t, size_t)>& progress) {
-    CacheResolveResult out;
-    CacheIndex index(db, roots);
+namespace {
 
-    std::vector<Game> games = db->getAllGames(emulator);
-    std::unordered_map<std::string, size_t> by_key;
-    by_key.reserve(games.size());
-    for (size_t i = 0; i < games.size(); ++i)
-        by_key[games[i].name + '\x1f' + games[i].system] = i;
+// What resolve_all_from_cache and resolve_changed_from_cache share : one
+// emulator's sets in memory, the cache index, and the verdict of one set.
+struct CachePass {
+    CacheIndex index;
+    std::vector<Game> games;
+    std::unordered_map<std::string, size_t> by_key;   // "name\x1fsystem" → games[i]
+    GameLookup    game_for;
+    ArchiveLookup archive_for;
 
-    GameLookup game_for = [&](const std::string& name, const std::string& system) -> Game {
-        auto it = by_key.find(name + '\x1f' + system);
-        return it == by_key.end() ? Game{} : games[it->second];
-    };
-    ArchiveLookup archive_for = [&](const Game& g) { return index.for_game(g); };
+    CachePass(std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roots,
+              const std::string& emulator, CacheIndex::OnDisk on_disk)
+        : index(db, roots, on_disk), games(db->getAllGames(emulator)) {
+        by_key.reserve(games.size());
+        for (size_t i = 0; i < games.size(); ++i)
+            by_key[games[i].name + '\x1f' + games[i].system] = i;
+        game_for = [this](const std::string& name, const std::string& system) -> Game {
+            auto it = by_key.find(name + '\x1f' + system);
+            return it == by_key.end() ? Game{} : games[it->second];
+        };
+        archive_for = [this](const Game& g) { return index.for_game(g); };
+    }
 
-    db->beginTransaction();
-    for (size_t i = 0; i < games.size(); ++i) {
-        if (progress && (i % 1024) == 0 && !progress(i, games.size())) { out.cancelled = true; break; }
-        const Game& g = games[i];
+    // Judges `g` and writes its status when it changed. `need_own` : leave the
+    // set alone when the cache holds no archive of its own.
+    void judge(std::shared_ptr<DatabaseManager> db, const Game& g, const std::vector<std::string>& roots,
+               SetStyle style, const std::string& emulator, bool need_own, CacheResolveResult& out) {
         // A CHD-only set (MAME's "CHDs (merged)" DAT, or a machine of the
         // single-folder DAT with no ROM of its own) : judged by the headers of
         // its disk files, which no cache holds. A few hundred small reads.
@@ -497,26 +502,27 @@ CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
             if (d.status == "available")      ++out.available;
             else if (d.status == "incorrect") ++out.incorrect;
             else                              ++out.missing;
-            if (d.status == g.status) continue;
+            if (d.status == g.status) return;
             db->updateGameStatusWithSource(g.name, d.status, g.system, d.folder, emulator);
             ++out.changed;
-            continue;
+            return;
         }
         // A set with no ROM to verify : nothing to say, and no status is
         // invented for it.
-        if (g.roms.empty()) continue;
+        if (g.roms.empty()) return;
 
         const Archive* own = index.for_game(g);
+        if (!own && need_own) return;
         Verdict v = evaluate(g, own, style, archive_for, game_for);
         // A zip and CHDs (single-folder MAME DAT : kinst) : one verdict for
         // the set, the zip's and the disks' together.
         if (!g.disks.empty()) v.status = combine_status(v.status, evaluate_disks(g, roots).status);
-        if (v.status.empty()) continue;    // only nodumps
+        if (v.status.empty()) return;    // only nodumps
         ++out.evaluated;
         if (v.status == "available")      ++out.available;
         else if (v.status == "incorrect") ++out.incorrect;
         else                              ++out.missing;
-        if (v.status == g.status) continue;
+        if (v.status == g.status) return;
         // The folder of the set's own archive, like the live scan records it :
         // what lets a ROM directory removed from Settings take its sets'
         // statuses away with it (resetGamesFromDirectory).
@@ -524,8 +530,65 @@ CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
         db->updateGameStatusWithSource(g.name, v.status, g.system, where, emulator);
         ++out.changed;
     }
+};
+
+} // namespace
+
+CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
+                                          const std::vector<std::string>& roots,
+                                          SetStyle style,
+                                          const std::string& emulator,
+                                          const std::function<bool(size_t, size_t)>& progress) {
+    CacheResolveResult out;
+    CachePass pass(db, roots, emulator, CacheIndex::OnDisk::Verify);
+    const auto& games = pass.games;
+
+    db->beginTransaction();
+    for (size_t i = 0; i < games.size(); ++i) {
+        if (progress && (i % 1024) == 0 && !progress(i, games.size())) { out.cancelled = true; break; }
+        pass.judge(db, games[i], roots, style, emulator, /*need_own=*/false, out);
+    }
     db->commitTransaction();
     if (progress && !out.cancelled) progress(games.size(), games.size());
+    return out;
+}
+
+CacheResolveResult resolve_changed_from_cache(std::shared_ptr<DatabaseManager> db,
+                                              const std::vector<std::string>& roots,
+                                              SetStyle style,
+                                              const std::string& emulator,
+                                              const std::unordered_set<std::string>& changed,
+                                              const std::function<bool(size_t, size_t)>& progress) {
+    CacheResolveResult out;
+    if (changed.empty()) return out;
+    CachePass pass(db, roots, emulator, CacheIndex::OnDisk::Trust);
+    const auto& games = pass.games;
+
+    // A set is to judge when it changed itself (whatever the cache says), or
+    // when one of its ancestors did (only if its own archive is known).
+    // Walked through the in-memory list, never the database.
+    std::vector<std::pair<size_t, bool>> todo;   // index, need_own
+    for (size_t i = 0; i < games.size(); ++i) {
+        const Game& g = games[i];
+        if (changed.count(g.name + '\x1f' + g.system)) { todo.emplace_back(i, false); continue; }
+        std::string name = g.romof;
+        for (int depth = 0; depth < 8 && !name.empty(); ++depth) {
+            if (changed.count(name + '\x1f' + g.system)) { todo.emplace_back(i, true); break; }
+            auto it = pass.by_key.find(name + '\x1f' + g.system);
+            if (it == pass.by_key.end()) break;
+            const std::string& next = games[it->second].romof;
+            if (next == name) break;
+            name = next;
+        }
+    }
+
+    db->beginTransaction();
+    for (size_t k = 0; k < todo.size(); ++k) {
+        if (progress && (k % 256) == 0 && !progress(k, todo.size())) { out.cancelled = true; break; }
+        pass.judge(db, games[todo[k].first], roots, style, emulator, todo[k].second, out);
+    }
+    db->commitTransaction();
+    if (progress && !out.cancelled) progress(todo.size(), todo.size());
     return out;
 }
 

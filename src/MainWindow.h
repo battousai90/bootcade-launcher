@@ -149,13 +149,19 @@ private:
                            const std::string& emulator = "fbneo");
     std::vector<std::string> m_pending_scans;   // emulators waiting for their scan
     void on_update_dat_clicked();
+    // `emulator` : the one whose games are reloaded (see DATUpdateDialog) ;
+    // empty reloads every emulator.
+    void confirm_update_dat(const std::string& emulator);
     // The actual reload, with no confirmation dialog of its own : for callers
     // (like the post-FBNeo-download chain) that already got the user's OK a
     // moment ago and would otherwise show a second, easy-to-dismiss prompt
     // that silently drops the database refresh if cancelled.
-    void do_update_dat();
-    void run_update_dat_once();
+    void do_update_dat(const std::string& emulator = "");
+    void run_update_dat_once(const std::string& emulator);
     bool m_dat_update_running = false, m_dat_update_again = false;
+    // What the queued reload covers : two requests for different emulators
+    // queue a reload of both.
+    std::string m_dat_update_again_emulator;
     void update_fbneo_config(const std::vector<std::string>& roms_paths);
     void set_fbneo_system(const std::string& system);
     // In-game screenshot capture: FBNeo's own unmodified F6 hotkey already

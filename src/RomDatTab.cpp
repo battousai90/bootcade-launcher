@@ -299,7 +299,7 @@ void RomDatTab::build_group_card() {
     m_btn_more->add(*ui::image("more.svg", 16));
     m_btn_more->set_tooltip_text(_("More"));
     auto* reload = Gtk::make_managed<Gtk::MenuItem>(_("Reload database from DAT files"));
-    reload->signal_activate().connect([this] { m_sig_reload.emit(true); });
+    reload->signal_activate().connect([this] { m_sig_reload.emit(true, ""); });
     auto* open = Gtk::make_managed<Gtk::MenuItem>(_("Open folder"));
     open->signal_activate().connect(sigc::mem_fun(*this, &RomDatTab::on_open_folder));
     m_more_menu.append(*reload);
@@ -576,14 +576,27 @@ void RomDatTab::groups_changed() {
     m_sig_groups.emit();
 }
 
-void RomDatTab::schedule_reload() {
+void RomDatTab::schedule_reload(const std::string& emulator) {
+    // A reload already waiting for another emulator now covers both.
+    if (!m_reload_timer.connected()) m_reload_emulator = emulator;
+    else if (m_reload_emulator != emulator) m_reload_emulator.clear();
     m_reload_timer.disconnect();
-    m_reload_timer = Glib::signal_timeout().connect([this] { m_sig_reload.emit(false); return false; }, RELOAD_DEBOUNCE_MS);
+    m_reload_timer = Glib::signal_timeout().connect([this] {
+        m_sig_reload.emit(false, m_reload_emulator);
+        return false;
+    }, RELOAD_DEBOUNCE_MS);
 }
 
-bool RomDatTab::reload_if_union_changed(const std::vector<std::string>& before) {
+std::string RomDatTab::emulator_of_group(const std::string& id) const {
+    for (const auto& g : m_groups)
+        if (g.id == id) return g.emulator;
+    return "";
+}
+
+bool RomDatTab::reload_if_union_changed(const std::vector<std::string>& before,
+                                        const std::string& emulator) {
     if (before == union_files()) return false;
-    schedule_reload();
+    schedule_reload(emulator);
     return true;
 }
 
@@ -684,7 +697,7 @@ void RomDatTab::on_add_group() {
     flash(Glib::ustring::compose(_("Group \"%1\" created : untick the DAT files it should not use."), name));
     // Every file of the source : a file no other group loaded joins the
     // database.
-    reload_if_union_changed(before);
+    reload_if_union_changed(before, group().emulator);
 }
 
 void RomDatTab::on_rename_group(size_t index) {
@@ -707,13 +720,14 @@ void RomDatTab::on_delete_group(size_t index) {
         if (!confirm.show_and_confirm()) return;
     }
     auto before = union_files();
+    const std::string erased_emulator = m_groups[index].emulator;
     m_groups.erase(m_groups.begin() + (long)index);
     if (m_current >= m_groups.size()) m_current = m_groups.size() - 1;
     else if (index < m_current) --m_current;
     save_groups();
     refresh();
     m_sig_groups.emit();
-    reload_if_union_changed(before);
+    reload_if_union_changed(before, erased_emulator);
 }
 
 void RomDatTab::on_toggle_group_active(size_t index) {
@@ -723,7 +737,7 @@ void RomDatTab::on_toggle_group_active(size_t index) {
     save_groups();
     if (index == m_current) refresh();
     groups_changed();
-    const bool reloads = reload_if_union_changed(before);
+    const bool reloads = reload_if_union_changed(before, m_groups[index].emulator);
     const auto& name = m_groups[index].name;
     if (m_groups[index].active)
         flash(reloads ? Glib::ustring::compose(_("\"%1\" is active again. The database reloads in a moment…"), name)
@@ -861,7 +875,7 @@ void RomDatTab::on_add_files() {
     refresh();
     m_sig_groups.emit();
     flash(Glib::ustring::compose(_("%1 DAT file(s) added. Reloading the database…"), copied));
-    m_sig_reload.emit(false);
+    m_sig_reload.emit(false, group().emulator);
 }
 
 void RomDatTab::on_primary_action() {
@@ -888,7 +902,7 @@ void RomDatTab::on_generate_mame() {
     // generation depuis FBNeo.
     GenerateDAT::execute_mame(*top, executable_of("mame"), group().folder, nullptr);
     refresh();
-    m_sig_reload.emit(false);
+    m_sig_reload.emit(false, group().emulator);
 }
 
 void RomDatTab::on_rescan() {
@@ -897,7 +911,7 @@ void RomDatTab::on_rescan() {
     group().last_update = DatSource::now_iso();
     save_groups();
     flash(_("Reloading the database from the folder…"));
-    m_sig_reload.emit(false);
+    m_sig_reload.emit(false, group().emulator);
 }
 
 void RomDatTab::on_check_updates() {
@@ -959,7 +973,7 @@ void RomDatTab::on_in_group_toggled(const Glib::ustring& path) {
     groups_changed();
     // A file on disk may change what the database holds; one not
     // downloaded yet only changes what Download will fetch.
-    if (on_disk && reload_if_union_changed(before)) {
+    if (on_disk && reload_if_union_changed(before, group().emulator)) {
         flash(now ? Glib::ustring::compose(_("%1 joins the group. The database reloads in a moment…"), name)
                   : Glib::ustring::compose(_("%1 leaves the group. The database reloads in a moment…"), name));
     } else if (on_disk) {
@@ -1357,7 +1371,7 @@ void RomDatTab::on_worker_finished() {
             flash(Glib::ustring::compose(_("%1 DAT file(s) downloaded from %2. Reloading the database…"),
                                          m_job_written.size(), site.source));
             m_sig_groups.emit();
-            m_sig_reload.emit(false);
+            m_sig_reload.emit(false, emulator_of_group(m_job_group_id));
         } else {
             flash(Glib::ustring::compose(_("%1 DAT file(s) downloaded from %2 : tick the ones this group uses."),
                                          m_job_written.size(), site.source));
@@ -1397,7 +1411,7 @@ void RomDatTab::on_worker_finished() {
     } else {
         Glib::ustring msg = Glib::ustring::compose(_("%1 DAT file(s) downloaded"), m_job_downloaded);
         if (m_job_failed) msg += Glib::ustring::compose(_(", %1 failed (local files kept)"), m_job_failed);
-        if (m_job_downloaded > 0) { msg += _(". Reloading the database…"); flash(msg); m_sig_groups.emit(); m_sig_reload.emit(false); }
+        if (m_job_downloaded > 0) { msg += _(". Reloading the database…"); flash(msg); m_sig_groups.emit(); m_sig_reload.emit(false, emulator_of_group(m_job_group_id)); }
         else flash(msg + ".");
     }
 }

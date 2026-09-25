@@ -159,10 +159,18 @@ DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& root
 // audit, so the two never claim different archives for the same set.
 class CacheIndex {
 public:
+    // Whether each archive is checked on disk before being indexed. Scans
+    // forget the archives that disappeared (RomScanner::prune_zip_cache), so
+    // the cache can be trusted as it stands ; the ROM manager still checks,
+    // because its own moves (Fix, Quarantine) land before the scan that
+    // follows them.
+    enum class OnDisk { Verify, Trust };
+
     // `roots` restricts the index to archives under the configured ROM
-    // directories; empty accepts everything the cache knows. Archives that
-    // no longer exist on disk are skipped either way.
-    CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roots);
+    // directories; empty accepts everything the cache knows. With Verify,
+    // archives that no longer exist on disk are skipped too.
+    CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roots,
+               OnDisk on_disk = OnDisk::Verify);
 
     const Archive* for_game(const Game& game) const;
     const Archive* by_path(const std::string& path) const;
@@ -216,5 +224,22 @@ CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
                                           SetStyle style,
                                           const std::string& emulator,
                                           const std::function<bool(size_t, size_t)>& progress = {});
+
+// After a DAT update : judge only the sets that are new or whose ROM
+// definition changed (`changed`, keys "name\x1fsystem"), from the cache as it
+// stands, without touching the disk (CacheIndex::OnDisk::Trust). A set whose
+// parent or BIOS changed is judged again too, since what it inherits may
+// have, but only when the cache holds its own archive : otherwise its status
+// from the last scan stands. Same counters and progress as above.
+CacheResolveResult resolve_changed_from_cache(std::shared_ptr<DatabaseManager> db,
+                                              const std::vector<std::string>& roots,
+                                              SetStyle style,
+                                              const std::string& emulator,
+                                              const std::unordered_set<std::string>& changed,
+                                              const std::function<bool(size_t, size_t)>& progress = {});
+
+// Whether `path` lies under one of `roots`, compared as written (no disk
+// access) : both sides are expected canonical, as zip_contents stores them.
+bool under_any_root(const std::string& path, const std::vector<std::string>& roots);
 
 } // namespace RomResolve
