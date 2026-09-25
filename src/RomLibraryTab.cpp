@@ -95,8 +95,24 @@ const char* status_label_of(const std::string& key) {
 
 // What Fix can do with a set, if anything. Nothing for a CHD set : its
 // "archive" is a folder of disk images, which Fix never moves.
+// The archive Fix copies into Import for a repairable set : its own when it
+// has one, otherwise the archive holding a good copy of one of its own ROMs,
+// which Import recognises by content (a set left under its former name, say).
+// A BIOS piece only as a last resort : a BIOS dump sits in hundreds of sets.
+std::string import_source_of(const RomAudit::GameEntry& g) {
+    if (g.is_chd || !g.repairable || g.ignored) return {};
+    if (g.archive_found && !g.archive.empty()) return g.archive;
+    std::string fallback;
+    for (const auto& r : g.roms) {
+        if (r.state != RomAudit::RomState::Absent && r.state != RomAudit::RomState::Corrupt) continue;
+        if (r.found_in.empty()) continue;
+        if (!r.inherited) return r.found_in;
+        if (fallback.empty()) fallback = r.found_in;
+    }
+    return fallback;
+}
 bool can_send_to_import(const RomAudit::GameEntry& g) {
-    return !g.is_chd && g.repairable && !g.ignored && g.archive_found && !g.archive.empty();
+    return !import_source_of(g).empty();
 }
 // A set with CHDs besides its zip is judged by its zip alone here : a wrong
 // or absent CHD must never send a sound zip to quarantine.
@@ -508,8 +524,8 @@ void RomLibraryTab::populate() {
         if (g.wrong)   bits.push_back(Glib::ustring::compose(_("%1 misnamed"), g.wrong).raw());
         if (has_extras) bits.push_back(Glib::ustring::compose(_("%1 extra file(s) not needed by the DAT"), (int)g.extra_entries.size()).raw());
         if (g.is_chd && g.status != "available") bits.push_back(_("Fix not available for CHDs"));
-        else if (!g.archive_found && (g.has_disks ? g.zip_status : g.status) != "available") bits.push_back(_("no archive found"));
         else if (g.repairable) bits.push_back(_("repairable from the library"));
+        else if (!g.archive_found && (g.has_disks ? g.zip_status : g.status) != "available") bits.push_back(_("no archive found"));
         int inherited = 0;
         for (const auto& r : g.roms) if (!r.inherited_from.empty()) ++inherited;
         if (inherited) bits.push_back(Glib::ustring::compose(_("%1 from parent/BIOS"), inherited).raw());
@@ -1008,10 +1024,20 @@ void RomLibraryTab::on_fix_clicked(std::vector<Gtk::TreeModel::Row> rows) {
         }
         const auto& g = m_audit.games[(unsigned int)row[m_cols.index]];
         std::string header = g.dat_header.empty() ? g.system : g.dat_header;
-        if (can_send_to_import(g))          m_fix.repairable.push_back(g.archive);
+        if (can_send_to_import(g)) {
+            std::string src = import_source_of(g);
+            if (std::find(m_fix.repairable.begin(), m_fix.repairable.end(), src) == m_fix.repairable.end())
+                m_fix.repairable.push_back(src);
+        }
         else if (can_quarantine_whole(g))   m_fix.whole.push_back({g.archive, header, g.system});
         else if (has_extra_files(g) && !g.ignored) m_fix.extras.push_back({g.archive, g.system, header, g.extra_entries});
     }
+    // An orphan that is also the good copy a repairable set is rebuilt from
+    // stays put this time : moving it out first would leave nothing to copy.
+    // Once the rebuilt set is in the library, the next audit offers it again.
+    m_fix.orphans.erase(std::remove_if(m_fix.orphans.begin(), m_fix.orphans.end(), [&](const auto& o) {
+        return std::find(m_fix.repairable.begin(), m_fix.repairable.end(), o.archive) != m_fix.repairable.end();
+    }), m_fix.orphans.end());
     if (m_fix.whole.empty() && m_fix.orphans.empty() && m_fix.extras.empty() && m_fix.repairable.empty()) {
         flash(_("Nothing to fix : the audit found no repairable set, unrepairable set, orphan or extra file."));
         return;

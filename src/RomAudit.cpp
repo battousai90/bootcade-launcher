@@ -89,10 +89,12 @@ Report audit(std::shared_ptr<DatabaseManager> db,
     // the look-alikes. The other must not be reported as an orphan just
     // because it lost that coin flip; it is exactly as real a game.
     std::unordered_set<std::string> known_stems;
+    std::unordered_map<std::string, std::vector<size_t>> games_by_stem;
     std::unordered_map<std::string, size_t> by_key;
     by_key.reserve(games.size());
     for (size_t i = 0; i < games.size(); ++i) {
         known_stems.insert(lower(games[i].name));
+        games_by_stem[lower(games[i].name)].push_back(i);
         by_key[games[i].name + '\x1f' + games[i].system] = i;
     }
 
@@ -402,7 +404,26 @@ Report audit(std::shared_ptr<DatabaseManager> db,
     report(cb, 96.0, _("Checking for orphan archives…"));
     for (const auto& [path, a] : index.all()) {
         if (cancelled(cb)) { rep.cancelled = true; return rep; }
-        if (known_stems.count(lower(fs::path(path).stem().string()))) continue;
+        // A name is not enough on its own : the archive must also hold some ROM
+        // of a set so named. A zip left under a set's former name (the DAT
+        // renamed MSX berserk to berzerk, and NES has a berserk of its own)
+        // carries none of the NES set's data, and hiding it for its name
+        // alone would leave it in the library for good.
+        auto named_set_holds_it = [&](const RomResolve::Archive& arc) {
+            auto it = games_by_stem.find(lower(fs::path(path).stem().string()));
+            if (it == games_by_stem.end()) return false;
+            for (size_t gi : it->second) {
+                bool any_crc = false;
+                for (const auto& rom : games[gi].roms) {
+                    if (rom.crc.empty()) continue;
+                    any_crc = true;
+                    if (arc.name_by_crc.count(strtoul(rom.crc.c_str(), nullptr, 16))) return true;
+                }
+                if (!any_crc) return true;   // nothing to check it against : trust the name
+            }
+            return false;
+        };
+        if (named_set_holds_it(a)) continue;
         if (claimed_by_content.count(path)) continue;
         if (a.entries.empty()) continue;
 

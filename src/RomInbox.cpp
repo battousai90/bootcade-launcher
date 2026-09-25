@@ -655,6 +655,13 @@ Report analyze(const std::string& inbox_dir,
             continue;
         }
 
+        // Some DAT set holds one of this archive's CRCs : the content speaks, so a
+        // same-named set that takes nothing from the archive is only a filename
+        // coincidence (berserk.zip carrying the MSX berzerk ROM is not the NES
+        // berserk). Without a content match, the name is all there is to go on.
+        bool content_matched = false;
+        for (const auto& c : candidates) if (!c.by_name) { content_matched = true; break; }
+
         bool produced_any = false;
         bool saw_already_in_library = false; // a content-only match that turned out redundant
         std::string dbg_trace; // built only when this archive ends up unrecognized
@@ -772,13 +779,27 @@ Report analyze(const std::string& inbox_dir,
                 dbg_trace += " | candidate " + cand_name + "/" + cand_system + " -> plan.pieces EMPTY (every rom.crc was blank/nodump?)";
                 continue;
             }
+            if (by_name && content_matched && used_from_trigger.empty()) {
+                dbg_trace += " | candidate " + cand_name + "/" + cand_system +
+                             " -> name only, the archive holds none of its ROMs";
+                continue;
+            }
 
             for (const auto& e : arc.entries)
                 if (!used_from_trigger.count(e.name)) plan.extra_entries.push_back({e.name, e.crc, e.size});
 
+            // The right pieces in one archive are not enough either : the archive
+            // must be named after the set, since that is the only one FinalBurn
+            // Neo opens and the one the Library audit looks for. A zip left under
+            // a set's former name (the DAT renamed MSX berserk to berzerk) holds
+            // everything and still leaves the set missing.
             bool library_has_set = false;
-            for (const auto& [_c, hits] : lib_container_hits)
-                if (verifiable_roms > 0 && hits == verifiable_roms) { library_has_set = true; break; }
+            for (const auto& [container, hits] : lib_container_hits)
+                if (verifiable_roms > 0 && hits == verifiable_roms &&
+                    lower(fs::path(container).stem().string()) == lower(game.name)) {
+                    library_has_set = true;
+                    break;
+                }
 
             if (library_has_set) {
                 plan.action = Action::AlreadyInLibrary;
