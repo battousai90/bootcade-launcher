@@ -2670,6 +2670,11 @@ void MainWindow::on_play_clicked() {
          * Sans fichier ecrit, pas de -ctrlr : MAME s'arrete net sur un
          * fichier controleur introuvable. */
         std::vector<std::string> mame_env;
+        // Les profils ne sont charges qu'a l'ouverture de l'ecran des
+        // manettes : sans cette lecture, un premier lancement n'en trouvait
+        // aucun et partait sans fichier controleur.
+        ControllerManager::load_profiles(m_controller_profiles, m_active_controller_profile,
+                                         AppContext::get_config_path());
         if (const ControllerConfig* prof = controller_profile_for(MameControls::profile_key(rom_name))) {
             const std::string dir = MameControls::ctrlr_dir();
             if (MameControls::write_ctrlr(*prof, dir)) {
@@ -2702,7 +2707,50 @@ void MainWindow::on_play_clicked() {
         // sont ecrites dans les deux sens : MAME lit d'abord son propre
         // mame.ini, qu'on ne controle pas, et un reglage qui n'ajouterait rien
         // quand il est eteint laisserait ce fichier decider a notre place.
-        for (const auto& q : m_settings_panel.mame_launch_args()) args.push_back(q);
+        /* Les extensions (hiscore, autofire) : MAME s'arrete net sur
+         * « Unknown plugin » quand -plugin ou -noplugin cite une extension
+         * qu'il ne trouve pas. Or le mame.ini des paquets met pluginspath a
+         * « plugins », relatif au dossier courant : lance depuis Bootcade,
+         * MAME ne voit rien. On lui donne le vrai dossier, et on ne cite que
+         * les extensions qui y sont. */
+        {
+            namespace fs = std::filesystem;
+            std::string plugins_dir;
+            const fs::path exe_dir = fs::path(mame).parent_path();
+            const char* home = getenv("HOME");
+            for (const fs::path& cand : {exe_dir / "plugins",
+                                         fs::path("/usr/share/games/mame/plugins"),
+                                         fs::path("/usr/share/mame/plugins"),
+                                         fs::path(home ? home : "") / ".mame" / "plugins"}) {
+                std::error_code ec;
+                if (fs::is_directory(cand / "hiscore", ec) || fs::is_directory(cand / "autofire", ec)) {
+                    plugins_dir = cand.string();
+                    break;
+                }
+            }
+            if (!plugins_dir.empty()) {
+                args.push_back("-pluginspath");
+                args.push_back(plugins_dir);
+            }
+            auto available = [&](const std::string& name) {
+                std::error_code ec;
+                return !plugins_dir.empty() && fs::is_directory(fs::path(plugins_dir) / name, ec);
+            };
+            const std::vector<std::string> launch = m_settings_panel.mame_launch_args();
+            for (size_t i = 0; i < launch.size(); ++i) {
+                if ((launch[i] == "-plugin" || launch[i] == "-noplugin") && i + 1 < launch.size()) {
+                    std::string kept, one;
+                    std::istringstream names(launch[i + 1]);
+                    while (std::getline(names, one, ','))
+                        if (available(one)) kept += (kept.empty() ? "" : ",") + one;
+                    if (!kept.empty()) { args.push_back(launch[i]); args.push_back(kept); }
+                    else std::cout << "[INFO] MAME plugins not found, not passed: " << launch[i + 1] << std::endl;
+                    ++i;
+                    continue;
+                }
+                args.push_back(launch[i]);
+            }
+        }
 
         // Puis ce que le joueur a ajoute lui-meme, decoupe sur les espaces et
         // jamais passe a un shell : un champ de reglages ne doit pas pouvoir
