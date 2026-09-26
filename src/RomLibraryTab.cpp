@@ -128,6 +128,12 @@ bool has_extra_files(const RomAudit::GameEntry& g) {
     return !g.is_chd && !g.extra_entries.empty() && g.archive_found && !g.archive.empty();
 }
 
+// The folder a set's CHDs are expected in : MAME CHDs are kept merged, so a
+// clone's sit in its parent's folder (RomResolve::evaluate_disks).
+static std::string chd_folder(const RomAudit::GameEntry& g) {
+    return (g.cloneof.empty() ? g.name : g.cloneof) + "/";
+}
+
 // A ROM's identity in the tables : its CRC, or a CHD's SHA1.
 std::string hash_of(const RomAudit::RomEntry& r) { return r.is_disk ? r.sha1 : crc_hex(r.crc); }
 std::string found_hash_of(const RomAudit::RomEntry& r) {
@@ -512,7 +518,7 @@ void RomLibraryTab::populate() {
         systems.insert(g.system);
 
         // A CHD set is a folder named after the set, not a zip.
-        std::string expected = g.is_chd ? g.name + "/" : g.has_disks ? g.name + ".zip + " + g.name + "/" : g.name + ".zip";
+        std::string expected = g.is_chd ? chd_folder(g) : g.has_disks ? g.name + ".zip + " + chd_folder(g) : g.name + ".zip";
         std::string yours = g.archive_found ? fs::path(g.archive).filename().string() + (g.is_chd ? "/" : "") : "-";
 
         const bool can_quarantine = can_quarantine_whole(g);
@@ -882,7 +888,7 @@ std::string RomLibraryTab::all_details_of(const Gtk::TreeModel::Row& row) const 
         << "system: " << g.system << "\n"
         << "status: " << g.status << (g.ignored ? " (ignored)" : "") << "\n";
     if (!g.cloneof.empty()) out << "parent: " << g.cloneof << "\n";
-    out << "expected: " << g.name << (g.is_chd ? "/" : ".zip") << "\n"
+    out << "expected: " << (g.is_chd ? chd_folder(g) : g.name + ".zip") << "\n"
         << "your file: " << (g.archive_found ? g.archive : "-") << "\n";
     for (const auto& r : g.roms) {
         if (r.is_disk) {
@@ -1249,7 +1255,7 @@ void RomLibraryTab::on_export(int format) {
             }
             for (const auto& r : g.roms) {
                 out << csv(status) << ',' << csv(g.name) << ',' << csv(g.description) << ',' << csv(g.system) << ','
-                    << csv(g.cloneof) << ',' << csv(g.name + (g.is_chd ? "/" : ".zip")) << ',' << csv(yours) << ','
+                    << csv(g.cloneof) << ',' << csv(g.is_chd ? chd_folder(g) : g.name + ".zip") << ',' << csv(yours) << ','
                     << csv(r.name) << ',' << _(state_label(r.state)) << ',' << hash_of(r) << ','
                     << (r.state == RomAudit::RomState::Absent ? "" : found_hash_of(r)) << ',' << r.size << ','
                     << csv(r.found_as) << ',' << csv(r.found_in) << ',' << csv(r.inherited_from) << "\n";

@@ -248,44 +248,80 @@ std::string chd_header_sha1(const std::string& path) {
     return out;
 }
 
-DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& roots) {
+DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& roots,
+                          const GameLookup& game_for) {
     DiskResult res;
     if (game.disks.empty()) return res;
     std::error_code ec;
+
+    // MAME CHDs are kept merged, whatever the style of the ROMs : every disk
+    // of a clone sits in its parent's folder, its own ones included, and a
+    // disk the BIOS provides (lindbios) stays in the BIOS's folder. So a
+    // disk is looked for in the set's own folder first (a split copy), then
+    // in each ancestor's, up the cloneof / romof chain. Each ancestor's
+    // disks are kept : a file there with the right name and the wrong SHA1
+    // is that ancestor's own disk, not a bad copy of this one.
+    struct Home { std::string set; std::unordered_set<std::string> own_sha1; };
+    std::vector<Home> homes{{game.name, {}}};
+    {
+        std::unordered_set<std::string> seen{game.name};
+        std::vector<std::string> next;
+        for (const std::string& up : {game.cloneof, game.romof})
+            if (!up.empty()) next.push_back(up);
+        for (int depth = 0; depth < 8 && !next.empty(); ++depth) {
+            std::vector<std::string> after;
+            for (const auto& name : next) {
+                if (!seen.insert(name).second) continue;
+                Home h{name, {}};
+                if (game_for) {
+                    const Game up = game_for(name, game.system);
+                    for (const auto& d : up.disks) h.own_sha1.insert(lower(d.sha1));
+                    for (const std::string& above : {up.cloneof, up.romof})
+                        if (!above.empty()) after.push_back(above);
+                }
+                homes.push_back(std::move(h));
+            }
+            next = std::move(after);
+        }
+    }
+
     bool all_present = true, all_correct = true;
     for (const auto& d : game.disks) {
         DiskVerdict v;
         v.name = d.name;
         v.sha1 = lower(d.sha1);
-        // Where a CHD sits : <set>/<disk>.chd, under the ROM root or under the
-        // folder named after its DAT. A disk the DAT marks merge= is the
-        // parent's own : in a split collection it lives in the parent's
-        // folder, under the parent's name for it, as its ROMs would.
-        std::vector<std::pair<std::string, std::string>> homes{{game.name, d.name}};
-        if (!d.merge.empty())
-            for (const std::string& up : {game.cloneof, game.romof})
-                if (!up.empty()) homes.emplace_back(up, d.merge);
+        // Its name in the set, and, for a disk the DAT marks merge=, the
+        // name its owner gives it.
+        std::vector<std::string> names{d.name};
+        if (!d.merge.empty() && d.merge != d.name) names.push_back(d.merge);
         const std::string folder = expected_folder(game);
         for (const auto& root : roots) {
             if (root.empty()) continue;
-            std::vector<fs::path> candidates;
-            for (const auto& [set, disk] : homes) {
-                candidates.push_back(fs::path(root) / set / (disk + ".chd"));
-                if (!folder.empty()) candidates.push_back(fs::path(root) / folder / set / (disk + ".chd"));
-            }
-            for (const fs::path& p : candidates) {
-                if (!fs::is_regular_file(p, ec)) continue;
-                const std::string sha1 = chd_header_sha1(p.string());
-                if (sha1 == v.sha1) {
-                    v.state = RomState::Present;
-                    v.path = p.string();
-                    v.found_sha1 = sha1;
-                    break;
+            for (size_t hi = 0; hi < homes.size() && v.state != RomState::Present; ++hi) {
+                const Home& home = homes[hi];
+                std::vector<fs::path> candidates;
+                for (const auto& disk : names) {
+                    candidates.push_back(fs::path(root) / home.set / (disk + ".chd"));
+                    if (!folder.empty()) candidates.push_back(fs::path(root) / folder / home.set / (disk + ".chd"));
                 }
-                if (v.state == RomState::Absent) {   // the first wrong copy, until a good one turns up
-                    v.state = RomState::Corrupt;
-                    v.path = p.string();
-                    v.found_sha1 = sha1;
+                for (const fs::path& p : candidates) {
+                    if (!fs::is_regular_file(p, ec)) continue;
+                    const std::string sha1 = chd_header_sha1(p.string());
+                    if (sha1 == v.sha1) {
+                        v.state = RomState::Present;
+                        v.path = p.string();
+                        v.found_sha1 = sha1;
+                        break;
+                    }
+                    // In an ancestor's folder, a wrong file only says
+                    // something when it is not one of that ancestor's own
+                    // disks ; without the ancestor's description, nothing.
+                    const bool ancestors_own = hi > 0 && (!game_for || home.own_sha1.count(sha1));
+                    if (v.state == RomState::Absent && !ancestors_own) {   // the first wrong copy, until a good one turns up
+                        v.state = RomState::Corrupt;
+                        v.path = p.string();
+                        v.found_sha1 = sha1;
+                    }
                 }
             }
             if (v.state == RomState::Present) break;
@@ -497,7 +533,7 @@ struct CachePass {
         // single-folder DAT with no ROM of its own) : judged by the headers of
         // its disk files, which no cache holds. A few hundred small reads.
         if (g.roms.empty() && !g.disks.empty()) {
-            const DiskResult d = evaluate_disks(g, roots);
+            const DiskResult d = evaluate_disks(g, roots, game_for);
             ++out.evaluated;
             if (d.status == "available")      ++out.available;
             else if (d.status == "incorrect") ++out.incorrect;
@@ -516,7 +552,7 @@ struct CachePass {
         Verdict v = evaluate(g, own, style, archive_for, game_for);
         // A zip and CHDs (single-folder MAME DAT : kinst) : one verdict for
         // the set, the zip's and the disks' together.
-        if (!g.disks.empty()) v.status = combine_status(v.status, evaluate_disks(g, roots).status);
+        if (!g.disks.empty()) v.status = combine_status(v.status, evaluate_disks(g, roots, game_for).status);
         if (v.status.empty()) return;    // only nodumps
         ++out.evaluated;
         if (v.status == "available")      ++out.available;

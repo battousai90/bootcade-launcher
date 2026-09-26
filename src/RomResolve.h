@@ -145,8 +145,12 @@ struct DiskResult {
 
 // Every disk of `game`, looked for under each of `roots`. A good copy anywhere
 // wins over a wrong one ; status : all present → available, any absent →
-// missing, else incorrect.
-DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& roots);
+// missing, else incorrect. CHDs are merged whatever the style of the ROMs :
+// a clone's disks, its own included, may sit in its parent's folder, and a
+// BIOS's in the BIOS's ; `game_for` lets the search climb the whole
+// cloneof / romof chain (without it : the parent and romof only).
+DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& roots,
+                          const GameLookup& game_for = {});
 
 // ── The zip_contents cache as a source of archives ──────────────────────────
 //

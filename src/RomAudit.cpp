@@ -134,7 +134,7 @@ Report audit(std::shared_ptr<DatabaseManager> db,
             e.is_bios     = g.is_bios;
             e.is_chd      = true;
             e.dat_header  = RomResolve::expected_folder(g);
-            const RomResolve::DiskResult d = RomResolve::evaluate_disks(g, roms_paths);
+            const RomResolve::DiskResult d = RomResolve::evaluate_disks(g, roms_paths, game_for);
             e.archive       = d.folder;
             e.archive_found = !d.folder.empty();
             for (const auto& v : d.disks) {
@@ -303,7 +303,7 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         if (!g.disks.empty()) {
             e.has_disks  = true;
             e.zip_status = verdict.status;
-            const RomResolve::DiskResult d = RomResolve::evaluate_disks(g, roms_paths);
+            const RomResolve::DiskResult d = RomResolve::evaluate_disks(g, roms_paths, game_for);
             for (const auto& v : d.disks) {
                 RomEntry r;
                 r.name       = v.name + ".chd";
