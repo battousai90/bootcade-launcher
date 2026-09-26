@@ -367,7 +367,8 @@ void RomOutboxTab::on_browse_folder() {
 }
 
 // Which emulator a system folder of the outbox belongs to : the folder is
-// named after the DAT header (RomInbox::outbox_subdir_for), and the header is
+// named after the folder of its DAT (the header, unless the DAT's rule names
+// another), and the header is
 // what says so for the DAT itself.
 std::string RomOutboxTab::emulator_of_folder(const std::string& system_folder) {
     return DatParser::emulatorFromHeader(system_folder);
@@ -771,51 +772,42 @@ void RomOutboxTab::worker_move() {
     MoveJob& job = m_job;
 
     // The DAT is the ground truth for what "correct" means : not whatever
-    // happens to already sit in the library. Same rule as the scan and the
-    // audit (RomResolve), with the library's own archives at hand so that an
-    // inherited ROM of a split set is looked for in the parent's.
+    // happens to already sit in the library. The archive must hold every
+    // entry its set's DAT, read with that DAT's merge mode, lists for it
+    // (DatLayout), exactly as the audit will judge it once moved.
     //
-    // Per emulator : the outbox can hold sets of both, and each is checked
-    // against its own DAT, its own style, and its own library's archives (a
-    // MAME clone's parent is looked for in the MAME directories only).
+    // Per emulator : the outbox can hold sets of both, each checked against
+    // its own DAT.
     push_progress(0.0, _("Indexing the library…"));
-    struct Library {
-        RomResolve::SetStyle style = RomResolve::SetStyle::NonMerged;
-        std::unique_ptr<RomResolve::CacheIndex> index;
-    };
-    std::map<std::string, Library> libraries;
-    auto library_of = [&](const std::string& emulator) -> Library& {
-        auto it = libraries.find(emulator);
-        if (it != libraries.end()) return it->second;
-        Library lib;
-        lib.style = RomResolve::load_style(emulator);
-        lib.index = std::make_unique<RomResolve::CacheIndex>(m_db, DatSource::roms_paths_for(emulator));
-        return libraries.emplace(emulator, std::move(lib)).first->second;
+    std::map<std::string, std::unique_ptr<RomResolve::LayoutBook>> books;
+    auto book_of = [&](const std::string& emulator) -> RomResolve::LayoutBook& {
+        auto it = books.find(emulator);
+        if (it == books.end())
+            it = books.emplace(emulator, std::make_unique<RomResolve::LayoutBook>(m_db, emulator)).first;
+        return *it->second;
     };
     auto verify = [&](const Item& it, std::string& reason) -> bool {
-        Library& lib = library_of(it.emulator);
-        const RomResolve::SetStyle style = lib.style;
-        RomResolve::ArchiveLookup archive_for = [&](const Game& g) { return lib.index->for_game(g); };
-        RomResolve::GameLookup    game_for    = [&](const std::string& n, const std::string& s) { return m_db->getGame(n, s, it.emulator); };
-        Game game = m_db->getGame(it.game, it.system, it.emulator);
-        if (game.roms.empty()) { reason = "not found in the DAT for system \"" + it.system + "\""; return false; }
+        RomResolve::LayoutBook& book = book_of(it.emulator);
+        const Game* game = book.game(it.game, it.system);
+        if (!game) { reason = "not found in the DAT for system \"" + it.system + "\""; return false; }
+        const DatLayout::Archive* layout = book.archive_for(*game);
+        if (!layout || layout->entries.empty()) { reason = "its DAT expects no archive for this set"; return false; }
+        if (layout->name != game->name) { reason = "its DAT puts it in " + layout->name + "'s archive"; return false; }
         std::vector<RomArchive::Entry> entries;
         if (!RomArchive::read_entries(it.path, entries)) { reason = "cannot read the archive"; return false; }
         RomResolve::Archive incoming;
         incoming.path = it.path;
         for (const auto& e : entries) incoming.add(e.name, e.crc);
-        RomResolve::Verdict v = RomResolve::evaluate(game, &incoming, style, archive_for, game_for);
-        if (v.status == "available") return true;
-        for (const auto& r : v.roms) {
-            if (r.state == RomResolve::RomState::Present) continue;
-            if (r.state == RomResolve::RomState::Absent)
-                reason = "missing ROM required by the DAT: " + r.name + (r.inherited ? " (inherited : the parent/BIOS set is not in the library)" : "");
-            else if (r.state == RomResolve::RomState::Corrupt) reason = "CRC mismatch for " + r.name;
-            else reason = "wrong entry name for " + r.name + " (found as " + r.found_as + ")";
+        for (const auto& entry : layout->entries) {
+            std::string found;
+            const auto state = RomResolve::probe_rom(&incoming, entry.name, entry.crc, &found);
+            if (state == RomResolve::RomState::Present) continue;
+            if (state == RomResolve::RomState::Absent)       reason = "missing ROM required by the DAT: " + entry.name;
+            else if (state == RomResolve::RomState::Corrupt) reason = "CRC mismatch for " + entry.name;
+            else reason = "wrong entry name for " + entry.name + " (found as " + found + ")";
             return false;
         }
-        reason = "does not satisfy the DAT";
-        return false;
+        return true;
     };
 
     RomManifest::Manifest outbox_manifest = RomManifest::Manifest::load(job.paths.outbox);

@@ -98,7 +98,6 @@ private:
     Gtk::Button*      m_btn_browse = nullptr;
     Gtk::CheckButton  m_check_recursive, m_check_archives, m_check_loose;
     Gtk::CheckButton  m_check_use_library, m_check_rebuild_correct;
-    Gtk::ComboBoxText m_combo_style;
     Gtk::RadioButton  m_radio_subfolder, m_radio_delete, m_radio_keep;
     Gtk::CheckButton  m_check_quarantine_rejects;
     Gtk::Label        m_status;

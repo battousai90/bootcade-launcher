@@ -630,6 +630,38 @@ std::unordered_map<std::string, DatReading> dat_readings(std::shared_ptr<Databas
     return out;
 }
 
+LayoutBook::LayoutBook(std::shared_ptr<DatabaseManager> db, const std::string& emulator)
+    : m_games(db->getAllGames(emulator)), m_readings(dat_readings(db)) {
+    m_by_key.reserve(m_games.size());
+    for (size_t i = 0; i < m_games.size(); ++i)
+        m_by_key.emplace(m_games[i].name + '\x1f' + m_games[i].system, i);
+}
+
+const Game* LayoutBook::game(const std::string& name, const std::string& system) const {
+    auto it = m_by_key.find(name + '\x1f' + system);
+    return it == m_by_key.end() ? nullptr : &m_games[it->second];
+}
+
+const DatLayout::Layout& LayoutBook::layout_of(const std::string& dat) {
+    auto it = m_layouts.find(dat);
+    if (it != m_layouts.end()) return *it->second;
+    std::vector<const Game*> sets;
+    for (const auto& g : m_games) if (g.dat_source == dat) sets.push_back(&g);
+    auto layout = std::make_unique<DatLayout::Layout>(sets, reading_of(dat).mode);
+    return *m_layouts.emplace(dat, std::move(layout)).first->second;
+}
+
+const DatReading& LayoutBook::reading_of(const std::string& dat) const {
+    static const DatReading none;
+    auto it = m_readings.find(dat);
+    return it == m_readings.end() ? none : it->second;
+}
+
+const DatLayout::Archive* LayoutBook::archive_for(const Game& game, std::string* folder) {
+    if (folder) *folder = reading_of(game.dat_source).folder;
+    return layout_of(game.dat_source).archive_of(game.name);
+}
+
 DiskResult evaluate_layout_disks(const std::string& set, const std::vector<DatLayout::DiskEntry>& disks,
                                  const std::vector<std::string>& roots, const std::string& folder) {
     DiskResult res;

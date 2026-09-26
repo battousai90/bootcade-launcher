@@ -208,6 +208,29 @@ struct DatReading {
 };
 std::unordered_map<std::string, DatReading> dat_readings(std::shared_ptr<DatabaseManager> db);
 
+// One emulator's DATs, as a ROM manager reads them : its sets loaded once,
+// each DAT's reading, and each DAT's layout built when first asked for.
+// What Import, Outbox and the audit share to say what an archive must hold.
+class LayoutBook {
+public:
+    LayoutBook(std::shared_ptr<DatabaseManager> db, const std::string& emulator);
+    const std::vector<Game>& games() const { return m_games; }
+    const Game* game(const std::string& name, const std::string& system) const;
+    // The layout of the DAT `dat` (a DAT file name, Game::dat_source).
+    const DatLayout::Layout& layout_of(const std::string& dat);
+    // How `dat` is read ; an empty reading when the DAT is not known.
+    const DatReading& reading_of(const std::string& dat) const;
+    // The archive `game` belongs in, and the folder of its DAT. Null when
+    // its DAT expects nothing for it.
+    const DatLayout::Archive* archive_for(const Game& game, std::string* folder = nullptr);
+
+private:
+    std::vector<Game> m_games;
+    std::unordered_map<std::string, size_t> m_by_key;     // "name\x1fsystem"
+    std::unordered_map<std::string, DatReading> m_readings;
+    std::unordered_map<std::string, std::unique_ptr<DatLayout::Layout>> m_layouts;
+};
+
 // The CHDs `disks` of the archive `set` (DatLayout), looked for in its folder
 // of `folder` under each root : <root>/<folder>/<set>/<disk>.chd, or
 // <root>/<set>/<disk>.chd when the root is that folder. Judged by the SHA1

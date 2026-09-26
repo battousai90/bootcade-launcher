@@ -171,17 +171,8 @@ void RomImportTab::build_options() {
     rep_body->pack_start(m_check_use_library, Gtk::PACK_SHRINK);
     rep_body->pack_start(m_check_rebuild_correct, Gtk::PACK_SHRINK);
 
-    auto* style_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
-    auto* style_label = ui::title_label(_("Set strategy"));
-    style_label->set_valign(Gtk::ALIGN_CENTER);
-    m_combo_style.append("same",       _("Same as library"));
-    m_combo_style.append("non-merged", _("Non-merged (every ROM in each set)"));
-    m_combo_style.append("split",      _("Split (inherited ROMs stay with the parent)"));
-    m_combo_style.set_active_id("same");
-    m_combo_style.set_tooltip_text(_("Layout of the sets Fix produces. The library's own style is set in Settings."));
-    style_line->pack_start(*style_label, Gtk::PACK_SHRINK);
-    style_line->pack_start(m_combo_style, Gtk::PACK_EXPAND_WIDGET);
-    rep_body->pack_start(*style_line, Gtk::PACK_SHRINK);
+    // How each set is laid out is its DAT's rule (ROM Manager › DAT) : one
+    // DAT split, another non-merged, each set follows its own.
 
     auto* out = ui::sub_label(_("Output: ZIP, loaded by every emulator Bootcade runs; 7z and rar sources are converted."));
     rep_body->pack_start(*out, Gtk::PACK_SHRINK);
@@ -219,7 +210,6 @@ void RomImportTab::build_options() {
     m_check_quarantine_rejects.signal_toggled().connect([this] { if (m_btn_fix) update_action_buttons(); });
     for (auto* r : {&m_radio_subfolder, &m_radio_delete, &m_radio_keep})
         r->signal_toggled().connect([this] { save_settings(); });
-    m_combo_style.signal_changed().connect([this] { save_settings(); });
     m_entry_inbox.signal_activate().connect([this] { save_settings(); });
 }
 
@@ -384,8 +374,6 @@ void RomImportTab::reload_settings() {
     m_check_loose.set_active(flag("import_include_loose", true));
     m_check_use_library.set_active(flag("import_use_library", true));
     m_check_rebuild_correct.set_active(flag("import_rebuild_correct", false));
-    std::string style = str("import_style", "same");
-    if (!m_combo_style.set_active_id(style)) m_combo_style.set_active_id("same");
     std::string processed = str("import_processed", "subfolder");
     if (processed == "delete")    m_radio_delete.set_active(true);
     else if (processed == "keep") m_radio_keep.set_active(true);
@@ -405,7 +393,7 @@ void RomImportTab::save_settings() const {
     rm["import_include_loose"]      = m_check_loose.get_active();
     rm["import_use_library"]        = m_check_use_library.get_active();
     rm["import_rebuild_correct"]    = m_check_rebuild_correct.get_active();
-    rm["import_style"]              = m_combo_style.get_active_id().raw();
+    rm.erase("import_style");   // the merge mode is each DAT's now
     rm["import_processed"]          = m_radio_delete.get_active() ? "delete" : m_radio_keep.get_active() ? "keep" : "subfolder";
     rm["import_quarantine_rejects"] = m_check_quarantine_rejects.get_active();
     std::ofstream fo(path);
@@ -420,8 +408,6 @@ RomInbox::Options RomImportTab::options_from_ui() const {
     o.use_library      = m_check_use_library.get_active();
     o.rebuild_correct  = m_check_rebuild_correct.get_active();
     Paths p = m_paths();
-    std::string style  = m_combo_style.get_active_id().raw();
-    o.style = style == "same" ? RomResolve::load_style(p.emulator) : RomResolve::style_from_string(style);
     o.processed = m_radio_delete.get_active() ? RomInbox::Options::Processed::Delete
                 : m_radio_keep.get_active()   ? RomInbox::Options::Processed::Keep
                                               : RomInbox::Options::Processed::Subfolder;
@@ -588,10 +574,8 @@ void RomImportTab::populate() {
             default:                                 key = "missing"; label = N_("Missing"); break;
         }
 
-        int from_import = 0, from_library = 0, omitted = 0;
-        const bool split = m_report.options.style == RomResolve::SetStyle::Split;
+        int from_import = 0, from_library = 0;
         for (const auto& p : s.pieces) {
-            if (split && p.inherited) { ++omitted; continue; }
             if (!p.resolved) continue;
             p.src.from_inbox ? ++from_import : ++from_library;
         }
@@ -616,7 +600,6 @@ void RomImportTab::populate() {
                 if (!s.missing.empty()) bits.push_back(s.missing.front().name + (s.missing.size() > 1 ? ", …" : ""));
                 break;
         }
-        if (omitted) bits.push_back(Glib::ustring::compose(_("%1 inherited left to parent (split)"), omitted).raw());
 
         row[m_cols.include]    = actionable && s.selected;
         row[m_cols.actionable] = actionable;
@@ -708,8 +691,8 @@ void RomImportTab::update_summary() {
     } else if (m_report.library_pool_empty) {
         m_status.set_text(_("The library index is empty : run a ROM scan first, or sets that could be rebuilt will look incomplete."));
     } else {
-        m_status.set_text(Glib::ustring::compose(_("%1 valid, %2 fixable, %3 incomplete · output style: %4"),
-                                                 valid, fixable, missing, RomResolve::to_string(m_report.options.style)));
+        m_status.set_text(Glib::ustring::compose(_("%1 valid, %2 fixable, %3 incomplete · each set laid out as its DAT says"),
+                                                 valid, fixable, missing));
     }
 }
 
@@ -771,15 +754,10 @@ void RomImportTab::on_selection_changed() {
 
     static PieceCols cols;
     auto store = Gtk::ListStore::create(cols);
-    const bool split = m_report.options.style == RomResolve::SetStyle::Split;
     for (const auto& p : s.pieces) {
         auto rr = *(store->append());
         Glib::ustring action, source;
-        if (split && p.inherited) {
-            action = _("Left to parent");
-            source = p.resolved ? Glib::ustring::compose(_("present in %1, not written (split)"), fs::path(p.src.container).filename().string())
-                                : Glib::ustring(_("inherited ROM: read from the parent/BIOS set"));
-        } else if (!p.resolved) {
+        if (!p.resolved) {
             action = _("Missing");
             source = _("found nowhere");
         } else {
@@ -1105,7 +1083,6 @@ void RomImportTab::set_busy(bool busy) {
     m_btn_select_none->set_sensitive(!busy);
     for (auto* c : {&m_check_recursive, &m_check_archives, &m_check_loose, &m_check_use_library, &m_check_rebuild_correct})
         c->set_sensitive(!busy);
-    m_combo_style.set_sensitive(!busy);
     if (busy) { m_progress.set_fraction(0.0); m_progress.show(); m_progress_label.show(); m_btn_cancel->show(); }
     else      { m_progress.hide(); m_progress_label.hide(); m_btn_cancel->hide(); }
     update_action_buttons();

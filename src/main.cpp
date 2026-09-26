@@ -8,6 +8,7 @@
 #include "RomScanner.h"
 #include "DATUpdateDialog.h"
 #include "DatLayout.h"
+#include "RomInbox.h"
 #include <algorithm>
 #include <sstream>
 #include "AppContext.h"
@@ -153,7 +154,10 @@ int main(int argc, char *argv[]) {
      *                              archive du DAT charge <dat> doit contenir
      *                              dans ce mode (vide : tel quel) ;
      *  BOOTCADE_PLAYABLE=<emu>     recalcule depuis le cache le statut jouable
-     *                              de chaque set de cet emulateur.
+     *                              de chaque set de cet emulateur ;
+     *  BOOTCADE_IMPORT=<emu>|<import>|<sortie>  analyse le dossier d'import
+     *                              et reconstruit ses sets dans <sortie>,
+     *                              comme Fix dans l'onglet Import.
      * Ils peuvent se combiner, dans cet ordre.
      */
     {
@@ -163,8 +167,9 @@ int main(int argc, char *argv[]) {
         const char* rules = std::getenv("BOOTCADE_DAT_RULES");
         const char* layout = std::getenv("BOOTCADE_DAT_LAYOUT");
         const char* playable = std::getenv("BOOTCADE_PLAYABLE");
+        const char* import = std::getenv("BOOTCADE_IMPORT");
         const bool any = (upd && *upd) || (scan && *scan) || (grp && *grp) || (rules && *rules == '1')
-                      || (layout && *layout) || (playable && *playable);
+                      || (layout && *layout) || (playable && *playable) || (import && *import);
         if (upd && *upd) {
             Gtk::Window host;
             const auto t0 = std::chrono::steady_clock::now();
@@ -224,6 +229,25 @@ int main(int argc, char *argv[]) {
             std::cout << "[PLAYABLE] " << playable << " evaluated=" << r.evaluated << " available=" << r.available
                       << " incorrect=" << r.incorrect << " missing=" << r.missing << " changed=" << r.changed << std::endl;
         }
+        if (import && *import) {
+            std::string spec = import;
+            const size_t a = spec.find('|'), b = spec.find('|', a + 1);
+            RomInbox::Options o;
+            o.emulator   = spec.substr(0, a);
+            o.roms_paths = DatSource::roms_paths_for(o.emulator);
+            o.processed  = RomInbox::Options::Processed::Keep;
+            o.quarantine_rejects = false;
+            const std::string inbox = spec.substr(a + 1, b - a - 1), outbox = spec.substr(b + 1);
+            RomInbox::Callbacks cb;
+            cb.log = [](const std::string& l) { if (l.rfind("[INBOX-DEBUG]", 0) != 0) std::cout << "[IMPORT] " << l << std::endl; };
+            const RomInbox::Report rep = RomInbox::analyze(inbox, outbox, database, o, cb);
+            for (const auto& set : rep.sets)
+                std::cout << "[IMPORT-SET] " << set.game_name << " " << RomInbox::action_label(set.action)
+                          << " pieces=" << set.pieces.size() << " missing=" << set.missing.size() << std::endl;
+            const RomInbox::ApplyResult res = RomInbox::apply(rep, cb);
+            std::cout << "[IMPORT] rebuilt=" << res.rebuilt << " moved=" << res.moved << " failed=" << res.failed << std::endl;
+            for (const auto& e : res.errors) std::cout << "[IMPORT-ERROR] " << e << std::endl;
+        }
         if (scan && *scan) {
             const auto t0 = std::chrono::steady_clock::now();
             const auto r = RomScanner::scan_into_cache(database, DatSource::roms_paths_for(scan), scan, true,
@@ -249,7 +273,8 @@ int main(int argc, char *argv[]) {
                     for (const auto& e : rep.games) {
                         std::cout << "[ROMAUDIT-SET] " << e.name << " [" << e.system << "] " << e.status
                                   << " absent=" << e.absent << " wrong=" << e.wrong
-                                  << " corrupt=" << e.corrupt << " archive=" << e.archive << std::endl;
+                                  << " corrupt=" << e.corrupt << " extra=" << e.extra_entries.size()
+                                  << " archive=" << e.archive << std::endl;
                         if (v[1] == 'v')
                             for (const auto& r : e.roms)
                                 if (r.state != RomAudit::RomState::Present || !r.inherited_from.empty())
