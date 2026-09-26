@@ -145,8 +145,19 @@ SetStyle load_style(const std::string& emulator) {
 void Archive::add(const std::string& entry_name, unsigned long crc) {
     crc_by_name[entry_name] = crc;
     crc_by_name[RomScanner::normalize_name(entry_name)] = crc;
+    // A path inside the archive answers under '/' whatever the tool that
+    // wrote it used (a merged parent's "<clone>/<rom>").
+    if (entry_name.find('\\') != std::string::npos) crc_by_name[DatLayout::entry_path(entry_name)] = crc;
     name_by_crc.emplace(crc, entry_name);
     entries.push_back(entry_name);
+}
+
+RomState probe_rom(const Archive* archive, const std::string& name, unsigned long crc,
+                   std::string* found_entry, unsigned long* found_crc) {
+    const Probe p = probe(archive, name, crc);
+    if (found_entry) *found_entry = p.entry;
+    if (found_crc)   *found_crc = p.crc;
+    return p.state;
 }
 
 // ── The rule ────────────────────────────────────────────────────────────────
@@ -339,13 +350,25 @@ CacheIndex::CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<st
             if (ok && on_disk == OnDisk::Verify) ok = fs::exists(fs::path(r.filepath), ec);
             u = usable.emplace(r.filepath, ok).first;
             if (ok) {
-                m_by_stem[lower(fs::path(r.filepath).stem().string())].push_back(r.filepath);
+                const fs::path fp(r.filepath);
+                const std::string stem = lower(fp.stem().string());
+                m_by_stem[stem].push_back(r.filepath);
+                m_by_folder[lower(fp.parent_path().filename().string()) + '\x1f' + stem].push_back(r.filepath);
                 m_archives[r.filepath].path = r.filepath;
             }
         }
         if (!u->second) continue;
         m_archives[r.filepath].add(r.entry_name, r.crc);
     }
+}
+
+std::vector<const Archive*> CacheIndex::in_folder(const std::string& folder, const std::string& set) const {
+    std::vector<const Archive*> out;
+    auto it = m_by_folder.find(lower(folder) + '\x1f' + lower(set));
+    if (it == m_by_folder.end()) return out;
+    for (const auto& path : it->second)
+        if (const Archive* a = by_path(path)) out.push_back(a);
+    return out;
 }
 
 const Archive* CacheIndex::by_path(const std::string& path) const {
@@ -401,10 +424,10 @@ const Archive* CacheIndex::for_game(const Game& game) const {
 
 int resolve_inherited_from_cache(std::shared_ptr<DatabaseManager> db,
                                  const std::vector<std::string>& roots,
-                                 SetStyle style,
                                  const std::unordered_set<std::string>& touched,
                                  const std::string& emulator) {
-    if (style != SetStyle::Split) return 0;
+    // How the emulator loads a set : through its romof chain.
+    const SetStyle style = SetStyle::Split;
 
     CacheIndex index(db, roots);
     if (index.empty()) return 0;
@@ -536,10 +559,10 @@ struct CachePass {
 
 CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
                                           const std::vector<std::string>& roots,
-                                          SetStyle style,
                                           const std::string& emulator,
                                           const std::function<bool(size_t, size_t)>& progress) {
     CacheResolveResult out;
+    const SetStyle style = SetStyle::Split;   // through the romof chain : playable
     CachePass pass(db, roots, emulator, CacheIndex::OnDisk::Verify);
     const auto& games = pass.games;
 
@@ -555,11 +578,11 @@ CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
 
 CacheResolveResult resolve_changed_from_cache(std::shared_ptr<DatabaseManager> db,
                                               const std::vector<std::string>& roots,
-                                              SetStyle style,
                                               const std::string& emulator,
                                               const std::unordered_set<std::string>& changed,
                                               const std::function<bool(size_t, size_t)>& progress) {
     CacheResolveResult out;
+    const SetStyle style = SetStyle::Split;   // through the romof chain : playable
     if (changed.empty()) return out;
     CachePass pass(db, roots, emulator, CacheIndex::OnDisk::Trust);
     const auto& games = pass.games;
@@ -590,6 +613,57 @@ CacheResolveResult resolve_changed_from_cache(std::shared_ptr<DatabaseManager> d
     db->commitTransaction();
     if (progress && !out.cancelled) progress(todo.size(), todo.size());
     return out;
+}
+
+// ── Reading a DAT ───────────────────────────────────────────────────────────
+
+std::unordered_map<std::string, DatReading> dat_readings(std::shared_ptr<DatabaseManager> db) {
+    std::unordered_map<std::string, DatReading> out;
+    const auto groups = DatSource::load_groups();
+    for (const auto& [file, st] : db->getDatFileStats()) {
+        const DatSource::DatRule* rule = DatSource::rule_of(groups, file);
+        DatReading r;
+        r.mode   = DatSource::effective_merge({st.linked, st.declared}, rule);
+        r.folder = (rule && !rule->folder.empty()) ? rule->folder : st.header;
+        out[file] = std::move(r);
+    }
+    return out;
+}
+
+DiskResult evaluate_layout_disks(const std::string& set, const std::vector<DatLayout::DiskEntry>& disks,
+                                 const std::vector<std::string>& roots, const std::string& folder) {
+    DiskResult res;
+    if (disks.empty()) return res;
+    std::error_code ec;
+    bool all_present = true, all_correct = true;
+    for (const auto& d : disks) {
+        DiskVerdict v;
+        v.name = d.name;
+        v.sha1 = d.sha1;
+        for (const auto& root : roots) {
+            if (root.empty()) continue;
+            const fs::path base(root);
+            std::vector<fs::path> candidates;
+            if (!folder.empty()) candidates.push_back(base / folder / set / (d.name + ".chd"));
+            if (lower(base.filename().string()) == lower(folder) || folder.empty())
+                candidates.push_back(base / set / (d.name + ".chd"));
+            for (const fs::path& p : candidates) {
+                if (!fs::is_regular_file(p, ec)) continue;
+                const std::string sha1 = chd_header_sha1(p.string());
+                v.path = p.string();
+                v.found_sha1 = sha1;
+                v.state = sha1 == v.sha1 ? RomState::Present : RomState::Corrupt;
+                break;
+            }
+            if (v.state != RomState::Absent) break;
+        }
+        if (v.state == RomState::Absent)       all_present = false;
+        else if (v.state != RomState::Present) all_correct = false;
+        if (res.folder.empty() && !v.path.empty()) res.folder = fs::path(v.path).parent_path().string();
+        res.disks.push_back(std::move(v));
+    }
+    res.status = !all_present ? "missing" : !all_correct ? "incorrect" : "available";
+    return res;
 }
 
 } // namespace RomResolve

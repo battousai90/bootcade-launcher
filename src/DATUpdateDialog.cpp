@@ -265,7 +265,7 @@ void DATUpdateDialog::worker_thread() {
             update_progress(0.96, "", "Re-matching from cache...");
             log("Re-matching " + std::to_string(keys.size()) + " " + emu + " games from the ROM content cache...");
             auto r = RomResolve::resolve_changed_from_cache(
-                m_db, roots, RomResolve::load_style(emu), emu, keys,
+                m_db, roots, emu, keys,
                 [&](size_t done, size_t of) {
                     // The share of this emulator in the last 4 % of the bar.
                     const double part = total ? (double)keys.size() / (double)total : 1.0;

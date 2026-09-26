@@ -17,6 +17,7 @@
 #pragma once
 
 #include "DatabaseManager.h"
+#include "DatLayout.h"
 #include "Game.h"
 
 #include <cstdint>
@@ -112,6 +113,13 @@ struct Verdict {
 Verdict evaluate(const Game& game, const Archive* own, SetStyle style,
                  const ArchiveLookup& archive_for, const GameLookup& game_for);
 
+// One ROM against one archive : the rule every judgement uses. Present (the
+// name holds the CRC), WrongName (the CRC is there under another name),
+// Corrupt (the name is there with another CRC), Absent. `found_entry` and
+// `found_crc` say which entry answered.
+RomState probe_rom(const Archive* archive, const std::string& name, unsigned long crc,
+                   std::string* found_entry = nullptr, unsigned long* found_crc = nullptr);
+
 // Convenience: status only, same rule.
 std::string status_of(const Game& game, const Archive* own, SetStyle style,
                       const ArchiveLookup& archive_for, const GameLookup& game_for);
@@ -173,6 +181,10 @@ public:
                OnDisk on_disk = OnDisk::Verify);
 
     const Archive* for_game(const Game& game) const;
+    // The archives named `set` in a folder named `folder` (a directory of
+    // that name under a root, or a root of that name), compared without
+    // case. Where a DAT's archives must be, and nowhere else.
+    std::vector<const Archive*> in_folder(const std::string& folder, const std::string& set) const;
     const Archive* by_path(const std::string& path) const;
     const std::unordered_map<std::string, Archive>& all() const { return m_archives; }
     size_t         size() const { return m_archives.size(); }
@@ -182,10 +194,36 @@ private:
     std::unordered_map<std::string, Archive>                  m_archives;   // path → contents
     std::unordered_map<std::string, std::vector<std::string>> m_by_stem;    // lower stem → paths
     std::unordered_set<std::string>                           m_headers;    // every DAT header the database knows
+    std::unordered_map<std::string, std::vector<std::string>> m_by_folder;  // lower "folder\x1fstem" → paths
 };
 
-// Re-derive the status of every set that inherits at least one ROM (style
-// Split), from the cache alone : no disk I/O. Sets whose own archive is not
+// ── Reading a DAT : its merge mode and its folder ───────────────────────────
+
+// How each loaded DAT file is read : the merge mode its traits and its rule
+// give (DatSource::effective_merge, "" for a DAT without links) and the
+// folder its sets belong in (its rule's, else its header).
+struct DatReading {
+    std::string mode;
+    std::string folder;
+};
+std::unordered_map<std::string, DatReading> dat_readings(std::shared_ptr<DatabaseManager> db);
+
+// The CHDs `disks` of the archive `set` (DatLayout), looked for in its folder
+// of `folder` under each root : <root>/<folder>/<set>/<disk>.chd, or
+// <root>/<set>/<disk>.chd when the root is that folder. Judged by the SHA1
+// their header declares.
+DiskResult evaluate_layout_disks(const std::string& set, const std::vector<DatLayout::DiskEntry>& disks,
+                                 const std::vector<std::string>& roots, const std::string& folder);
+
+// ── The playable status (games.status, what the game list shows) ───────────
+//
+// Can the emulator load this set? It reads the set's own archive, then its
+// parent's and its BIOS's for the ROMs the DAT marks merge= : whatever the
+// merge mode its DAT is read with. This is not the ROM Manager's verdict
+// (RomAudit, DatLayout), and never feeds it.
+
+// Re-derive the playable status of every set that inherits at least one ROM,
+// from the cache alone : no disk I/O. Sets whose own archive is not
 // in the cache are left untouched: the cache cannot say anything about them,
 // and a stale cache must not turn a real set into a missing one.
 //
@@ -197,13 +235,12 @@ private:
 // Returns the number of statuses that actually changed.
 int resolve_inherited_from_cache(std::shared_ptr<DatabaseManager> db,
                                  const std::vector<std::string>& roots,
-                                 SetStyle style,
                                  const std::unordered_set<std::string>& touched = {},
                                  const std::string& emulator = "fbneo");
 
-// Re-derive the status of EVERY set of one emulator from the cache alone, by
-// the rule the audit applies : the set's own archive (CacheIndex), then its
-// romof chain for inherited ROMs. Unlike the pass above, a set the cache has
+// Re-derive the playable status of EVERY set of one emulator from the cache
+// alone : the set's own archive (CacheIndex), then its romof chain for
+// inherited ROMs. Unlike the pass above, a set the cache has
 // no archive for becomes "missing" : this is the whole verdict for that
 // emulator, not a correction on top of a per-file scan. Only rows whose
 // status changes are written. Used by the MAME scan (ROMScanDialog), whose
@@ -221,7 +258,6 @@ struct CacheResolveResult {
 };
 CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
                                           const std::vector<std::string>& roots,
-                                          SetStyle style,
                                           const std::string& emulator,
                                           const std::function<bool(size_t, size_t)>& progress = {});
 
@@ -233,7 +269,6 @@ CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
 // from the last scan stands. Same counters and progress as above.
 CacheResolveResult resolve_changed_from_cache(std::shared_ptr<DatabaseManager> db,
                                               const std::vector<std::string>& roots,
-                                              SetStyle style,
                                               const std::string& emulator,
                                               const std::unordered_set<std::string>& changed,
                                               const std::function<bool(size_t, size_t)>& progress = {});

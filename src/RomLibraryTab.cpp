@@ -118,14 +118,14 @@ bool can_send_to_import(const RomAudit::GameEntry& g) {
 // or absent CHD must never send a sound zip to quarantine.
 bool can_quarantine_whole(const RomAudit::GameEntry& g) {
     const std::string& zip = g.has_disks ? g.zip_status : g.status;
-    return !g.is_chd && zip == "incorrect" && !g.repairable && !g.ignored && g.archive_found && !g.archive.empty();
+    return !g.is_chd && g.archive_is_own && zip == "incorrect" && !g.repairable && !g.ignored && g.archive_found && !g.archive.empty();
 }
 bool disks_not_right(const RomAudit::GameEntry& g) {
     for (const auto& r : g.roms) if (r.is_disk && r.state != RomAudit::RomState::Present) return true;
     return false;
 }
 bool has_extra_files(const RomAudit::GameEntry& g) {
-    return !g.is_chd && !g.extra_entries.empty() && g.archive_found && !g.archive.empty();
+    return !g.is_chd && g.archive_is_own && !g.extra_entries.empty() && g.archive_found && !g.archive.empty();
 }
 
 // A ROM's identity in the tables : its CRC, or a CHD's SHA1.

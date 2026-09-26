@@ -86,6 +86,11 @@ struct GameEntry {
     // Fix, which never touches CHDs, acts on. Empty for every other set.
     bool        has_disks = false;
     std::string zip_status;
+    // The archive is the set's own. False for a clone of a merged DAT, whose
+    // content lives in its parent's archive : its row speaks for its part
+    // only, and whole-archive actions (quarantine, extra files) belong to
+    // the parent's row.
+    bool archive_is_own = true;
 };
 
 // A BIOS set that is not available, and how many sets depend on it: in a

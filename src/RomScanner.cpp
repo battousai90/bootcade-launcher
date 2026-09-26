@@ -616,9 +616,8 @@ RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
 
     // ── 4. Every status of this emulator, from the cache ────────────────────
     step(82.0, "Resolving sets…");
-    const RomResolve::SetStyle style = RomResolve::load_style(emulator);
-    say("Resolving " + emulator + " sets from the cache (" + RomResolve::to_string(style) + " collection)...");
-    rep.statuses = RomResolve::resolve_all_from_cache(db, roots, style, emulator,
+    say("Resolving which " + emulator + " sets can be played, from the cache...");
+    rep.statuses = RomResolve::resolve_all_from_cache(db, roots, emulator,
         [&](size_t d, size_t total) {
             return step(82.0 + 17.0 * (double)d / (double)std::max<size_t>(1, total),
                         "Resolving sets… " + std::to_string(d) + " / " + std::to_string(total));

@@ -633,25 +633,24 @@ void ROMScanDialog::worker_thread() {
         }
         add_log_message("Game statuses and cache updated", Level::Ok);
 
-        // Split collection: a zip on its own cannot say whether the ROMs a set
-        // inherits sit in its parent's or its BIOS's archive, so the per-zip
-        // votes above judged every set as non-merged. Now that every archive
-        // read this run is in the cache, re-derive the sets that inherit :
-        // the ones just scanned, and the clones of any parent just scanned.
+        // Playable : a zip on its own cannot say whether FinalBurn Neo finds
+        // the ROMs a set inherits in its parent's or its BIOS's archive, so
+        // the per-zip votes above only looked at the set's own. Now that
+        // every archive read this run is in the cache, re-derive the sets that
+        // inherit : the ones just scanned, and the clones of any parent just
+        // scanned. Whatever the merge mode of their DAT : that is the ROM
+        // Manager's business, not the emulator's.
         {
-            RomResolve::SetStyle style = RomResolve::load_style("fbneo");
-            if (style == RomResolve::SetStyle::Split) {
-                std::unordered_set<std::string> touched;
-                for (const auto& f : scanned_files) {
-                    std::string stem = std::filesystem::path(f.filename).stem().string();
-                    std::transform(stem.begin(), stem.end(), stem.begin(),
-                                   [](unsigned char c) { return (char)std::tolower(c); });
-                    touched.insert(stem);
-                }
-                add_log_message("Split collection : resolving inherited ROMs through parent and BIOS sets...");
-                int changed = RomResolve::resolve_inherited_from_cache(m_db, m_roms_paths, style, touched);
-                add_log_message(std::to_string(changed) + " set status(es) changed by inheritance");
+            std::unordered_set<std::string> touched;
+            for (const auto& f : scanned_files) {
+                std::string stem = std::filesystem::path(f.filename).stem().string();
+                std::transform(stem.begin(), stem.end(), stem.begin(),
+                               [](unsigned char c) { return (char)std::tolower(c); });
+                touched.insert(stem);
             }
+            add_log_message("Resolving inherited ROMs through parent and BIOS sets...");
+            int changed = RomResolve::resolve_inherited_from_cache(m_db, m_roms_paths, touched);
+            add_log_message(std::to_string(changed) + " set status(es) changed by inheritance");
         }
 
         // Verify cache entries were actually inserted

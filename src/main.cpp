@@ -151,7 +151,9 @@ int main(int argc, char *argv[]) {
      *                              que son en-tete declare, celui retenu ;
      *  BOOTCADE_DAT_LAYOUT=<dat>:<mode>[:<fichier>] ecrit ce que chaque
      *                              archive du DAT charge <dat> doit contenir
-     *                              dans ce mode (vide : tel quel).
+     *                              dans ce mode (vide : tel quel) ;
+     *  BOOTCADE_PLAYABLE=<emu>     recalcule depuis le cache le statut jouable
+     *                              de chaque set de cet emulateur.
      * Ils peuvent se combiner, dans cet ordre.
      */
     {
@@ -160,8 +162,9 @@ int main(int argc, char *argv[]) {
         const char* grp  = std::getenv("BOOTCADE_ROM_AUDIT");
         const char* rules = std::getenv("BOOTCADE_DAT_RULES");
         const char* layout = std::getenv("BOOTCADE_DAT_LAYOUT");
+        const char* playable = std::getenv("BOOTCADE_PLAYABLE");
         const bool any = (upd && *upd) || (scan && *scan) || (grp && *grp) || (rules && *rules == '1')
-                      || (layout && *layout);
+                      || (layout && *layout) || (playable && *playable);
         if (upd && *upd) {
             Gtk::Window host;
             const auto t0 = std::chrono::steady_clock::now();
@@ -215,6 +218,11 @@ int main(int argc, char *argv[]) {
             }
             std::cout << "[DATLAYOUT] " << dat << " mode=" << (mode.empty() ? "as-is" : mode) << " sets=" << sets.size()
                       << " archives=" << lay.archives().size() << " entries=" << entries << std::endl;
+        }
+        if (playable && *playable) {
+            const auto r = RomResolve::resolve_all_from_cache(database, DatSource::roms_paths_for(playable), playable);
+            std::cout << "[PLAYABLE] " << playable << " evaluated=" << r.evaluated << " available=" << r.available
+                      << " incorrect=" << r.incorrect << " missing=" << r.missing << " changed=" << r.changed << std::endl;
         }
         if (scan && *scan) {
             const auto t0 = std::chrono::steady_clock::now();
