@@ -407,10 +407,12 @@ Report analyze(const std::string& inbox_dir,
     // ── 1. Enumerate the inbox ───────────────────────────────────────────────
     report(cb, 2.0, _("Listing inbox…"));
     std::vector<std::string> zip_paths;
+    std::vector<std::string> chd_paths;   // disk images : matched by the SHA1 their header declares
     auto classify = [&](const fs::directory_entry& de) {
         if (!de.is_regular_file(ec)) return;
         std::string p = de.path().string();
         if (fs::path(p).filename().string().rfind(".bootcade", 0) == 0) return;  // our own manifests
+        if (lower(fs::path(p).extension().string()) == ".chd") { chd_paths.push_back(p); return; }
         // Any archive format libarchive can open is accepted; whether it can
         // actually be read is settled when we try, below. A file that is not
         // an archive at all is still accepted as a loose, single-ROM source // only the handful of extensions that are clearly never ROM data
@@ -442,11 +444,13 @@ Report analyze(const std::string& inbox_dir,
         }
     }
     std::sort(zip_paths.begin(), zip_paths.end());
+    std::sort(chd_paths.begin(), chd_paths.end());
 
     log(cb, "Inbox: " + std::to_string(zip_paths.size()) + " archive(s)" +
+            (chd_paths.empty() ? "" : ", " + std::to_string(chd_paths.size()) + " CHD(s)") +
             (rep.ignored.empty() ? "" : ", " + std::to_string(rep.ignored.size()) + " non-ROM file(s) ignored") + ".");
 
-    if (zip_paths.empty()) {
+    if (zip_paths.empty() && chd_paths.empty()) {
         report(cb, 100.0, _("Nothing to analyze."));
         return rep;
     }
@@ -808,6 +812,72 @@ Report analyze(const std::string& inbox_dir,
     }
 
     for (auto& [_, plan] : best) rep.sets.push_back(std::move(plan));
+
+    // ── 5. CHDs : the disks the DATs list, by the SHA1 of their header ───────
+    // Every disk every DAT expects, where its layout puts it (the folder of
+    // its set's archive, the parent's in merged). One CHD can be expected in
+    // several places (two DATs, or a clone keeping its parent's disk in a
+    // non-merged DAT) : one plan each, the first taking the file and the
+    // next ones copying it (apply()).
+    if (!chd_paths.empty()) {
+        report(cb, 98.0, _("Matching CHDs…"));
+        struct DiskTarget { std::string folder, set, system, description; DatLayout::DiskEntry disk; };
+        std::unordered_map<std::string, std::vector<DiskTarget>> by_sha1;
+        std::unordered_set<std::string> seen_target;
+        for (const auto& g : book.games()) {
+            if (g.disks.empty()) continue;
+            std::string folder;
+            const DatLayout::Archive* arc = book.archive_for(g, &folder);
+            if (!arc) continue;
+            for (size_t di : book.layout_of(g.dat_source).disks_of(g.name)) {
+                const DatLayout::DiskEntry& d = arc->disks[di];
+                if (!seen_target.insert(folder + '\x1f' + arc->name + '\x1f' + d.name).second) continue;
+                const Game* owner = book.game(arc->name, g.system);
+                by_sha1[d.sha1].push_back({folder, arc->name, g.system, owner ? owner->description : g.description, d});
+            }
+        }
+        for (const auto& path : chd_paths) {
+            if (is_cancelled(cb)) { rep.cancelled = true; return rep; }
+            const std::string sha1 = RomResolve::chd_header_sha1(path);
+            if (sha1.empty()) {
+                log(cb, "  not a readable CHD (v3, v4 or v5 header): " + fs::path(path).filename().string());
+                rep.unsupported.push_back(path);
+                continue;
+            }
+            auto hit = by_sha1.find(sha1);
+            if (hit == by_sha1.end()) {
+                rep.unrecognized.push_back(path);
+                rep.unrecognized_crcs.push_back("SHA1 " + sha1);
+                continue;
+            }
+            for (const auto& t : hit->second) {
+                SetPlan plan;
+                plan.disk            = true;
+                plan.game_name       = t.set;
+                plan.system          = t.system;
+                plan.dat_header      = sanitize_component(t.folder);
+                plan.description     = t.description;
+                plan.trigger_archive = path;
+                plan.dest_path       = (fs::path(outbox_dir) / plan.dat_header / sanitize_component(t.set)
+                                        / (t.disk.name + ".chd")).string();
+                PiecePlan piece;
+                piece.target_name = t.disk.name + ".chd";
+                piece.sha1        = sha1;
+                piece.size        = (uint64_t)fs::file_size(path, ec);
+                piece.src         = {path, fs::path(path).filename().string(), true};
+                piece.resolved    = true;
+                plan.pieces.push_back(std::move(piece));
+                if (fs::path(path).stem().string() != t.disk.name) plan.renamed_entries = 1;
+                const bool in_library = options.use_library &&
+                    RomResolve::evaluate_layout_disks(t.set, {t.disk}, options.roms_paths, t.folder).status == "available";
+                plan.action   = in_library ? Action::AlreadyInLibrary : Action::Move;
+                plan.selected = !in_library;
+                log(cb, "  CHD " + fs::path(path).filename().string() + " → " + t.folder + "/" + t.set + "/"
+                        + t.disk.name + ".chd" + (in_library ? " (already in the library)" : ""));
+                rep.sets.push_back(std::move(plan));
+            }
+        }
+    }
     std::sort(rep.sets.begin(), rep.sets.end(), [](const SetPlan& a, const SetPlan& b) {
         if (a.system != b.system) return a.system < b.system;
         return a.game_name < b.game_name;

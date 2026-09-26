@@ -1638,5 +1638,7 @@
   "known once the DAT is loaded": "加载 DAT 后可知",
   "none : every set is read as it is": "无：每个套装按原样读取",
   "nothing": "无",
-  "parents, shared ROMs, devices": "父集、共享 ROM、设备"
+  "parents, shared ROMs, devices": "父集、共享 ROM、设备",
+  "Matching CHDs…": "正在匹配 CHD…",
+  "SHA1": "SHA1"
 }

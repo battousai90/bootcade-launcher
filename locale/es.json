@@ -1638,5 +1638,7 @@
   "known once the DAT is loaded": "se sabrá al cargar el DAT",
   "none : every set is read as it is": "ninguno: cada set se lee tal cual",
   "nothing": "nada",
-  "parents, shared ROMs, devices": "padres, ROMs compartidas, devices"
+  "parents, shared ROMs, devices": "padres, ROMs compartidas, devices",
+  "Matching CHDs…": "Buscando los CHD…",
+  "SHA1": "SHA1"
 }

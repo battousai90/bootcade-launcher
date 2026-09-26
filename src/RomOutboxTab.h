@@ -132,6 +132,9 @@ private:
     // ── Model ───────────────────────────────────────────────────────────────
     struct Item {
         std::string path, system_folder, game, system, dat_header, parent;
+        // A CHD in <system folder>/<set>/ : `path` is the .chd file, and it
+        // lands in <destination>/<set>/.
+        bool        disk = false;
         std::string emulator = "fbneo";   // from the system folder's name
         std::string destination;      // resolved directory, empty when unmapped
         bool        dest_exists = false;

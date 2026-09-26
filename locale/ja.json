@@ -1638,5 +1638,7 @@
   "known once the DAT is loaded": "DAT を読み込むと判明します",
   "none : every set is read as it is": "なし：各セットをそのまま読み込み",
   "nothing": "なし",
-  "parents, shared ROMs, devices": "親、共有 ROM、デバイス"
+  "parents, shared ROMs, devices": "親、共有 ROM、デバイス",
+  "Matching CHDs…": "CHD を照合中…",
+  "SHA1": "SHA1"
 }

@@ -41,6 +41,8 @@ struct PiecePlan {
     // The set the ROM belongs to when it is not the archive's own : a clone
     // in its parent's merged archive, a device in a non-merged set.
     std::string   owner;
+    // A CHD's identity : the SHA1 its header declares (no CRC applies).
+    std::string   sha1;
 };
 
 // A DAT ROM that could be found neither in the inbox nor in the library. Carries
@@ -79,6 +81,12 @@ struct SetPlan {
     // tells a wrong build from a stray file.
     struct ExtraEntry { std::string name; unsigned long crc = 0; uint64_t size = 0; };
     std::vector<ExtraEntry>  extra_entries;
+    // A disk image (CHD) rather than an archive : `dest_path` is
+    // <outbox>/<DAT folder>/<set>/<disk>.chd, `trigger_archive` the CHD file,
+    // and the only action is Move (or AlreadyInLibrary). A CHD is never
+    // rebuilt : its header's SHA1 is what the DAT lists, and it is either
+    // that disk or not.
+    bool disk = false;
     int  pieces_from_library = 0;            // how many pieces come from roms_paths
     int  renamed_entries     = 0;            // pieces whose source entry name differs
     bool selected = true;                    // UI checkbox

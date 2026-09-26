@@ -383,7 +383,8 @@ std::string RomOutboxTab::destination_for(const std::string& system_folder, cons
 
 // Where a DAT's folder is in the library, the way the audit looks for it
 // (RomResolve::CacheIndex::in_folder) : a ROM directory of that name, else a
-// directory of that name under one of them. Among the ROM directories of the
+// directory of that name under one of them, else, when the emulator has a
+// single ROM directory, that directory's subfolder of that name. Among the ROM directories of the
 // emulator the folder belongs to : a MAME set never lands in a FinalBurn Neo
 // folder. Compared without case : the DAT "MAME" lands in a folder "Mame".
 std::string RomOutboxTab::auto_destination(const std::string& system_folder) const {
@@ -396,6 +397,10 @@ std::string RomOutboxTab::auto_destination(const std::string& system_folder) con
             if (e->is_directory(ec) && lower(e->path().filename().string()) == lower(system_folder))
                 return e->path().string();
     }
+    // Not in the library yet (the first set of a DAT) : with a single ROM
+    // directory for the emulator there is only one place for it, created
+    // when the first set moves in. With several, the user says which.
+    if (roots.size() == 1 && !system_folder.empty()) return (fs::path(roots.front()) / system_folder).string();
     return "";
 }
 
@@ -534,6 +539,35 @@ void RomOutboxTab::refresh() {
             if (RomArchive::list_names(z.string(), names)) item.files = (int)names.size();
             m_items.push_back(std::move(item));
         }
+        // CHDs, one folder per set as the DAT's layout puts them.
+        std::vector<fs::path> disks;
+        for (auto it = fs::directory_iterator(sysdir, ec); it != fs::directory_iterator(); ++it) {
+            if (!it->is_directory(ec)) continue;
+            for (auto f = fs::directory_iterator(it->path(), ec); f != fs::directory_iterator(); ++f)
+                if (f->is_regular_file(ec) && lower(f->path().extension().string()) == ".chd") disks.push_back(f->path());
+        }
+        std::sort(disks.begin(), disks.end());
+        for (const auto& d : disks) {
+            Item item;
+            item.disk = true;
+            item.path = d.string();
+            item.system_folder = folder;
+            item.game = d.parent_path().filename().string();
+            item.system = system_of_folder(folder);
+            item.dat_header = folder;
+            item.emulator = emulator_of_folder(folder);
+            item.bytes = fs::file_size(d, ec);
+            item.destination = destination;
+            item.dest_exists = !destination.empty() && fs::exists(fs::path(destination) / item.game / d.filename(), ec);
+            item.entry = m_manifest.find(m_manifest.relative(d.string()));
+            item.files = item.files_expected = 1;
+            Game g = m_db->getGame(item.game, item.system, item.emulator);
+            if (!g.name.empty()) {
+                item.parent = g.cloneof;
+                if (!g.system.empty()) item.system = g.system;
+            }
+            m_items.push_back(std::move(item));
+        }
     }
     populate();
 }
@@ -549,14 +583,17 @@ void RomOutboxTab::populate() {
         row[m_cols.include] = it.selected && !it.destination.empty();
         row[m_cols.game]    = it.game;
         row[m_cols.system]  = it.system;
-        row[m_cols.archive] = fs::path(it.path).filename().string();
+        row[m_cols.archive] = it.disk ? it.game + "/" + fs::path(it.path).filename().string()
+                                      : fs::path(it.path).filename().string();
         row[m_cols.parent]  = it.parent;
         row[m_cols.files]   = it.files_expected ? std::to_string(it.files) + "/" + std::to_string(it.files_expected) : std::to_string(it.files);
         row[m_cols.size]    = human_size(it.bytes);
         row[m_cols.mapped]  = !it.destination.empty();
         row[m_cols.destination] = it.destination.empty()
             ? Glib::ustring(_("no destination : map this system folder"))
-            : Glib::ustring((fs::path(it.destination) / fs::path(it.path).filename()).string() + (it.dest_exists ? _("  (exists)") : ""));
+            : Glib::ustring((fs::path(it.destination) / (it.disk ? fs::path(it.game) / fs::path(it.path).filename()
+                                                                  : fs::path(it.path).filename())).string()
+                            + (it.dest_exists ? _("  (exists)") : ""));
         std::string fix;
         if (it.entry) {
             fix = it.entry->action == RomManifest::action::Rebuilt ? _("rebuilt") : _("moved");
@@ -796,6 +833,22 @@ void RomOutboxTab::worker_move() {
         const Game* game = book.game(it.game, it.system);
         if (!game) { reason = "not found in the DAT for system \"" + it.system + "\""; return false; }
         const DatLayout::Archive* layout = book.archive_for(*game);
+        if (it.disk) {
+            // A CHD : its set's archive must list a disk of that name, and
+            // the SHA1 its header declares must be that disk's.
+            if (!layout || layout->name != game->name) { reason = "its DAT expects no disk in this folder"; return false; }
+            const std::string name = fs::path(it.path).stem().string();
+            const std::string sha1 = RomResolve::chd_header_sha1(it.path);
+            if (sha1.empty()) { reason = "not a readable CHD"; return false; }
+            for (const auto& d : layout->disks) {
+                if (d.name != name) continue;
+                if (d.sha1 == sha1) return true;
+                reason = "SHA1 mismatch for " + name + ".chd (the DAT expects " + d.sha1 + ", the file declares " + sha1 + ")";
+                return false;
+            }
+            reason = "its DAT lists no disk " + name + " for " + game->name;
+            return false;
+        }
         if (!layout || layout->entries.empty()) { reason = "its DAT expects no archive for this set"; return false; }
         if (layout->name != game->name) { reason = "its DAT puts it in " + layout->name + "'s archive"; return false; }
         std::vector<RomArchive::Entry> entries;
@@ -823,9 +876,11 @@ void RomOutboxTab::worker_move() {
         if (m_cancelled) break;
         const Item& it = job.items[i];
         fs::path src(it.path);
-        fs::path dest = fs::path(it.destination) / src.filename();
+        const fs::path dest_dir = it.disk ? fs::path(it.destination) / it.game : fs::path(it.destination);
+        fs::path dest = dest_dir / src.filename();
         push_progress(100.0 * (double)i / (double)job.items.size(), src.filename().string());
         touched_dirs.insert(src.parent_path());
+        if (it.disk) touched_dirs.insert(src.parent_path().parent_path());
 
         std::string reason;
         if (!verify(it, reason)) {
@@ -833,7 +888,7 @@ void RomOutboxTab::worker_move() {
             ++job.refused;
             continue;
         }
-        fs::create_directories(it.destination, ec);
+        fs::create_directories(dest_dir, ec);
         const bool exists = fs::exists(dest, ec);
         const std::string rel = outbox_manifest.relative(it.path);
         if (exists) {
@@ -897,9 +952,10 @@ void RomOutboxTab::worker_move() {
 
     // A system folder emptied by the move above shouldn't linger : once its
     // contents are in the library, the outbox goes back to being empty.
-    for (const auto& dir : touched_dirs) {
+    // Deepest first : a set's CHD folder, then the system folder holding it.
+    for (auto dir = touched_dirs.rbegin(); dir != touched_dirs.rend(); ++dir) {
         std::error_code rmec;
-        if (fs::is_empty(dir, rmec) && !rmec) fs::remove(dir, rmec);
+        if (fs::is_empty(*dir, rmec) && !rmec) fs::remove(*dir, rmec);
     }
     if (job.moved + job.identical > 0) outbox_manifest.save();
     if (job.replaced > 0 && job.keep_replaced) quarantine_manifest.save();

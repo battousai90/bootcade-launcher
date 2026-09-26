@@ -52,11 +52,6 @@ Report audit(std::shared_ptr<DatabaseManager> db,
 
     rep.pool_empty = index.empty();
     log(cb, "Indexed " + std::to_string(index.size()) + " archive(s) from the scan cache.");
-    if (rep.pool_empty) {
-        log(cb, "  WARNING: the cache is empty : run a ROM scan first.");
-        report(cb, 100.0, _("Nothing to audit."));
-        return rep;
-    }
 
     // ── 2. Walk every game in the database ───────────────────────────────────
     report(cb, 12.0, _("Loading the game list…"));
@@ -68,6 +63,19 @@ Report audit(std::shared_ptr<DatabaseManager> db,
     // the verdicts reported are the group's.
     std::vector<Game> games = db->getAllGames(emulator);
     auto in_group = [&](const Game& g) { return dat_sources.empty() || dat_sources.count(g.dat_source) > 0; };
+    // No archive in the cache : nothing can be said about zips before a
+    // scan. CHDs are judged on disk by their headers and need no scan : a
+    // group of CHD DATs only is audited all the same.
+    if (rep.pool_empty) {
+        bool zips_expected = false;
+        for (const auto& g : games) if (in_group(g) && !g.roms.empty()) { zips_expected = true; break; }
+        if (zips_expected) {
+            log(cb, "  WARNING: the cache is empty : run a ROM scan first.");
+            report(cb, 100.0, _("Nothing to audit."));
+            return rep;
+        }
+        rep.pool_empty = false;
+    }
 
     // Sets the user asked not to hear about again (see DatabaseManager::ignoreSet).
     std::unordered_set<std::string> ignored;

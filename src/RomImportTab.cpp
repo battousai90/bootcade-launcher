@@ -770,7 +770,7 @@ void RomImportTab::on_selection_changed() {
         rr[cols.action]   = action;
         rr[cols.expected] = p.target_name;
         rr[cols.found_as] = (p.resolved && p.src.entry != p.target_name) ? Glib::ustring(p.src.entry) : Glib::ustring();
-        rr[cols.crc]      = crc_hex(p.crc);
+        rr[cols.crc]      = p.sha1.empty() ? crc_hex(p.crc) : p.sha1;
         rr[cols.size]     = human_size(p.size);
         rr[cols.source]   = source;
     }
@@ -828,7 +828,7 @@ void RomImportTab::on_selection_changed() {
     }
     { ui::ColumnOptions o; o.mono = true; o.expand = true; t->add_text_column(_("Expected name"), cols.expected, o); }
     { ui::ColumnOptions o; o.mono = true; o.expand = true; t->add_text_column(_("Found as"), cols.found_as, o); }
-    { ui::ColumnOptions o; o.mono = true; t->add_text_column(_("CRC"), cols.crc, o); }
+    { ui::ColumnOptions o; o.mono = true; t->add_text_column(s.disk ? _("SHA1") : _("CRC"), cols.crc, o); }
     { ui::ColumnOptions o; o.xalign = 1.0f; t->add_text_column(_("Size"), cols.size, o); }
     { ui::ColumnOptions o; o.expand = true; t->add_text_column(_("Source"), cols.source, o); }
     m_detail->set_content(t);

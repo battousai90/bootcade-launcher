@@ -1638,5 +1638,7 @@
   "known once the DAT is loaded": "จะทราบเมื่อโหลด DAT แล้ว",
   "none : every set is read as it is": "ไม่มี: อ่านแต่ละชุดตามที่เป็น",
   "nothing": "ไม่มี",
-  "parents, shared ROMs, devices": "ชุดแม่, ROM ที่ใช้ร่วมกัน, อุปกรณ์"
+  "parents, shared ROMs, devices": "ชุดแม่, ROM ที่ใช้ร่วมกัน, อุปกรณ์",
+  "Matching CHDs…": "กำลังจับคู่ CHD…",
+  "SHA1": "SHA1"
 }
