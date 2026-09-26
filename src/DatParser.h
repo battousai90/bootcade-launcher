@@ -46,6 +46,8 @@ public:
     static std::string extractSystemFromHeader(const std::string& headerName);
 
 private:
+    // One transaction for a whole DAT's sets. Returns how many, -1 on error.
+    static int insertGames(const std::vector<Game>& games, std::shared_ptr<DatabaseManager> db);
     // One Logiqx datafile into the database, its games recorded under
     // `dat_source` ; no dat_files registration.
     static int importDatafile(const std::string& filepath, std::shared_ptr<DatabaseManager> db,

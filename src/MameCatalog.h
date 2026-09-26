@@ -141,6 +141,15 @@ int convert_listxml_file(const std::string& xml_path, const std::string& out_dir
                          const std::function<bool(int)>& progress = {},
                          ConvertResult* result = nullptr);
 
+// Un fichier -listxml fourni comme DAT : lu directement, en flux, sans DAT
+// intermediaire. Chaque machine qui a une ROM ou un disque devient un set,
+// avec ses liens (cloneof, romof), merge= et ses device_ref, exactement ce
+// que le DAT de generate_dats en dirait. Ajoute a `out` ; rend le nombre de
+// sets lus, -1 en cas d'echec.
+int read_listxml_file(const std::string& xml_path, std::vector<Game>& out,
+                      std::string* version = nullptr,
+                      const std::function<bool(int)>& progress = {});
+
 /* ── Les genres, qui ne viennent pas de MAME ──────────────────────────────
  *
  * `mame -listxml` n'expose ni genre, ni famille, ni nombre de joueurs : ces

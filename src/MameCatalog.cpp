@@ -705,22 +705,15 @@ bool written_by_bootcade(const std::filesystem::path& p) {
 // n'a pas pu demarrer.
 using ListxmlFeed = std::function<bool(const std::function<bool(const char*, size_t)>&)>;
 
-static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
-                   const std::function<bool(int)>& progress, bool replace_previous,
-                   ConvertResult* result) {
-    namespace fs = std::filesystem;
-    if (dat_dir.empty()) return -1;
-    std::error_code ec;
-    fs::create_directories(dat_dir, ec);
-    // La version vient de l'attribut build de la racine <mame>, que la sortie
-    // de l'executable et les fichiers publies portent tous deux.
-    std::string version;
-
-    // ── 1. Tout -listxml, reduit a l'essentiel ──────────────────────────────
-    // Les DAT « bios-devices » et « CHDs » suivent les references d'une
-    // machine vers d'autres (device_ref, slot, romof, cloneof), qui peuvent
-    // venir plus loin dans le flux : on lit d'abord tout, on ecrit ensuite.
-    std::vector<LxMachine> machines;
+// Tout -listxml, lu en flux et reduit a ce qu'un gestionnaire de ROMs
+// verifie. La version vient de l'attribut build de la racine <mame>, que la
+// sortie de l'executable et les fichiers publies portent tous deux. Rend le
+// nombre de machines lues, -1 si le flux n'a pas pu etre lu ou a ete
+// interrompu.
+static int read_stream(const ListxmlFeed& feed, const std::function<bool(int)>& progress,
+                       std::vector<LxMachine>& machines, std::string& version) {
+    // Les references d'une machine vers d'autres (device_ref, romof,
+    // cloneof) peuvent venir plus loin dans le flux : on lit tout d'abord.
     machines.reserve(50000);
     std::string pending, carry;
     int seen = 0;
@@ -822,15 +815,57 @@ static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
     });
     if (!carry.empty()) handle_line(carry.data(), carry.size());
     if (cancelled || !started || machines.empty()) return -1;
+    return seen;
+}
+
+// Ce qu'un gestionnaire de ROMs verifie de chaque machine, tel que -listxml
+// le decrit : ses liens (cloneof, romof), ses ROMs et ses disques, merge=
+// compris, et ses devices. Une machine sans ROM ni disque n'a rien a
+// verifier et n'a pas d'entree ; un device_ref vers une telle machine non
+// plus. Deux lignes identiques (meme nom, meme CRC) dans un set n'en font
+// qu'une. C'est la regle unique : le DAT de « Generate from MAME » l'ecrit,
+// la lecture directe d'un fichier -listxml la reproduit.
+struct ListxmlSets {
+    const std::vector<LxMachine>& machines;
+    std::unordered_set<std::string> with_content;
+    explicit ListxmlSets(const std::vector<LxMachine>& m) : machines(m) {
+        for (const auto& x : machines)
+            if (!x.roms.empty() || !x.disks.empty()) with_content.insert(x.name);
+    }
+    bool has_entry(const LxMachine& m) const { return !m.roms.empty() || !m.disks.empty(); }
+    template <class F> void roms(const LxMachine& m, F&& f) const {
+        std::unordered_set<std::string> seen;
+        for (const auto& r : m.roms)
+            if (seen.insert(r.name + '\x1f' + r.crc).second) f(r);
+    }
+    template <class F> void disks(const LxMachine& m, F&& f) const {
+        std::unordered_set<std::string> seen;
+        for (const auto& d : m.disks)
+            if (seen.insert(d.name).second) f(d);
+    }
+    template <class F> void devices(const LxMachine& m, F&& f) const {
+        for (const auto& dev : m.devices)
+            if (with_content.count(dev)) f(dev);
+    }
+};
+
+static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
+                   const std::function<bool(int)>& progress, bool replace_previous,
+                   ConvertResult* result) {
+    namespace fs = std::filesystem;
+    if (dat_dir.empty()) return -1;
+    std::error_code ec;
+    fs::create_directories(dat_dir, ec);
+    std::string version;
+    std::vector<LxMachine> machines;
+    const int seen = read_stream(feed, progress, machines, version);
+    if (seen < 0) return -1;
 
     // Ecrit dans l'ordre des noms.
     std::vector<size_t> order(machines.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;
     std::sort(order.begin(), order.end(),
               [&](size_t a, size_t b) { return machines[a].name < machines[b].name; });
-
-    // Deux lignes identiques (meme nom, meme CRC) dans un set n'en font qu'une.
-    auto dedupe_key = [](const LxRom& r) { return r.name + '\x1f' + r.crc; };
 
     if (version.empty()) version = "unknown";
     const std::string date = today_iso();
@@ -873,37 +908,17 @@ static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
     // avec le XML de MAME. Seul ce qui ne sert pas a verifier un set est laisse
     // de cote (entrees, DIP, ecrans, sons...). Une machine sans ROM ni disque
     // n'a rien a verifier et n'a pas d'entree.
-    // Les devices d'une machine (<device_ref>) : ceux qui ont une entree dans
-    // le DAT, c'est-a-dire des ROMs ou des disques a verifier. Sans eux MAME
-    // refuse de lancer la machine, si complet que soit son propre zip. Les
-    // autres (781 216 references en 0.289, pour la plupart sans ROM) n'ont
-    // rien a verifier et ne sont pas ecrits.
-    std::unordered_set<std::string> with_content;
-    for (const auto& m : machines)
-        if (!m.roms.empty() || !m.disks.empty()) with_content.insert(m.name);
-
+    const ListxmlSets sets(machines);
     DatWriter one;
     if (!one.open(dat_dir, tag + ".dat", kHeader, version, date, tag)) return -1;
     for (size_t i : order) {
         const LxMachine& m = machines[i];
-        std::unordered_set<std::string> written, written_disks;
-        bool open = false;
-        for (const auto& r : m.roms) {
-            if (!written.insert(dedupe_key(r)).second) continue;
-            if (!open) { one.begin_machine(m); open = true; }
-            one.rom(r);
-        }
-        for (const auto& d : m.disks) {
-            if (!written_disks.insert(d.name).second) continue;
-            if (!open) { one.begin_machine(m); open = true; }
-            one.disk(d);
-        }
-        // Une machine sans ROM ni disque a elle n'a pas d'entree, meme si
-        // elle a des devices : elle n'a rien que l'on puisse verifier.
-        if (open)
-            for (const auto& dev : m.devices)
-                if (with_content.count(dev)) one.device_ref(dev);
-        if (open) one.end_machine();
+        if (!sets.has_entry(m)) continue;
+        one.begin_machine(m);
+        sets.roms(m, [&](const LxRom& r) { one.rom(r); });
+        sets.disks(m, [&](const LxDisk& d) { one.disk(d); });
+        sets.devices(m, [&](const std::string& dev) { one.device_ref(dev); });
+        one.end_machine();
     }
     const int n_sets = one.machines;
     if (!one.commit()) return -1;
@@ -934,21 +949,66 @@ int generate_dats(const std::string& mame_exe,
     return files;
 }
 
+static ListxmlFeed file_feed(const std::string& xml_path) {
+    return [xml_path](const std::function<bool(const char*, size_t)>& sink) {
+        std::ifstream in(xml_path, std::ios::binary);
+        if (!in) return false;
+        std::vector<char> buf(1 << 20);
+        while (in) {
+            in.read(buf.data(), (std::streamsize)buf.size());
+            const std::streamsize n = in.gcount();
+            if (n > 0 && !sink(buf.data(), (size_t)n)) break;
+        }
+        return true;
+    };
+}
+
 int convert_listxml_file(const std::string& xml_path, const std::string& out_dir,
                          const std::function<bool(int)>& progress, ConvertResult* result) {
-    return convert_stream(
-        [&](const std::function<bool(const char*, size_t)>& sink) {
-            std::ifstream in(xml_path, std::ios::binary);
-            if (!in) return false;
-            std::vector<char> buf(1 << 20);
-            while (in) {
-                in.read(buf.data(), (std::streamsize)buf.size());
-                const std::streamsize n = in.gcount();
-                if (n > 0 && !sink(buf.data(), (size_t)n)) break;
-            }
-            return true;
-        },
-        out_dir, progress, /*replace_previous=*/false, result);
+    return convert_stream(file_feed(xml_path), out_dir, progress, /*replace_previous=*/false, result);
+}
+
+int read_listxml_file(const std::string& xml_path, std::vector<Game>& out, std::string* version,
+                      const std::function<bool(int)>& progress) {
+    std::vector<LxMachine> machines;
+    std::string build;
+    if (read_stream(file_feed(xml_path), progress, machines, build) < 0) return -1;
+    if (version) *version = build.empty() ? "unknown" : build;
+    const ListxmlSets sets(machines);
+    out.reserve(out.size() + machines.size());
+    for (const auto& m : machines) {
+        if (!sets.has_entry(m)) continue;
+        Game g;
+        g.emulator     = "mame";
+        g.name         = m.name;
+        g.description  = m.description;
+        g.year         = m.year;
+        g.manufacturer = m.manufacturer;
+        g.sourcefile   = m.sourcefile;
+        g.cloneof      = m.cloneof;
+        g.romof        = m.romof;
+        g.is_bios      = m.isbios;
+        sets.roms(m, [&](const LxRom& r) {
+            Rom rom;
+            rom.name  = r.name;
+            rom.size  = r.size;
+            rom.crc   = r.crc;
+            rom.merge = r.merge;
+            g.roms.push_back(std::move(rom));
+        });
+        sets.disks(m, [&](const LxDisk& d) {
+            Disk disk;
+            disk.name  = d.name;
+            disk.sha1  = d.sha1;
+            std::transform(disk.sha1.begin(), disk.sha1.end(), disk.sha1.begin(),
+                           [](unsigned char c) { return (char)std::tolower(c); });
+            disk.merge = d.merge;
+            g.disks.push_back(std::move(disk));
+        });
+        sets.devices(m, [&](const std::string& dev) { g.devices.push_back(dev); });
+        out.push_back(std::move(g));
+    }
+    return (int)out.size();
 }
 
 

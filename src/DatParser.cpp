@@ -169,36 +169,21 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
 
     if (datKind(filepath) == DatKind::MameListxml) {
         // Un fichier -listxml brut (celui de progettosnaps, ou la sortie de
-        // l'executable enregistree) : ce n'est pas un DAT Logiqx, et ses sets
-        // ne sont pas resolus (merge=, romof, device_ref). Il passe par le
-        // meme convertisseur que « Generer depuis MAME », dans un dossier
-        // temporaire, et ce sont les DAT obtenus qui entrent en base, sous le
-        // nom de CE fichier : rien n'apparait dans le dossier du groupe que
-        // l'utilisateur n'y ait mis, et retirer le fichier retire ses jeux.
-        // La disposition est celle du groupe MAME de ce dossier : un DAT pour
-        // un seul dossier, trois pour Pleasuredome.
-        std::error_code ec;
-        std::string tmpl = (std::filesystem::temp_directory_path(ec) / "bootcade-listxml-XXXXXX").string();
-        std::vector<char> buf(tmpl.begin(), tmpl.end());
-        buf.push_back('\0');
-        if (!mkdtemp(buf.data())) {
-            std::cerr << "Erreur : dossier temporaire impossible pour " << filepath << std::endl;
-            return -1;
+        // l'executable enregistree) : pas un DAT Logiqx, mais il decrit les
+        // memes sets, liens compris (cloneof, romof, merge=, device_ref). Il
+        // est lu tel quel, sans DAT intermediaire, sous le nom de CE fichier.
+        std::vector<Game> sets;
+        std::string version;
+        if (MameCatalog::read_listxml_file(filepath, sets, &version) < 0) return -1;
+        for (auto& g : sets) {
+            g.system     = extractSystemFromHeader(MameCatalog::kHeader);
+            g.dat_header = MameCatalog::kHeader;
+            g.dat_source = filename;
+            g.status     = "missing";
         }
-        const std::string tmp = buf.data();
-        MameCatalog::ConvertResult conv;
-        if (MameCatalog::convert_listxml_file(filepath, tmp, {}, &conv) > 0) {
-            games_count = 0;
-            for (const auto& f : conv.files) {
-                const int n = importDatafile(f, db, filename, nullptr);
-                if (n < 0) { games_count = -1; break; }
-                games_count += n;
-            }
-        }
-        std::filesystem::remove_all(tmp, ec);
+        games_count = insertGames(sets, db);
         if (games_count < 0) return -1;
-        if (note)
-            *note = "MAME -listxml " + conv.version + ": " + std::to_string(conv.sets) + " sets";
+        if (note) *note = "MAME -listxml " + version + ": " + std::to_string(games_count) + " sets";
     } else {
         games_count = importDatafile(filepath, db, filename, note);
         if (games_count < 0) return -1;
@@ -212,6 +197,25 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
 
     std::cout << "Imported " << games_count << " games from " << filepath << std::endl;
     return games_count;
+}
+
+int DatParser::insertGames(const std::vector<Game>& games, std::shared_ptr<DatabaseManager> db) {
+    if (!db->beginTransaction()) {
+        std::cerr << "Erreur : impossible de démarrer la transaction" << std::endl;
+        return -1;
+    }
+    for (const auto& g : games) {
+        if (!db->insertGame(g)) {
+            std::cerr << "Erreur insertion jeu: " << g.name << std::endl;
+            db->rollbackTransaction();
+            return -1;
+        }
+    }
+    if (!db->commitTransaction()) {
+        std::cerr << "Erreur : impossible de valider la transaction" << std::endl;
+        return -1;
+    }
+    return (int)games.size();
 }
 
 int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<DatabaseManager> db,
