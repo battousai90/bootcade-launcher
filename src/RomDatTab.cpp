@@ -463,6 +463,7 @@ void RomDatTab::build_table() {
     m_combo_merge.signal_changed().connect(sigc::mem_fun(*this, &RomDatTab::store_dat_rule));
     auto* merge_label = ui::title_label(_("Merge mode"));
     merge_label->set_valign(Gtk::ALIGN_CENTER);
+    merge_label->show();   // its line is hidden from show_all : shown with it
     m_rule_merge_line.pack_start(*merge_label, Gtk::PACK_SHRINK);
     m_rule_merge_line.pack_start(m_combo_merge, Gtk::PACK_EXPAND_WIDGET);
     m_rule_merge_line.set_margin_top(8);
@@ -1209,7 +1210,7 @@ void RomDatTab::show_dat_rule(int index) {
     } else {
         DatSource::DatTraits traits{it->linked, it->declared};
         const std::string mode = DatSource::effective_merge(traits, rule);
-        set("links", it->linked ? std::string(_("parent / clone, shared ROMs or devices"))
+        set("links", it->linked ? std::string(_("parents, shared ROMs, devices"))
                                 : std::string(_("none : every set is read as it is")));
         set("declared", it->declared.empty() ? std::string(_("nothing")) : merge_label(it->declared));
         set("mode", mode.empty() ? std::string(_("as it is")) : merge_label(mode));
@@ -1218,11 +1219,15 @@ void RomDatTab::show_dat_rule(int index) {
     m_rule_merge_line.set_visible(linked);
     m_combo_merge.set_visible(linked);
     m_check_override.set_visible(linked && !it->declared.empty());
-    m_combo_merge.set_active_id(rule && !rule->merge.empty() ? rule->merge
-                                : (it && !it->declared.empty() ? it->declared : std::string(DatSource::kMergeSplit)));
-    m_check_override.set_active(rule && rule->override_dat);
+    // What the DAT is read with : the mode it declares, unless overridden.
+    const bool overridden = rule && rule->override_dat;
+    const bool declares   = it && !it->declared.empty();
+    m_combo_merge.set_active_id(declares && !overridden ? it->declared
+                                : rule && !rule->merge.empty() ? rule->merge
+                                : std::string(DatSource::kMergeSplit));
+    m_check_override.set_active(overridden);
     // With a mode the DAT declares, the choice only counts when overriding.
-    m_combo_merge.set_sensitive(linked && (it->declared.empty() || (rule && rule->override_dat)));
+    m_combo_merge.set_sensitive(linked && (!declares || overridden));
     m_entry_dat_folder.set_sensitive(it != nullptr);
     m_entry_dat_folder.set_text(rule ? rule->folder : std::string());
     m_entry_dat_folder.set_placeholder_text(it ? it->header_name : std::string());
@@ -1233,7 +1238,9 @@ void RomDatTab::store_dat_rule() {
     if (m_rule_filling || m_rule_item < 0 || m_rule_item >= (int)m_items.size()) return;
     const Item& it = m_items[m_rule_item];
     DatSource::DatRule& rule = group().rules[it.name];
-    rule.merge        = m_combo_merge.get_active_id().raw();
+    // The list shows the DAT's own mode while it is not overridden : only a
+    // choice the user can make is kept as theirs.
+    if (m_combo_merge.get_sensitive()) rule.merge = m_combo_merge.get_active_id().raw();
     rule.override_dat = m_check_override.get_active();
     rule.folder       = m_entry_dat_folder.get_text().raw();
     save_groups();

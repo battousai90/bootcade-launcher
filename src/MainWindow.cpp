@@ -3481,9 +3481,9 @@ void MainWindow::ask_mame_dat_resync() {
 
     ConfirmationDialog confirm(*this,
         _("Reload the MAME DAT files?"),
-        _("This version of Bootcade also checks the devices each MAME machine "
-          "needs to start (a sound chip, a protection chip…), each kept in its "
-          "own zip.\n\n"
+        _("This version of Bootcade reads more from MAME's DAT files: the devices "
+          "each machine uses (a sound chip, a protection chip…), whose ROMs a "
+          "non-merged collection keeps in each set's archive.\n\n"
           "MAME's DAT files need one reload to pick that up. FinalBurn Neo is "
           "not touched, and favourites and play history are kept.\n\n"
           "Reload now? (You can also do it later from the ROM Manager.)"),
