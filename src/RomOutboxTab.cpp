@@ -378,23 +378,31 @@ std::string RomOutboxTab::emulator_of_folder(const std::string& system_folder) c
 std::string RomOutboxTab::destination_for(const std::string& system_folder, const Paths&) const {
     auto it = m_destinations.find(system_folder);
     if (it != m_destinations.end() && !it->second.empty()) return it->second;
-    // A ROM directory of the same name, among those of the emulator the
-    // folder belongs to : a MAME set never lands in a FinalBurn Neo folder.
+    return auto_destination(system_folder);
+}
+
+// Where a DAT's folder is in the library, the way the audit looks for it
+// (RomResolve::CacheIndex::in_folder) : a ROM directory of that name, else a
+// directory of that name under one of them. Among the ROM directories of the
+// emulator the folder belongs to : a MAME set never lands in a FinalBurn Neo
+// folder. Compared without case : the DAT "MAME" lands in a folder "Mame".
+std::string RomOutboxTab::auto_destination(const std::string& system_folder) const {
     const auto roots = DatSource::roms_paths_for(emulator_of_folder(system_folder));
-    // Compared without case : the DAT "MAME" lands in a folder named "Mame".
-    auto low = [](std::string s) {
-        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-        return s;
-    };
     for (const auto& root : roots)
-        if (low(fs::path(root).filename().string()) == low(system_folder)) return root;
+        if (lower(fs::path(root).filename().string()) == lower(system_folder)) return root;
+    std::error_code ec;
+    for (const auto& root : roots) {
+        for (auto e = fs::directory_iterator(root, ec); !ec && e != fs::directory_iterator(); e.increment(ec))
+            if (e->is_directory(ec) && lower(e->path().filename().string()) == lower(system_folder))
+                return e->path().string();
+    }
     return "";
 }
 
 // A small table of "system folder → ROM directory", one row per DAT header
 // the database knows plus whatever the outbox holds. An empty directory
-// means "the ROM directory with the same name", which is what almost every
-// row wants.
+// means "the folder of that name in the library" (auto_destination), which
+// is what almost every row wants.
 void RomOutboxTab::on_edit_destinations() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
     Paths p = m_paths();
@@ -432,11 +440,7 @@ void RomOutboxTab::on_edit_destinations() {
         entry->set_hexpand(true);
         auto it = m_destinations.find(f);
         if (it != m_destinations.end()) entry->set_text(it->second);
-        std::string by_name;
-        const auto roots = DatSource::roms_paths_for(emulator_of_folder(f));
-        for (const auto& root : roots)
-            if (fs::path(root).filename().string() == f) by_name = root;
-        if (by_name.empty() && f == "MAME" && !roots.empty()) by_name = roots.front();   // see destination_for
+        const std::string by_name = auto_destination(f);
         entry->set_placeholder_text(by_name.empty() ? Glib::ustring(_("no ROM directory of that name : set one")) : Glib::ustring(by_name));
         line->pack_start(*entry, Gtk::PACK_EXPAND_WIDGET);
         auto* browse = ui::button(_("Browse…"), "bc-folder.svg");
