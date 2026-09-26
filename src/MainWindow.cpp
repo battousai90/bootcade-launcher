@@ -2293,7 +2293,7 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     // copie qui survit, sinon la fiche d'un jeu classe serait muette
     // exactement dans le cas ou elle a quelque chose a dire.
     // Connu dans les deux cas : la liste n'est plus videe quand on eteint.
-    const bool ranked = game_ranks_online(system, name);
+    const bool ranked = game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name);
     const bool show_board = hs_on && ranked && has_cached_board;
     // Un jeu qui n'est pas classe ne recoit aucun avertissement : il n'y a
     // rien a rater dessus, et le dire partout ferait du bruit.
@@ -2340,7 +2340,7 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     } else {
         add_pill("● " + _("Missing"), "pill-muted");
     }
-    if (game_ranks_online(system, name))
+    if (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name))
         add_pill("◆ " + _("Highscore"), "pill-hiscore");
     m_dock_pills.show_all();
 
@@ -3774,7 +3774,7 @@ void MainWindow::append_game_rows(const std::vector<const Game*>& games) {
         g_value_set_object(&vals[m_columns.m_col_icon.index()], icon ? G_OBJECT(icon->gobj()) : nullptr);
         set_str(m_columns.m_col_emulator, game.emulator);
         g_value_set_boolean(&vals[m_columns.m_col_favorite.index()], game.is_favorite);
-        set_str(m_columns.m_col_hiscore, game_ranks_online(game.system, game.name) ? ranked : unranked);
+        set_str(m_columns.m_col_hiscore, game_ranks_online(game.emulator, game.system, game.name) ? ranked : unranked);
         set_str(m_columns.m_col_last_played, game.last_played);
         set_str(m_columns.m_col_name, game.name);
         set_str(m_columns.m_col_title, game.description);
@@ -3970,7 +3970,7 @@ Gtk::Widget* MainWindow::make_game_card(const Gtk::TreeModel::Row& row) {
     // card is 176 px wide, and a second line would push the title out.
     slbl->set_markup("<span foreground=\"" + std::string(dot) + "\">●</span> " +
                      Glib::Markup::escape_text(system) +
-                     (game_ranks_online(system, name)
+                     (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
                         ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "info") + "\">◆</span>") : ""));
     slbl->set_ellipsize(Pango::ELLIPSIZE_END);
     slbl->set_max_width_chars(1); // let the cell govern width, not the text
@@ -4261,7 +4261,7 @@ Gtk::Widget* MainWindow::make_list_row(const Gtk::TreeModel::Row& row) {
     auto* hs = Gtk::make_managed<Gtk::Label>();
     hs->set_size_request(kColHs, -1);
     hs->set_valign(Gtk::ALIGN_CENTER);
-    if (game_ranks_online(system, name)) {
+    if (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)) {
         hs->set_text("\U0001F3C6");
         hs->set_tooltip_text(_("This game's scores can be ranked online."));
     } else {
@@ -4650,7 +4650,7 @@ void MainWindow::on_random_game_clicked() {
     const auto opt = m_settings_panel.random_pick();
     auto eligible = [&](const Game& g) {
         if (g.status != "available" || g.is_bios) return false;
-        if (opt.hiscore_only   && !game_ranks_online(g.system, g.name)) return false;
+        if (opt.hiscore_only   && !game_ranks_online(g.emulator, g.system, g.name)) return false;
         if (opt.originals_only && !g.cloneof.empty()) return false;
         if (opt.unplayed_only  && g.play_count > 0) return false;
         if (!opt.from_shown && !opt.systems.empty() && !opt.systems.count(g.system)) return false;
@@ -4964,7 +4964,10 @@ void MainWindow::check_fbneo_update_async() {
 }
 
 // ── Online scores ──────────────────────────────────────────────────────
-bool MainWindow::game_ranks_online(const std::string& system, const std::string& game) {
+bool MainWindow::game_ranks_online(const std::string& emulator, const std::string& system, const std::string& game) {
+    // The score service reads FinalBurn Neo's score tables : a MAME set of
+    // the same name and system ('Arcade/1941') is not ranked.
+    if (emulator != "fbneo") return false;
     std::lock_guard<std::mutex> lock(m_hiscore_supported_mutex);
     return m_hiscore_supported.count(HiscoreClient::key(system, game)) > 0;
 }
@@ -5322,7 +5325,7 @@ void MainWindow::on_hiscore_supported_ready() {
     for (auto& row : m_model_games->children()) {
         std::string system = Glib::ustring(row[m_columns.m_col_system]).raw();
         std::string name   = Glib::ustring(row[m_columns.m_col_name]).raw();
-        row[m_columns.m_col_hiscore] = game_ranks_online(system, name)
+        row[m_columns.m_col_hiscore] = game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
                                      ? Glib::ustring("\u25cf") : Glib::ustring();
     }
     // The filter tree carries a count of ranked games, and the Highscore sort
@@ -5602,8 +5605,9 @@ void MainWindow::sort_games(std::vector<const Game*>& games) {
         std::stable_sort(games.begin(), games.end(),
             [&ranked](const Game* pa, const Game* pb) {
                 const Game& a = *pa; const Game& b = *pb;
-                bool ra = ranked.count(HiscoreClient::key(a.system, a.name)) > 0;
-                bool rb = ranked.count(HiscoreClient::key(b.system, b.name)) > 0;
+                // FinalBurn Neo sets only, as game_ranks_online() says.
+                bool ra = a.emulator == "fbneo" && ranked.count(HiscoreClient::key(a.system, a.name)) > 0;
+                bool rb = b.emulator == "fbneo" && ranked.count(HiscoreClient::key(b.system, b.name)) > 0;
                 return ra != rb ? ra : false;
             });
         break;
@@ -5677,7 +5681,7 @@ void MainWindow::submit_session_score(const std::string& system,
      * est gare : la duree de jeu d'un joueur sans compte n'a personne a qui
      * etre attribuee, et empiler une entree par partie ne servirait a rien. */
     if (player.empty()) {
-        if (!game_ranks_online(system, game)) return;
+        if (!game_ranks_online("fbneo", system, game)) return;
         std::string hi_after = read_file_bytes(fbneo_score_state_path(system, game, fbneo_rom_name));
         if (hi_after.empty() || hi_after == hi_before) return;
         HiscoreClient::queue_submission(system, game, player, country, pt,
@@ -5692,7 +5696,7 @@ void MainWindow::submit_session_score(const std::string& system,
         return;
     }
 
-    if (!game_ranks_online(system, game)) { send_playtime_only(); return; }
+    if (!game_ranks_online("fbneo", system, game)) { send_playtime_only(); return; }
 
     std::string hi_after = read_file_bytes(fbneo_score_state_path(system, game, fbneo_rom_name));
     if (hi_after.empty() || hi_after == hi_before) {   // no score table, or nothing new in it
@@ -5778,7 +5782,7 @@ void MainWindow::submit_session_score(const std::string& system,
         std::cerr << "[HISCORE] sans objet pour " << system << "/" << game
                   << " : " << (r.reason.empty() ? "aucune raison donnee" : r.reason)
                   << std::endl;
-        if (game_ranks_online(system, game) && !r.reason.empty()) {
+        if (game_ranks_online("fbneo", system, game) && !r.reason.empty()) {
             std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
             m_hiscore_results.push_back(Glib::ustring::compose(
                 _("Score not recorded : %1"), r.reason).raw());
@@ -6505,6 +6509,7 @@ void MainWindow::populate_filter_tree() {
 
     for (const auto& game : m_cached_games) {
         // Release type : a set can match several (a hack is usually a clone too).
+        if (!emulator_in_scope(game)) continue;   // hors portee : ni compte ni ligne
         if (game.is_original())  type_counts["original"]++;
         if (game.is_clone())     type_counts["clone"]++;
         if (game.is_hack())      type_counts["hack"]++;
@@ -6512,8 +6517,6 @@ void MainWindow::populate_filter_tree() {
         if (game.is_bootleg())   type_counts["bootleg"]++;
         if (game.is_prototype()) type_counts["prototype"]++;
         if (game.is_favorite)    favorite_count++;
-
-        if (!emulator_in_scope(game)) continue;   // hors portee : ni compte ni ligne
         if (all_scope) emulator_counts_map[game.emulator]++;
         if (!game.system.empty())       system_counts[game.system]++;
         if (!game.manufacturer.empty()) manuf_counts[game.manufacturer]++;
@@ -6561,7 +6564,7 @@ void MainWindow::populate_filter_tree() {
     {
         int ranked_count = 0;
         for (const auto& game : m_cached_games)
-            if (game_ranks_online(game.system, game.name)) ranked_count++;
+            if (emulator_in_scope(game) && game_ranks_online(game.emulator, game.system, game.name)) ranked_count++;
         if (ranked_count > 0) {
             auto hi = m_model_filters->append();
             (*hi)[m_filter_columns.m_col_icon] = get_filter_icon("Highscore");
@@ -7039,7 +7042,7 @@ void MainWindow::apply_tree_filters() {
             if (filter_type == "favorite" && !game.is_favorite) {
                 matches = false; break;
             }
-            if (filter_type == "hiscore" && !game_ranks_online(game.system, game.name)) {
+            if (filter_type == "hiscore" && !game_ranks_online(game.emulator, game.system, game.name)) {
                 matches = false; break;
             }
         }

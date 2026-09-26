@@ -522,7 +522,7 @@ private:
     std::atomic<bool> m_hiscore_refreshing{false};
     std::mutex  m_hiscore_status_mutex;
     std::string m_hiscore_status;
-    bool game_ranks_online(const std::string& system, const std::string& game);
+    bool game_ranks_online(const std::string& emulator, const std::string& system, const std::string& game);
 
     // Leaderboard of whatever game the detail dock is showing. The player
     // clicks through a list faster than the network answers, so each request
