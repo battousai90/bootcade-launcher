@@ -288,6 +288,10 @@ void DATUpdateDialog::worker_thread() {
 
         if (m_cancelled.load()) { m_update_finished.store(true); m_finished_dispatcher(); return; }
 
+        // MAME's sets now carry their devices : the reload offered for that
+        // at startup is no longer needed.
+        if (m_emulator.empty() || m_emulator == "mame") m_db->clearMameDatResyncFlag();
+
         update_progress(1.0, "", "Complete!");
         log("Update completed. Statuses are up to date : a full re-scan is no longer required.", Level::Ok);
 

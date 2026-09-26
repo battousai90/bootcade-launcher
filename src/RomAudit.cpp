@@ -113,6 +113,40 @@ Report audit(std::shared_ptr<DatabaseManager> db,
     std::unordered_map<std::string, std::string> status_by_key;
     status_by_key.reserve(games.size());
 
+    // The devices a MAME machine cannot start without (RomResolve::
+    // DeviceIndex) : each judged on its own archive, once, by the same rule,
+    // and how many of the group's sets each unavailable one takes down.
+    const RomResolve::DeviceIndex device_index(games);
+    std::unordered_map<size_t, std::string> device_own;
+    std::unordered_map<size_t, int> device_dependents;
+    auto device_status = [&](size_t d) -> const std::string& {
+        auto it = device_own.find(d);
+        if (it != device_own.end()) return it->second;
+        const Game& dev = games[d];
+        std::string st;
+        if (!dev.roms.empty())
+            st = RomResolve::evaluate(dev, index.for_game(dev), rep.style, archive_for, game_for).status;
+        if (!dev.disks.empty())
+            st = RomResolve::combine_status(st, RomResolve::evaluate_disks(dev, roms_paths, game_for).status);
+        return device_own.emplace(d, std::move(st)).first->second;
+    };
+    // Folds the set's devices into its verdict. `zip_status` keeps what the
+    // set's own archive says : Fix and Quarantine act on that, never on a
+    // device another zip is missing.
+    auto apply_devices = [&](GameEntry& e, const Game& g) {
+        std::string worst;
+        for (size_t d : device_index.needed(g)) {
+            const std::string& st = device_status(d);
+            if (st.empty() || st == "available") continue;
+            e.missing_devices.push_back(games[d].name);
+            if (in_group(g)) device_dependents[d]++;
+            worst = RomResolve::combine_status(worst, st);
+        }
+        if (worst.empty()) return;
+        if (e.zip_status.empty()) e.zip_status = e.status;
+        e.status = RomResolve::combine_status(e.status, worst);
+    };
+
     for (size_t gi = 0; gi < games.size(); ++gi) {
         if (cancelled(cb)) { rep.cancelled = true; return rep; }
         if ((gi % 512) == 0)
@@ -150,6 +184,7 @@ Report audit(std::shared_ptr<DatabaseManager> db,
                 e.roms.push_back(std::move(r));
             }
             e.status  = d.status;
+            apply_devices(e, g);
             e.ignored = ignored.count(g.name + '\x1f' + g.system) > 0;
             status_by_key[g.name + '\x1f' + g.system] = e.status;
             if (e.ignored) {
@@ -319,7 +354,6 @@ Report audit(std::shared_ptr<DatabaseManager> db,
             e.status = RomResolve::combine_status(verdict.status, d.status);
         }
         e.ignored = ignored.count(g.name + '\x1f' + g.system) > 0;
-        status_by_key[g.name + '\x1f' + g.system] = e.status;
 
         // Repairable = nothing is truly gone. Every broken piece : absent or
         // corrupt : has a good copy in another library archive, so the set can be
@@ -335,6 +369,10 @@ Report audit(std::shared_ptr<DatabaseManager> db,
                 break;
             }
         }
+        // After the repair decision : a missing device is another set's
+        // archive, which rebuilding this one cannot bring.
+        apply_devices(e, g);
+        status_by_key[g.name + '\x1f' + g.system] = e.status;
 
         // An ignored set keeps its real status (so "why did I ignore this?"
         // still has an answer) but is a bucket of its own: not a problem to
@@ -387,6 +425,14 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         std::sort(rep.missing_bios.begin(), rep.missing_bios.end(),
                   [](const BiosGap& a, const BiosGap& b) { return a.dependents > b.dependents; });
     }
+
+    // ── 2c. Devices that are not there, and what they take down with them ──
+    for (const auto& [d, n] : device_dependents)
+        rep.missing_devices.push_back({games[d].name, games[d].system, device_status(d), n});
+    std::sort(rep.missing_devices.begin(), rep.missing_devices.end(),
+              [](const BiosGap& a, const BiosGap& b) {
+                  return a.dependents != b.dependents ? a.dependents > b.dependents : a.name < b.name;
+              });
 
     std::sort(rep.games.begin(), rep.games.end(), [](const GameEntry& a, const GameEntry& b) {
         if (a.system != b.system) return a.system < b.system;

@@ -194,6 +194,11 @@ public:
     // re-read once, then clears it.
     bool needsDatResync();
     bool clearDatResyncFlag();
+    // Set when the devices table first appears in a database that already
+    // holds MAME sets : their <device_ref> are only known once MAME's DATs
+    // are read again. The main window offers that reload once, then clears it.
+    bool needsMameDatResync();
+    bool clearMameDatResyncFlag();
     // Small named integers in scan_metadata (timestamps, counters), for
     // whatever a screen needs to remember between two launches.
     int64_t getScanMetadata(const std::string& key, int64_t fallback = 0);

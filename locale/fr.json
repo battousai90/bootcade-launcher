@@ -1630,5 +1630,10 @@
   "Button 15": "Bouton 15",
   "Button 16": "Bouton 16",
   "More buttons": "Autres boutons",
-  "The controls and DIP switches changed in MAME's own menu for this machine will be removed, so your Bootcade controller profile applies again.\n\nA backup is kept next to the file. Saved games and high scores are kept.": "Les commandes et les DIP switches modifiés dans le menu de MAME pour cette machine seront supprimés, pour que votre profil de manette Bootcade s'applique à nouveau.\n\nUne sauvegarde est conservée à côté du fichier. Les parties sauvegardées et les meilleurs scores sont conservés."
+  "The controls and DIP switches changed in MAME's own menu for this machine will be removed, so your Bootcade controller profile applies again.\n\nA backup is kept next to the file. Saved games and high scores are kept.": "Les commandes et les DIP switches modifiés dans le menu de MAME pour cette machine seront supprimés, pour que votre profil de manette Bootcade s'applique à nouveau.\n\nUne sauvegarde est conservée à côté du fichier. Les parties sauvegardées et les meilleurs scores sont conservés.",
+  "device missing: %1": "device manquant : %1",
+  "%1 : %2 set(s)": "%1 : %2 set(s)",
+  "Devices not available : %1. MAME cannot start the sets that need them.": "Devices indisponibles : %1. MAME ne peut pas lancer les sets qui en ont besoin.",
+  "Reload the MAME DAT files?": "Recharger les fichiers DAT de MAME ?",
+  "This version of Bootcade also checks the devices each MAME machine needs to start (a sound chip, a protection chip…), each kept in its own zip.\n\nMAME's DAT files need one reload to pick that up. FinalBurn Neo is not touched, and favourites and play history are kept.\n\nReload now? (You can also do it later from the ROM Manager.)": "Cette version de Bootcade vérifie aussi les devices dont chaque machine MAME a besoin pour démarrer (une puce son, une puce de protection…), chacun rangé dans son propre zip.\n\nLes fichiers DAT de MAME doivent être rechargés une fois pour en tenir compte. FinalBurn Neo n'est pas touché, et les favoris et l'historique de jeu sont conservés.\n\nRecharger maintenant ? (Vous pourrez aussi le faire plus tard depuis le gestionnaire de ROMs.)"
 }

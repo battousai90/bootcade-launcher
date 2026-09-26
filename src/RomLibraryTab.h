@@ -129,6 +129,7 @@ private:
     Gtk::Button*        m_btn_audit = nullptr;
     Gtk::Label          m_last_audit;
     Gtk::Label          m_bios_line;
+    Gtk::Label          m_devices_line;
     Gtk::Box            m_pills{Gtk::ORIENTATION_HORIZONTAL, 8};
     SettingsUi::Pill*   m_pill_total     = nullptr;
     SettingsUi::Pill*   m_pill_correct   = nullptr;

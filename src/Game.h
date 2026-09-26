@@ -138,6 +138,11 @@ struct Game {
     // Les CHD du set : seul le DAT « CHDs (merged) » de MAME en porte. Un set
     // qui n'a que des disques n'a aucune ROM, et inversement.
     std::vector<Disk> disks;
+    // Les devices MAME dont la machine a besoin pour demarrer (<device_ref>) :
+    // une puce son, un CPU de protection... chacun range dans son propre zip,
+    // comme un set a part. Seuls ceux qui ont des ROMs a verifier sont gardes.
+    // Vide pour FinalBurn Neo.
+    std::vector<std::string> devices;
     std::string status = "missing";  // "available", "missing", "incorrect", "incomplete"
     
     // Video information

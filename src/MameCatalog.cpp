@@ -589,6 +589,7 @@ struct LxMachine {
     bool isbios = false, isdevice = false, runnable = true;
     std::vector<LxRom>  roms;     // sans les nodump ni les ROMs sans CRC
     std::vector<LxDisk> disks;    // sans les nodump
+    std::vector<std::string> devices;   // <device_ref>, dans l'ordre de -listxml
 };
 
 // Un DAT en cours d'ecriture. Il s'ecrit sous un nom cache et temporaire, que
@@ -649,6 +650,9 @@ struct DatWriter {
         out << "\t\t<disk name=\"" << xml_escape(d.name) << "\" sha1=\"" << xml_escape(d.sha1) << "\"";
         if (!d.merge.empty()) out << " merge=\"" << xml_escape(d.merge) << "\"";
         out << "/>\n";
+    }
+    void device_ref(const std::string& name) {
+        out << "\t\t<device_ref name=\"" << xml_escape(name) << "\"/>\n";
     }
     void end_machine() { out << "\t</machine>\n"; ++machines; }
 
@@ -764,6 +768,12 @@ static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
             if (disk.name.empty() || disk.sha1.empty()) continue;
             x.disks.push_back(std::move(disk));
         }
+        for (pugi::xml_node d = m.child("device_ref"); d; d = d.next_sibling("device_ref")) {
+            std::string dev = d.attribute("name").as_string();
+            if (dev.empty() || dev == x.name) continue;
+            if (std::find(x.devices.begin(), x.devices.end(), dev) == x.devices.end())
+                x.devices.push_back(std::move(dev));
+        }
         machines.push_back(std::move(x));
         if (++seen % 2048 == 0 && progress && !progress(seen)) cancelled = true;
     };
@@ -863,6 +873,15 @@ static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
     // avec le XML de MAME. Seul ce qui ne sert pas a verifier un set est laisse
     // de cote (entrees, DIP, ecrans, sons...). Une machine sans ROM ni disque
     // n'a rien a verifier et n'a pas d'entree.
+    // Les devices d'une machine (<device_ref>) : ceux qui ont une entree dans
+    // le DAT, c'est-a-dire des ROMs ou des disques a verifier. Sans eux MAME
+    // refuse de lancer la machine, si complet que soit son propre zip. Les
+    // autres (781 216 references en 0.289, pour la plupart sans ROM) n'ont
+    // rien a verifier et ne sont pas ecrits.
+    std::unordered_set<std::string> with_content;
+    for (const auto& m : machines)
+        if (!m.roms.empty() || !m.disks.empty()) with_content.insert(m.name);
+
     DatWriter one;
     if (!one.open(dat_dir, tag + ".dat", kHeader, version, date, tag)) return -1;
     for (size_t i : order) {
@@ -879,6 +898,11 @@ static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
             if (!open) { one.begin_machine(m); open = true; }
             one.disk(d);
         }
+        // Une machine sans ROM ni disque a elle n'a pas d'entree, meme si
+        // elle a des devices : elle n'a rien que l'on puisse verifier.
+        if (open)
+            for (const auto& dev : m.devices)
+                if (with_content.count(dev)) one.device_ref(dev);
         if (open) one.end_machine();
     }
     const int n_sets = one.machines;

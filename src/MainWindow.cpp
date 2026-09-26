@@ -546,6 +546,10 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     if (m_database && m_database->needsDatResync())
         Glib::signal_idle().connect_once(
             sigc::mem_fun(*this, &MainWindow::ask_dat_resync));
+    // The full reload above covers MAME too : only one question at a time.
+    else if (m_database && m_database->needsMameDatResync())
+        Glib::signal_idle().connect_once(
+            sigc::mem_fun(*this, &MainWindow::ask_mame_dat_resync));
 
     // Apply the saved theme, and react to theme/language changes from Settings.
     apply_theme(m_settings_panel.get_theme());
@@ -3469,6 +3473,22 @@ void MainWindow::confirm_update_dat(const std::string& emulator) {
     }
 
     do_update_dat(emulator);
+}
+
+void MainWindow::ask_mame_dat_resync() {
+    // Asked once, like the question below.
+    m_database->clearMameDatResyncFlag();
+
+    ConfirmationDialog confirm(*this,
+        _("Reload the MAME DAT files?"),
+        _("This version of Bootcade also checks the devices each MAME machine "
+          "needs to start (a sound chip, a protection chip…), each kept in its "
+          "own zip.\n\n"
+          "MAME's DAT files need one reload to pick that up. FinalBurn Neo is "
+          "not touched, and favourites and play history are kept.\n\n"
+          "Reload now? (You can also do it later from the ROM Manager.)"),
+        "bc-sync.svg");
+    if (confirm.show_and_confirm()) do_update_dat("mame");
 }
 
 void MainWindow::ask_dat_resync() {

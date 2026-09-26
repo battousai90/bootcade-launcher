@@ -833,6 +833,35 @@ bool DatabaseManager::createTables() {
     // l'ajouter echoue sans consequence quand elle existe deja.
     sqlite3_exec(m_db, "ALTER TABLE disks ADD COLUMN merge TEXT NOT NULL DEFAULT '';", 0, 0, nullptr);
 
+    // Les devices des machines MAME (<device_ref>), meme logique que disks :
+    // table a part, sans cle etrangere, videe avec les jeux. Une base qui
+    // porte deja des sets MAME ne les connait qu'apres une relecture des DAT
+    // MAME : le drapeau needs_mame_dat_resync la fait proposer au demarrage.
+    {
+        bool existed = false;
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(m_db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='devices';",
+                               -1, &st, nullptr) == SQLITE_OK) {
+            existed = sqlite3_step(st) == SQLITE_ROW;
+            sqlite3_finalize(st);
+        }
+        if (sqlite3_exec(m_db,
+                "CREATE TABLE IF NOT EXISTS devices ("
+                "  game_id INTEGER NOT NULL,"
+                "  name TEXT NOT NULL,"
+                "  PRIMARY KEY(game_id, name));",
+                0, 0, &err_msg) != SQLITE_OK) {
+            std::cerr << "[WARN] Could not create devices: " << err_msg << std::endl;
+            sqlite3_free(err_msg);
+            err_msg = nullptr;
+        } else if (!existed) {
+            sqlite3_exec(m_db,
+                "INSERT OR REPLACE INTO scan_metadata (key, value) "
+                "SELECT 'needs_mame_dat_resync', 1 WHERE EXISTS (SELECT 1 FROM games WHERE emulator = 'mame');",
+                0, 0, nullptr);
+        }
+    }
+
     // Index creation is best-effort and executed statement-by-statement: a missing
     // column on a legacy DB (e.g. an old rom_cache without rom_id) must neither abort
     // startup nor prevent the remaining indexes from being created. Indexes are pure
@@ -968,6 +997,22 @@ bool DatabaseManager::insertGame(const Game& game) {
             if (sqlite3_step(ds) != SQLITE_DONE) { sqlite3_finalize(ds); return false; }
         }
         sqlite3_finalize(ds);
+    }
+
+    if (!game.devices.empty()) {
+        sqlite3_stmt* dv = nullptr;
+        if (sqlite3_prepare_v2(m_db, "INSERT OR REPLACE INTO devices (game_id, name) VALUES (?, ?);",
+                               -1, &dv, nullptr) != SQLITE_OK) {
+            std::cerr << "Erreur préparation insertion devices: " << sqlite3_errmsg(m_db) << std::endl;
+            return false;
+        }
+        for (const auto& name : game.devices) {
+            sqlite3_reset(dv);
+            sqlite3_bind_int64(dv, 1, game_id);
+            sqlite3_bind_text(dv, 2, name.c_str(), -1, SQLITE_STATIC);
+            if (sqlite3_step(dv) != SQLITE_DONE) { sqlite3_finalize(dv); return false; }
+        }
+        sqlite3_finalize(dv);
     }
 
     return true;
@@ -1288,6 +1333,23 @@ std::vector<Game> DatabaseManager::loadAllGames(bool with_roms, const std::strin
         sqlite3_finalize(disks_stmt);
     }
 
+    // Les devices des machines MAME, de la meme facon. Ordre d'insertion :
+    // celui du DAT.
+    const char* devices_sql = emulator.empty()
+        ? "SELECT game_id, name FROM devices ORDER BY rowid;"
+        : "SELECT d.game_id, d.name FROM devices d "
+          "JOIN games g ON g.id = d.game_id WHERE g.emulator = ? ORDER BY d.rowid;";
+    sqlite3_stmt* devices_stmt = nullptr;
+    if (sqlite3_prepare_v2(m_db, devices_sql, -1, &devices_stmt, nullptr) == SQLITE_OK) {
+        if (!emulator.empty()) sqlite3_bind_text(devices_stmt, 1, emulator.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(devices_stmt) == SQLITE_ROW) {
+            auto it = id_to_index.find(sqlite3_column_int64(devices_stmt, 0));
+            if (it == id_to_index.end()) continue;
+            games[it->second].devices.push_back(safe_column_text(devices_stmt, 1));
+        }
+        sqlite3_finalize(devices_stmt);
+    }
+
     return games;
 }
 
@@ -1604,6 +1666,7 @@ bool DatabaseManager::clearGames(const std::string& emulator) {
     // to cascade from.
     const char* sqls[] = {
         "DELETE FROM disks WHERE game_id IN (SELECT id FROM games WHERE emulator = ?);",
+        "DELETE FROM devices WHERE game_id IN (SELECT id FROM games WHERE emulator = ?);",
         "DELETE FROM roms WHERE game_id IN (SELECT id FROM games WHERE emulator = ?);",
         "DELETE FROM games WHERE emulator = ?;",
     };
@@ -1629,7 +1692,7 @@ bool DatabaseManager::clearGames(const std::string& emulator) {
 }
 
 bool DatabaseManager::clearAllData() {
-    const char* sql = "DELETE FROM disks; DELETE FROM roms; DELETE FROM games;";
+    const char* sql = "DELETE FROM disks; DELETE FROM devices; DELETE FROM roms; DELETE FROM games;";
     char* err_msg = nullptr;
     
     int rc = sqlite3_exec(m_db, sql, 0, 0, &err_msg);
@@ -2082,12 +2145,15 @@ bool DatabaseManager::removeGamesFromDat(const std::string& filename) {
 
     sqlite3_stmt* stmt = nullptr;
 
-    if (sqlite3_prepare_v2(m_db, "DELETE FROM disks WHERE game_id IN (SELECT id FROM games WHERE dat_source = ?);",
-                           -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, filename.c_str(), -1, SQLITE_STATIC);
-        sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-        stmt = nullptr;
+    for (const char* del_children : {
+             "DELETE FROM disks WHERE game_id IN (SELECT id FROM games WHERE dat_source = ?);",
+             "DELETE FROM devices WHERE game_id IN (SELECT id FROM games WHERE dat_source = ?);"}) {
+        if (sqlite3_prepare_v2(m_db, del_children, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, filename.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+            stmt = nullptr;
+        }
     }
 
     if (sqlite3_prepare_v2(m_db, del_roms, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -2290,6 +2356,23 @@ std::unordered_map<std::string, std::string> DatabaseManager::snapshotStatusSign
     flush();
 
     sqlite3_finalize(stmt);
+
+    // The devices a machine needs are part of its definition : a set that
+    // gains one is judged again.
+    const char* dev_sql =
+        "SELECT g.name, g.system, g.emulator, d.name FROM devices d "
+        "JOIN games g ON g.id = d.game_id WHERE (? = '' OR g.emulator = ?) ORDER BY d.game_id, d.name;";
+    if (sqlite3_prepare_v2(m_db, dev_sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, emulator.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, emulator.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            std::string gemu = safe_column_text(stmt, 2);
+            if (gemu.empty()) gemu = "fbneo";
+            auto it = out.find(safe_column_text(stmt, 0) + kSep + safe_column_text(stmt, 1) + kSep + gemu);
+            if (it != out.end()) it->second += "dev:" + safe_column_text(stmt, 3) + '|';
+        }
+        sqlite3_finalize(stmt);
+    }
     return out;
 }
 
@@ -3149,6 +3232,15 @@ bool DatabaseManager::needsDatResync() {
     bool needed = sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) != 0;
     sqlite3_finalize(stmt);
     return needed;
+}
+
+bool DatabaseManager::needsMameDatResync() {
+    return getScanMetadata("needs_mame_dat_resync", 0) != 0;
+}
+
+bool DatabaseManager::clearMameDatResyncFlag() {
+    return sqlite3_exec(m_db, "DELETE FROM scan_metadata WHERE key = 'needs_mame_dat_resync';",
+                        0, 0, nullptr) == SQLITE_OK;
 }
 
 bool DatabaseManager::clearDatResyncFlag() {

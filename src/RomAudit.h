@@ -86,6 +86,11 @@ struct GameEntry {
     // Fix, which never touches CHDs, acts on. Empty for every other set.
     bool        has_disks = false;
     std::string zip_status;
+    // The devices (MAME <device_ref>) this set needs that are not available :
+    // MAME will not start it, however complete its own archive. `status`
+    // counts them ; `zip_status` then holds the archive's own verdict, which
+    // is what Fix and Quarantine act on.
+    std::vector<std::string> missing_devices;
 };
 
 // A BIOS set that is not available, and how many sets depend on it: in a
@@ -126,6 +131,9 @@ struct Report {
     int  repairable = 0;
     int  ignored = 0;               // sets the user chose not to hear about (not in the three above)
     std::vector<BiosGap> missing_bios;
+    // Devices that are not available, with how many of the group's sets
+    // need them. Same shape as a BIOS gap.
+    std::vector<BiosGap> missing_devices;
     bool cancelled = false;
     bool pool_empty = false;        // no scan cache: results would be meaningless
 };

@@ -39,6 +39,16 @@ void read_disks(const pugi::xml_node& game_node, Game& game) {
     }
 }
 
+// Les devices dont une machine MAME a besoin : un zip chacun, a cote du sien.
+void read_devices(const pugi::xml_node& game_node, Game& game) {
+    for (auto dev : game_node.children("device_ref")) {
+        std::string name = dev.attribute("name").value();
+        if (name.empty() || name == game.name) continue;
+        if (std::find(game.devices.begin(), game.devices.end(), name) == game.devices.end())
+            game.devices.push_back(std::move(name));
+    }
+}
+
 } // namespace
 
 std::vector<Game> DatParser::parse(const std::string& filepath) {
@@ -112,6 +122,7 @@ std::vector<Game> DatParser::parse(const std::string& filepath) {
             game.roms.push_back(rom);
         }
         read_disks(game_node, game);
+        read_devices(game_node, game);
 
         // Extract system name from header
         auto header = games_node.child("header");
@@ -304,6 +315,7 @@ int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<Datab
             game.roms.push_back(rom);
         }
         read_disks(game_node, game);
+        read_devices(game_node, game);
 
         game.status = "missing";  // Default status
         game.dat_source = filename;  // Set the source DAT file

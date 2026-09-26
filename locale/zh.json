@@ -1630,5 +1630,10 @@
   "Button 15": "按键 15",
   "Button 16": "按键 16",
   "More buttons": "更多按键",
-  "The controls and DIP switches changed in MAME's own menu for this machine will be removed, so your Bootcade controller profile applies again.\n\nA backup is kept next to the file. Saved games and high scores are kept.": "将删除在 MAME 菜单中为该机台修改的按键和 DIP 开关设置，使 Bootcade 手柄配置重新生效。\n\n备份会保存在文件旁边。存档和最高分都会保留。"
+  "The controls and DIP switches changed in MAME's own menu for this machine will be removed, so your Bootcade controller profile applies again.\n\nA backup is kept next to the file. Saved games and high scores are kept.": "将删除在 MAME 菜单中为该机台修改的按键和 DIP 开关设置，使 Bootcade 手柄配置重新生效。\n\n备份会保存在文件旁边。存档和最高分都会保留。",
+  "device missing: %1": "缺少设备：%1",
+  "%1 : %2 set(s)": "%1：%2 个套装",
+  "Devices not available : %1. MAME cannot start the sets that need them.": "设备不可用：%1。MAME 无法启动需要它们的套装。",
+  "Reload the MAME DAT files?": "重新加载 MAME 的 DAT 文件？",
+  "This version of Bootcade also checks the devices each MAME machine needs to start (a sound chip, a protection chip…), each kept in its own zip.\n\nMAME's DAT files need one reload to pick that up. FinalBurn Neo is not touched, and favourites and play history are kept.\n\nReload now? (You can also do it later from the ROM Manager.)": "此版本的 Bootcade 还会检查每台 MAME 机器启动所需的设备（声音芯片、保护芯片等），每个设备都存放在各自的 zip 中。\n\n需要重新加载一次 MAME 的 DAT 文件才能生效。FinalBurn Neo 不受影响，收藏和游戏记录都会保留。\n\n现在重新加载吗？（也可以稍后在 ROM 管理器中进行。）"
 }

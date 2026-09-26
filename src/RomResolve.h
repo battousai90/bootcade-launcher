@@ -242,6 +242,27 @@ CacheResolveResult resolve_changed_from_cache(std::shared_ptr<DatabaseManager> d
                                               const std::unordered_set<std::string>& changed,
                                               const std::function<bool(size_t, size_t)>& progress = {});
 
+// ── Devices ─────────────────────────────────────────────────────────────────
+//
+// A MAME machine needs its devices (Game::devices : a sound chip, a
+// protection CPU...) to start, each kept in its own zip like a set of its
+// own. The set is only as available as they are. Found among one emulator's
+// sets by name, the machine's system first (a device may sit in another DAT
+// of the same emulator, Pleasuredome's "bios-devices"), and closed over the
+// devices' own devices. A name no set carries has nothing to verify.
+class DeviceIndex {
+public:
+    explicit DeviceIndex(const std::vector<Game>& games);
+    // Indexes into `games` of every device set `g` needs, each once.
+    std::vector<size_t> needed(const Game& g) const;
+    bool empty() const { return m_any == false; }
+
+private:
+    const std::vector<Game>& m_games;
+    std::unordered_map<std::string, std::vector<size_t>> m_by_name;
+    bool m_any = false;   // some set needs a device at all
+};
+
 // Whether `path` lies under one of `roots`, compared as written (no disk
 // access) : both sides are expected canonical, as zip_contents stores them.
 bool under_any_root(const std::string& path, const std::vector<std::string>& roots);
