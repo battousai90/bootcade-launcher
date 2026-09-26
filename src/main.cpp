@@ -186,14 +186,12 @@ int main(int argc, char *argv[]) {
                           << " available=" << rep.available << " incorrect=" << rep.incorrect
                           << " missing=" << rep.missing << " ignored=" << rep.ignored
                           << " repairable=" << rep.repairable << " orphans=" << rep.orphans.size()
-                          << " missing_bios=" << rep.missing_bios.size()
-                          << " missing_devices=" << rep.missing_devices.size() << std::endl;
+                          << " missing_bios=" << rep.missing_bios.size() << std::endl;
                 if (const char* v = std::getenv("BOOTCADE_ROM_AUDIT_SETS"); v && *v == '1') {
                     for (const auto& e : rep.games) {
                         std::cout << "[ROMAUDIT-SET] " << e.name << " [" << e.system << "] " << e.status
                                   << " absent=" << e.absent << " wrong=" << e.wrong
-                                  << " corrupt=" << e.corrupt << " archive=" << e.archive
-                                  << (e.missing_devices.empty() ? "" : " devices_missing=" + std::to_string(e.missing_devices.size())) << std::endl;
+                                  << " corrupt=" << e.corrupt << " archive=" << e.archive << std::endl;
                         if (v[1] == 'v')
                             for (const auto& r : e.roms)
                                 if (r.state != RomAudit::RomState::Present || !r.inherited_from.empty())
@@ -202,7 +200,6 @@ int main(int argc, char *argv[]) {
                     }
                     for (const auto& o : rep.orphans) std::cout << "[ROMAUDIT-ORPHAN] " << o.path << std::endl;
                     for (const auto& b : rep.missing_bios) std::cout << "[ROMAUDIT-BIOS] " << b.name << " " << b.status << " dependents=" << b.dependents << std::endl;
-                    for (const auto& d : rep.missing_devices) std::cout << "[ROMAUDIT-DEVICE] " << d.name << " " << d.status << " dependents=" << d.dependents << std::endl;
                 }
             }
         }

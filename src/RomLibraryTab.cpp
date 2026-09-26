@@ -114,15 +114,10 @@ std::string import_source_of(const RomAudit::GameEntry& g) {
 bool can_send_to_import(const RomAudit::GameEntry& g) {
     return !import_source_of(g).empty();
 }
-// What the set's own archive says, apart from its CHDs and its devices.
-static const std::string& zip_verdict(const RomAudit::GameEntry& g) {
-    return g.zip_status.empty() ? g.status : g.zip_status;
-}
 // A set with CHDs besides its zip is judged by its zip alone here : a wrong
-// or absent CHD, or a missing device, must never send a sound zip to
-// quarantine.
+// or absent CHD must never send a sound zip to quarantine.
 bool can_quarantine_whole(const RomAudit::GameEntry& g) {
-    const std::string& zip = zip_verdict(g);
+    const std::string& zip = g.has_disks ? g.zip_status : g.status;
     return !g.is_chd && zip == "incorrect" && !g.repairable && !g.ignored && g.archive_found && !g.archive.empty();
 }
 bool disks_not_right(const RomAudit::GameEntry& g) {
@@ -131,12 +126,6 @@ bool disks_not_right(const RomAudit::GameEntry& g) {
 }
 bool has_extra_files(const RomAudit::GameEntry& g) {
     return !g.is_chd && !g.extra_entries.empty() && g.archive_found && !g.archive.empty();
-}
-
-// The folder a set's CHDs are expected in : MAME CHDs are kept merged, so a
-// clone's sit in its parent's folder (RomResolve::evaluate_disks).
-static std::string chd_folder(const RomAudit::GameEntry& g) {
-    return (g.cloneof.empty() ? g.name : g.cloneof) + "/";
 }
 
 // A ROM's identity in the tables : its CRC, or a CHD's SHA1.
@@ -306,11 +295,6 @@ void RomLibraryTab::build_summary() {
     m_bios_line.get_style_context()->add_class("set-warn");
     m_bios_line.set_no_show_all(true);
     body->pack_start(m_bios_line, Gtk::PACK_SHRINK);
-    m_devices_line.set_xalign(0.0f);
-    m_devices_line.set_line_wrap(true);
-    m_devices_line.get_style_context()->add_class("set-warn");
-    m_devices_line.set_no_show_all(true);
-    body->pack_start(m_devices_line, Gtk::PACK_SHRINK);
 
     sum.body->pack_start(*body, Gtk::PACK_SHRINK);
     m_top.pack_start(*sum.frame, Gtk::PACK_EXPAND_WIDGET);
@@ -528,7 +512,7 @@ void RomLibraryTab::populate() {
         systems.insert(g.system);
 
         // A CHD set is a folder named after the set, not a zip.
-        std::string expected = g.is_chd ? chd_folder(g) : g.has_disks ? g.name + ".zip + " + chd_folder(g) : g.name + ".zip";
+        std::string expected = g.is_chd ? g.name + "/" : g.has_disks ? g.name + ".zip + " + g.name + "/" : g.name + ".zip";
         std::string yours = g.archive_found ? fs::path(g.archive).filename().string() + (g.is_chd ? "/" : "") : "-";
 
         const bool can_quarantine = can_quarantine_whole(g);
@@ -541,13 +525,11 @@ void RomLibraryTab::populate() {
         if (has_extras) bits.push_back(Glib::ustring::compose(_("%1 extra file(s) not needed by the DAT"), (int)g.extra_entries.size()).raw());
         if (g.is_chd && g.status != "available") bits.push_back(_("Fix not available for CHDs"));
         else if (g.repairable) bits.push_back(_("repairable from the library"));
-        else if (!g.archive_found && zip_verdict(g) != "available") bits.push_back(_("no archive found"));
+        else if (!g.archive_found && (g.has_disks ? g.zip_status : g.status) != "available") bits.push_back(_("no archive found"));
         int inherited = 0;
         for (const auto& r : g.roms) if (!r.inherited_from.empty()) ++inherited;
         if (inherited) bits.push_back(Glib::ustring::compose(_("%1 from parent/BIOS"), inherited).raw());
         if (g.has_disks && disks_not_right(g)) bits.push_back(_("Fix not available for CHDs"));
-        if (!g.missing_devices.empty())
-            bits.push_back(Glib::ustring::compose(_("device missing: %1"), join(g.missing_devices, ", ", 3)).raw());
         if (g.ignored) bits.insert(bits.begin(), _("ignored"));
         if (g.is_bios) bits.insert(bits.begin(), _("BIOS"));
 
@@ -660,16 +642,6 @@ void RomLibraryTab::update_summary() {
             parts.push_back(Glib::ustring::compose(_("%1 (%2) : %3 dependent set(s)"), b.name, b.system, b.dependents).raw());
         m_bios_line.set_text(Glib::ustring::compose(_("BIOS not available : %1. In a split collection those sets cannot run."), join(parts, "; ", 4)));
         m_bios_line.show();
-    }
-
-    if (m_audit.missing_devices.empty()) {
-        m_devices_line.hide();
-    } else {
-        std::vector<std::string> parts;
-        for (const auto& d : m_audit.missing_devices)
-            parts.push_back(Glib::ustring::compose(_("%1 : %2 set(s)"), d.name, d.dependents).raw());
-        m_devices_line.set_text(Glib::ustring::compose(_("Devices not available : %1. MAME cannot start the sets that need them."), join(parts, "; ", 4)));
-        m_devices_line.show();
     }
 }
 
@@ -910,8 +882,7 @@ std::string RomLibraryTab::all_details_of(const Gtk::TreeModel::Row& row) const 
         << "system: " << g.system << "\n"
         << "status: " << g.status << (g.ignored ? " (ignored)" : "") << "\n";
     if (!g.cloneof.empty()) out << "parent: " << g.cloneof << "\n";
-    if (!g.missing_devices.empty()) out << "missing devices: " << join(g.missing_devices, ", ", 1000) << "\n";
-    out << "expected: " << (g.is_chd ? chd_folder(g) : g.name + ".zip") << "\n"
+    out << "expected: " << g.name << (g.is_chd ? "/" : ".zip") << "\n"
         << "your file: " << (g.archive_found ? g.archive : "-") << "\n";
     for (const auto& r : g.roms) {
         if (r.is_disk) {
@@ -1278,7 +1249,7 @@ void RomLibraryTab::on_export(int format) {
             }
             for (const auto& r : g.roms) {
                 out << csv(status) << ',' << csv(g.name) << ',' << csv(g.description) << ',' << csv(g.system) << ','
-                    << csv(g.cloneof) << ',' << csv(g.is_chd ? chd_folder(g) : g.name + ".zip") << ',' << csv(yours) << ','
+                    << csv(g.cloneof) << ',' << csv(g.name + (g.is_chd ? "/" : ".zip")) << ',' << csv(yours) << ','
                     << csv(r.name) << ',' << _(state_label(r.state)) << ',' << hash_of(r) << ','
                     << (r.state == RomAudit::RomState::Absent ? "" : found_hash_of(r)) << ',' << r.size << ','
                     << csv(r.found_as) << ',' << csv(r.found_in) << ',' << csv(r.inherited_from) << "\n";

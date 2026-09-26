@@ -1631,9 +1631,6 @@
   "Button 16": "Botón 16",
   "More buttons": "Más botones",
   "The controls and DIP switches changed in MAME's own menu for this machine will be removed, so your Bootcade controller profile applies again.\n\nA backup is kept next to the file. Saved games and high scores are kept.": "Se eliminarán los controles y los DIP switches cambiados en el menú de MAME para esta máquina, para que tu perfil de mando de Bootcade vuelva a aplicarse.\n\nSe guarda una copia junto al archivo. Las partidas guardadas y las puntuaciones máximas se conservan.",
-  "device missing: %1": "falta el device: %1",
-  "%1 : %2 set(s)": "%1 : %2 set(s)",
-  "Devices not available : %1. MAME cannot start the sets that need them.": "Devices no disponibles: %1. MAME no puede iniciar los sets que los necesitan.",
   "Reload the MAME DAT files?": "¿Recargar los archivos DAT de MAME?",
   "This version of Bootcade also checks the devices each MAME machine needs to start (a sound chip, a protection chip…), each kept in its own zip.\n\nMAME's DAT files need one reload to pick that up. FinalBurn Neo is not touched, and favourites and play history are kept.\n\nReload now? (You can also do it later from the ROM Manager.)": "Esta versión de Bootcade también comprueba los devices que cada máquina MAME necesita para arrancar (un chip de sonido, un chip de protección…), cada uno guardado en su propio zip.\n\nLos archivos DAT de MAME deben recargarse una vez para tenerlo en cuenta. FinalBurn Neo no se toca y se conservan los favoritos y el historial de juego.\n\n¿Recargar ahora? (También puede hacerlo más tarde desde el gestor de ROMs.)"
 }
