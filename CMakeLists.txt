@@ -175,6 +175,7 @@ add_executable(bootcade
     src/RomInbox.cpp
     src/RomAudit.cpp
     src/RomResolve.cpp
+    src/DatLayout.cpp
     src/RomManifest.cpp
     src/RomLibraryTab.cpp
     src/RomImportTab.cpp

@@ -820,19 +820,57 @@ static int read_stream(const ListxmlFeed& feed, const std::function<bool(int)>& 
 
 // Ce qu'un gestionnaire de ROMs verifie de chaque machine, tel que -listxml
 // le decrit : ses liens (cloneof, romof), ses ROMs et ses disques, merge=
-// compris, et ses devices. Une machine sans ROM ni disque n'a rien a
-// verifier et n'a pas d'entree ; un device_ref vers une telle machine non
-// plus. Deux lignes identiques (meme nom, meme CRC) dans un set n'en font
-// qu'une. C'est la regle unique : le DAT de « Generate from MAME » l'ecrit,
-// la lecture directe d'un fichier -listxml la reproduit.
+// compris, et ses devices. Une machine n'a d'entree que si elle a quelque
+// chose a verifier : une ROM, un disque, ou un device qui en a, directement
+// ou par ses propres devices (un set non-merged porte les ROMs de ses
+// devices) ; ou qu'elle soit le parent (cloneof, romof) d'une machine gardee,
+// meme sans rien a elle : en merged, ses clones vont dans son archive.
+// Un device_ref n'est garde que vers une machine qui a quelque chose a
+// verifier : la chaine
+// qui mene aux ROMs d'un device reste entiere. Deux lignes identiques (meme
+// nom, meme CRC) dans un set n'en font qu'une. C'est la regle unique : le DAT
+// de « Generate from MAME » l'ecrit, la lecture directe d'un -listxml la
+// reproduit.
 struct ListxmlSets {
     const std::vector<LxMachine>& machines;
-    std::unordered_set<std::string> with_content;
+    std::unordered_map<std::string, const LxMachine*> by_name;
+    std::unordered_map<std::string, bool> reaches;   // memo : has something to verify
+    std::unordered_set<std::string> parents;         // named by a kept machine's cloneof / romof
     explicit ListxmlSets(const std::vector<LxMachine>& m) : machines(m) {
-        for (const auto& x : machines)
-            if (!x.roms.empty() || !x.disks.empty()) with_content.insert(x.name);
+        for (const auto& x : machines) by_name.emplace(x.name, &x);
+        for (const auto& x : machines) verifiable(x.name);
+        for (const auto& x : machines) {
+            if (!reaches[x.name]) continue;
+            // Up the chain : a parent's parent is kept too.
+            const LxMachine* cur = &x;
+            for (int depth = 0; depth < 8; ++depth) {
+                bool more = false;
+                for (const std::string* up : {&cur->cloneof, &cur->romof}) {
+                    if (up->empty() || !parents.insert(*up).second) continue;
+                    auto it = by_name.find(*up);
+                    if (it != by_name.end()) { cur = it->second; more = true; }
+                }
+                if (!more) break;
+            }
+        }
     }
-    bool has_entry(const LxMachine& m) const { return !m.roms.empty() || !m.disks.empty(); }
+    bool verifiable(const std::string& name) {
+        auto memo = reaches.find(name);
+        if (memo != reaches.end()) return memo->second;
+        auto it = by_name.find(name);
+        if (it == by_name.end()) return false;
+        const LxMachine& m = *it->second;
+        reaches[name] = false;   // a cycle of devices adds nothing
+        bool yes = !m.roms.empty() || !m.disks.empty();
+        for (const auto& dev : m.devices)
+            if (verifiable(dev)) yes = true;
+        reaches[name] = yes;
+        return yes;
+    }
+    bool has_entry(const LxMachine& m) const {
+        auto it = reaches.find(m.name);
+        return (it != reaches.end() && it->second) || parents.count(m.name);
+    }
     template <class F> void roms(const LxMachine& m, F&& f) const {
         std::unordered_set<std::string> seen;
         for (const auto& r : m.roms)
@@ -844,8 +882,10 @@ struct ListxmlSets {
             if (seen.insert(d.name).second) f(d);
     }
     template <class F> void devices(const LxMachine& m, F&& f) const {
-        for (const auto& dev : m.devices)
-            if (with_content.count(dev)) f(dev);
+        for (const auto& dev : m.devices) {
+            auto it = reaches.find(dev);
+            if (it != reaches.end() && it->second) f(dev);
+        }
     }
 };
 
@@ -908,7 +948,7 @@ static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
     // avec le XML de MAME. Seul ce qui ne sert pas a verifier un set est laisse
     // de cote (entrees, DIP, ecrans, sons...). Une machine sans ROM ni disque
     // n'a rien a verifier et n'a pas d'entree.
-    const ListxmlSets sets(machines);
+    ListxmlSets sets(machines);
     DatWriter one;
     if (!one.open(dat_dir, tag + ".dat", kHeader, version, date, tag)) return -1;
     for (size_t i : order) {
@@ -974,7 +1014,7 @@ int read_listxml_file(const std::string& xml_path, std::vector<Game>& out, std::
     std::string build;
     if (read_stream(file_feed(xml_path), progress, machines, build) < 0) return -1;
     if (version) *version = build.empty() ? "unknown" : build;
-    const ListxmlSets sets(machines);
+    ListxmlSets sets(machines);
     out.reserve(out.size() + machines.size());
     for (const auto& m : machines) {
         if (!sets.has_entry(m)) continue;

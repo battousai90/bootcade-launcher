@@ -7,6 +7,7 @@
 #include "RomAudit.h"
 #include "RomScanner.h"
 #include "DATUpdateDialog.h"
+#include "DatLayout.h"
 #include <algorithm>
 #include <sstream>
 #include "AppContext.h"
@@ -147,7 +148,10 @@ int main(int argc, char *argv[]) {
      *                              groupe ; BOOTCADE_ROM_AUDIT_SETS=1 ecrit en
      *                              plus le verdict de chaque set.
      *  BOOTCADE_DAT_RULES=1        pour chaque DAT charge : ses liens, le mode
-     *                              que son en-tete declare, celui retenu.
+     *                              que son en-tete declare, celui retenu ;
+     *  BOOTCADE_DAT_LAYOUT=<dat>:<mode>[:<fichier>] ecrit ce que chaque
+     *                              archive du DAT charge <dat> doit contenir
+     *                              dans ce mode (vide : tel quel).
      * Ils peuvent se combiner, dans cet ordre.
      */
     {
@@ -155,7 +159,9 @@ int main(int argc, char *argv[]) {
         const char* scan = std::getenv("BOOTCADE_ROM_SCAN");
         const char* grp  = std::getenv("BOOTCADE_ROM_AUDIT");
         const char* rules = std::getenv("BOOTCADE_DAT_RULES");
-        const bool any = (upd && *upd) || (scan && *scan) || (grp && *grp) || (rules && *rules == '1');
+        const char* layout = std::getenv("BOOTCADE_DAT_LAYOUT");
+        const bool any = (upd && *upd) || (scan && *scan) || (grp && *grp) || (rules && *rules == '1')
+                      || (layout && *layout);
         if (upd && *upd) {
             Gtk::Window host;
             const auto t0 = std::chrono::steady_clock::now();
@@ -179,6 +185,36 @@ int main(int argc, char *argv[]) {
                           << " rule=" << (rule ? (rule->merge.empty() ? "-" : rule->merge) + (rule->override_dat ? "+override" : "") : "none")
                           << " mode=" << (mode.empty() ? "as-is" : mode) << std::endl;
             }
+        }
+        if (layout && *layout) {
+            std::string spec = layout, dat, mode, out_path;
+            auto cut = [](std::string& from) {
+                const size_t c = from.find(':');
+                std::string head = from.substr(0, c);
+                from = c == std::string::npos ? std::string() : from.substr(c + 1);
+                return head;
+            };
+            dat = cut(spec);
+            mode = cut(spec);
+            out_path = spec;
+            std::vector<Game> all = database->getAllGames("");
+            std::vector<const Game*> sets;
+            for (const auto& g : all) if (g.dat_source == dat) sets.push_back(&g);
+            const DatLayout::Layout lay(sets, mode);
+            std::ofstream fo(out_path.empty() ? "/dev/stdout" : out_path);
+            size_t entries = 0;
+            for (const auto& a : lay.archives()) {
+                fo << "A\t" << a.name << "\n";
+                for (const auto& e : a.entries) {
+                    char crc[9];
+                    std::snprintf(crc, sizeof crc, "%08lx", e.crc);
+                    fo << "E\t" << e.name << "\t" << crc << "\n";
+                }
+                for (const auto& d : a.disks) fo << "D\t" << d.name << "\t" << d.sha1 << "\n";
+                entries += a.entries.size();
+            }
+            std::cout << "[DATLAYOUT] " << dat << " mode=" << (mode.empty() ? "as-is" : mode) << " sets=" << sets.size()
+                      << " archives=" << lay.archives().size() << " entries=" << entries << std::endl;
         }
         if (scan && *scan) {
             const auto t0 = std::chrono::steady_clock::now();
