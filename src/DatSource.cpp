@@ -103,16 +103,32 @@ std::string effective_merge(const DatTraits& traits, const DatRule* rule) {
     return kMergeSplit;
 }
 
-const DatRule* rule_of(const std::vector<Group>& groups, const std::string& file) {
+const Group* group_of(const std::vector<Group>& groups, const std::string& file) {
     for (const auto& g : groups) {
         // A group taking every file of its folder selects any name : the
         // file must also be in that folder.
         std::error_code ec;
-        if (!g.active || !g.selects(file) || !fs::is_regular_file(fs::path(g.folder) / file, ec)) continue;
-        auto it = g.rules.find(file);
-        return it == g.rules.end() ? nullptr : &it->second;
+        if (g.active && g.selects(file) && fs::is_regular_file(fs::path(g.folder) / file, ec)) return &g;
     }
     return nullptr;
+}
+
+const DatRule* rule_of(const std::vector<Group>& groups, const std::string& file) {
+    const Group* g = group_of(groups, file);
+    if (!g) return nullptr;
+    auto it = g->rules.find(file);
+    return it == g->rules.end() ? nullptr : &it->second;
+}
+
+std::string emulator_of_path(const std::string& path) {
+    std::error_code ec;
+    const fs::path p(path);
+    const fs::path dir = fs::weakly_canonical(p.parent_path(), ec);
+    for (const auto& g : load_groups()) {
+        if (!g.active || !g.selects(p.filename().string()) || g.folder.empty()) continue;
+        if (fs::weakly_canonical(fs::path(g.folder), ec) == dir) return g.emulator;
+    }
+    return "";
 }
 
 bool Group::selects(const std::string& file) const {
@@ -281,7 +297,6 @@ bool save_groups(const std::vector<Group>& groups) {
         o["source"] = kind_key(g.source);
         o["emulator"] = g.emulator.empty() ? std::string("fbneo") : g.emulator;
         o["url"] = g.url;
-        o["set_style"] = g.set_style;
         o["active"] = g.active;
         o["all_files"] = g.all_files;
         o["files"] = g.files;

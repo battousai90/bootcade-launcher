@@ -30,25 +30,6 @@
 
 namespace RomResolve {
 
-// How the collection is laid out. Merged (a clone has no zip of its own; its
-// ROMs sit in the parent's) is a later phase and deliberately not listed yet :
-// an enum value with no behaviour behind it would be a promise the code cannot
-// keep.
-enum class SetStyle { NonMerged, Split };
-
-SetStyle    style_from_string(const std::string& s);   // unknown → NonMerged
-std::string to_string(SetStyle s);
-// The style of the collection : that of the DAT group the Library audits
-// against (rom_manager.library_group, else the first group), which carries
-// set_style. Missing or unknown → NonMerged, which is exactly the behaviour
-// every scan had before the setting existed.
-SetStyle    load_style();
-// The style of the collection of one emulator : that of the group describing
-// it (DatSource::group_for : the library group when it is that emulator's).
-// A FinalBurn Neo scan must not start judging its sets as split because the
-// Library happens to be showing a split MAME group.
-SetStyle    load_style(const std::string& emulator);
-
 // The folder a set's archive is expected in : its raw DAT header ("MAME ROMs
 // (split)"), else the same header rebuilt from the emulator and the system.
 // One DAT, one folder, as for FinalBurn Neo.
@@ -106,11 +87,13 @@ struct Verdict {
     std::vector<RomVerdict> roms;     // every non-nodump ROM, in DAT order
 };
 
-// `own` is the set's own archive (null when none was found : every ROM then
-// counts as absent, save inherited ones an ancestor can still provide). In
-// NonMerged the lookups are never called and the outcome is byte-for-byte the
-// rule the scanner always applied.
-Verdict evaluate(const Game& game, const Archive* own, SetStyle style,
+// Whether the emulator can load `game` : `own` is the set's own archive
+// (null when none was found : every ROM then counts as absent, save
+// inherited ones an ancestor can still provide). With the lookups, a merge=
+// ROM its own archive lacks is looked for up the romof chain, as the
+// emulator does ; without them, only its own archive counts. This is the
+// playable status, never the ROM Manager's verdict (DatLayout, RomAudit).
+Verdict evaluate(const Game& game, const Archive* own,
                  const ArchiveLookup& archive_for, const GameLookup& game_for);
 
 // One ROM against one archive : the rule every judgement uses. Present (the
@@ -121,7 +104,7 @@ RomState probe_rom(const Archive* archive, const std::string& name, unsigned lon
                    std::string* found_entry = nullptr, unsigned long* found_crc = nullptr);
 
 // Convenience: status only, same rule.
-std::string status_of(const Game& game, const Archive* own, SetStyle style,
+std::string status_of(const Game& game, const Archive* own,
                       const ArchiveLookup& archive_for, const GameLookup& game_for);
 
 // ── CHDs ────────────────────────────────────────────────────────────────────
@@ -205,6 +188,7 @@ private:
 struct DatReading {
     std::string mode;
     std::string folder;
+    std::string emulator;   // its group's
 };
 std::unordered_map<std::string, DatReading> dat_readings(std::shared_ptr<DatabaseManager> db);
 

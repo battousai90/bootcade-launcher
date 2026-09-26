@@ -367,11 +367,12 @@ void RomOutboxTab::on_browse_folder() {
 }
 
 // Which emulator a system folder of the outbox belongs to : the folder is
-// named after the folder of its DAT (the header, unless the DAT's rule names
-// another), and the header is
-// what says so for the DAT itself.
-std::string RomOutboxTab::emulator_of_folder(const std::string& system_folder) {
-    return DatParser::emulatorFromHeader(system_folder);
+// named after the folder of a DAT, whose group says which emulator it
+// describes.
+std::string RomOutboxTab::emulator_of_folder(const std::string& system_folder) const {
+    for (const auto& [file, reading] : RomResolve::dat_readings(m_db))
+        if (!reading.emulator.empty() && lower(reading.folder) == lower(system_folder)) return reading.emulator;
+    return "";
 }
 
 std::string RomOutboxTab::destination_for(const std::string& system_folder, const Paths&) const {

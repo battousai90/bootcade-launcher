@@ -38,11 +38,8 @@ Report audit(std::shared_ptr<DatabaseManager> db,
              const std::string& emulator) {
     Report rep;
     rep.emulator = emulator;
-    rep.style = RomResolve::load_style(emulator);
 
     // ── 1. Index the scan cache ──────────────────────────────────────────────
-    // The same index the scanner's split pass reads, so the two pick the same
-    // archive for a set and judge it by the same rule.
     report(cb, 2.0, _("Reading the ROM cache…"));
     RomResolve::CacheIndex index(db, roms_paths);
 
@@ -54,8 +51,7 @@ Report audit(std::shared_ptr<DatabaseManager> db,
             crc_to_archive.emplace(crc, path);
 
     rep.pool_empty = index.empty();
-    log(cb, "Indexed " + std::to_string(index.size()) + " archive(s) from the scan cache; collection style: "
-            + RomResolve::to_string(rep.style) + ".");
+    log(cb, "Indexed " + std::to_string(index.size()) + " archive(s) from the scan cache.");
     if (rep.pool_empty) {
         log(cb, "  WARNING: the cache is empty : run a ROM scan first.");
         report(cb, 100.0, _("Nothing to audit."));

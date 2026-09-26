@@ -168,7 +168,7 @@ uLong hex_to_crc(const std::string& hex) {
 // cache, once every archive's contents are known (see RomResolve::
 // resolve_inherited_from_cache).
 static std::string check_game_maps(const Game& game, const RomResolve::Archive& archive) {
-    return RomResolve::status_of(game, &archive, RomResolve::SetStyle::NonMerged, {}, {});
+    return RomResolve::status_of(game, &archive, {}, {});
 }
 
 void RomScanner::check_availability(Game& game, const std::string& roms_path) {

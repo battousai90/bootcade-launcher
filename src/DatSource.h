@@ -93,8 +93,7 @@ struct Group {
     std::string emulator = "fbneo";  // "fbneo" | "mame"
     std::string url;                // manifest URL, Kind::Http
     // Before merge modes were per DAT, the group had one. Read only to give
-    // each of the group's DATs that mode once (load_groups), and by the
-    // audit until it reads each DAT's own mode.
+    // each of the group's DATs that mode once (load_groups) ; never written.
     std::string set_style = "non-merged";
     std::map<std::string, DatRule> rules;   // DAT file name → its rule
     bool        active = true;      // an inactive group loads nothing and is not offered for audit
@@ -124,9 +123,16 @@ std::string        make_id(const std::string& name, const std::vector<Group>& ta
 // The DAT files present in a folder (*.dat, sorted by name).
 std::vector<std::string> list_folder(const std::string& folder);
 
-// The rule of a DAT file : that of the first active group selecting it (the
-// one files_to_load takes it from). Null when no group does, or it has none.
+// The group a DAT file belongs to : the first active group selecting it
+// whose folder holds it (the one files_to_load takes it from), null when
+// none does. The group says which emulator the DAT describes : not the DAT's
+// header, nor its name.
+const Group* group_of(const std::vector<Group>& groups, const std::string& file);
+// The rule of a DAT file : that of its group. Null when it has none.
 const DatRule* rule_of(const std::vector<Group>& groups, const std::string& file);
+// The emulator of the group whose folder holds the DAT at `path` ; empty
+// when no group holds it.
+std::string emulator_of_path(const std::string& path);
 
 // Every DAT file the database must be built from : the union of what active
 // groups select, one path per file name. Two groups pointing at different

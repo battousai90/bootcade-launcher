@@ -630,8 +630,8 @@ void RomLibraryTab::update_summary() {
         m_status.set_text(_("The scan cache is empty : run a ROM scan first."));
     } else {
         m_status.set_text(Glib::ustring::compose(
-            _("%1 set(s) with a problem, of which %2 can be repaired from the library itself (%3 misnamed). Collection style: %4."),
-            m_audit.incorrect + m_audit.missing, misnamed + fixable, misnamed, RomResolve::to_string(m_audit.style)));
+            _("%1 set(s) with a problem, of which %2 can be repaired from the library itself (%3 misnamed). Each DAT is read with its own merge mode."),
+            m_audit.incorrect + m_audit.missing, misnamed + fixable, misnamed));
     }
 
     if (m_audit.missing_bios.empty()) {
@@ -1215,7 +1215,7 @@ void RomLibraryTab::on_export(int format) {
         out << "# " << m_audit.total << " sets: " << m_audit.available << " correct, "
             << m_audit.incorrect << " incorrect, " << m_audit.missing << " missing, "
             << m_audit.repairable << " repairable from the library, "
-            << m_audit.ignored << " ignored; style " << RomResolve::to_string(m_audit.style) << "\n";
+            << m_audit.ignored << " ignored\n";
         for (const char* want : {"incorrect", "missing"}) {
             out << "\n\n=== " << want << " ===\n";
             for (const auto& g : m_audit.games) {

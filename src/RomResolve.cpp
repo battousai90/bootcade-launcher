@@ -91,54 +91,6 @@ std::string expected_folder(const Game& g) {
     return "FinalBurn Neo - " + g.system + " Games";
 }
 
-// ── Style ───────────────────────────────────────────────────────────────────
-
-SetStyle style_from_string(const std::string& s) {
-    std::string v = lower(s);
-    if (v == "split") return SetStyle::Split;
-    return SetStyle::NonMerged;
-}
-
-std::string to_string(SetStyle s) {
-    switch (s) {
-        case SetStyle::Split: return "split";
-        default:              return "non-merged";
-    }
-}
-
-SetStyle load_style() {
-    nlohmann::json j;
-    std::ifstream fi(AppContext::get_config_path());
-    if (fi) { try { fi >> j; } catch (...) { return SetStyle::NonMerged; } }
-    if (!j.contains("rom_manager") || !j["rom_manager"].is_object()) return SetStyle::NonMerged;
-    const auto& rm = j["rom_manager"];
-    std::string wanted = (rm.contains("library_group") && rm["library_group"].is_string()) ? rm["library_group"].get<std::string>() : "";
-    if (rm.contains("dat_groups") && rm["dat_groups"].is_array()) {
-        std::string first_style, chosen_style;
-        for (const auto& g : rm["dat_groups"]) {
-            if (!g.is_object()) continue;
-            std::string style = (g.contains("set_style") && g["set_style"].is_string()) ? g["set_style"].get<std::string>() : "";
-            if (first_style.empty()) first_style = style;
-            if (!wanted.empty() && g.contains("id") && g["id"].is_string() && g["id"].get<std::string>() == wanted) chosen_style = style;
-        }
-        if (!chosen_style.empty()) return style_from_string(chosen_style);
-        if (!first_style.empty())  return style_from_string(first_style);
-    }
-    // Before groups existed the style was one key for the whole library.
-    if (rm.contains("set_style") && rm["set_style"].is_string())
-        return style_from_string(rm["set_style"].get<std::string>());
-    return SetStyle::NonMerged;
-}
-
-SetStyle load_style(const std::string& emulator) {
-    const auto groups = DatSource::load_groups();
-    if (const DatSource::Group* g = DatSource::group_for(groups, emulator))
-        return style_from_string(g->set_style);
-    // No group describes this emulator : FinalBurn Neo keeps the rule it
-    // always had (the library group's, else the legacy key), anything else
-    // is judged non-merged.
-    return emulator == "fbneo" ? load_style() : SetStyle::NonMerged;
-}
 
 // ── Archive ─────────────────────────────────────────────────────────────────
 
@@ -162,7 +114,7 @@ RomState probe_rom(const Archive* archive, const std::string& name, unsigned lon
 
 // ── The rule ────────────────────────────────────────────────────────────────
 
-Verdict evaluate(const Game& game, const Archive* own, SetStyle style,
+Verdict evaluate(const Game& game, const Archive* own,
                  const ArchiveLookup& archive_for, const GameLookup& game_for) {
     Verdict v;
     if (game.roms.empty()) return v;
@@ -177,20 +129,19 @@ Verdict evaluate(const Game& game, const Archive* own, SetStyle style,
         r.size      = (uint64_t)rom.size;
         r.inherited = rom.is_inherited();
 
-        // The set's own archive is always consulted first, whatever the style:
-        // a split collection may still carry a copy of an inherited ROM, and
-        // FBNeo is happy either way.
+        // The set's own archive is always consulted first : it may carry a
+        // copy of an inherited ROM, and the emulator is happy either way.
         Probe p = probe(own, rom.name, r.crc);
         r.state = p.state;
         r.found_crc = p.crc;
         if (has_data(p.state) && p.entry != rom.name) r.found_as = p.entry;
 
-        // Split: an inherited ROM the set's own zip cannot vouch for is looked
+        // An inherited ROM the set's own zip cannot vouch for is looked
         // for up the romof chain (parent, then the parent's parent, then the
         // BIOS), under the name the DAT says it carries there. A ROM the DAT
         // marks as the set's own never takes this path: "it exists in some
         // other zip" is precisely what must not count as present.
-        if (style == SetStyle::Split && r.inherited && !has_data(r.state) && archive_for && game_for) {
+        if (r.inherited && !has_data(r.state) && archive_for && game_for) {
             std::string name = game.romof, system = game.system;
             for (int depth = 0; depth < 8 && !name.empty(); ++depth) {
                 Game ancestor = game_for(name, system);
@@ -222,9 +173,9 @@ Verdict evaluate(const Game& game, const Archive* own, SetStyle style,
     return v;
 }
 
-std::string status_of(const Game& game, const Archive* own, SetStyle style,
+std::string status_of(const Game& game, const Archive* own,
                       const ArchiveLookup& archive_for, const GameLookup& game_for) {
-    return evaluate(game, own, style, archive_for, game_for).status;
+    return evaluate(game, own, archive_for, game_for).status;
 }
 
 // ── CHDs ────────────────────────────────────────────────────────────────────
@@ -426,8 +377,6 @@ int resolve_inherited_from_cache(std::shared_ptr<DatabaseManager> db,
                                  const std::vector<std::string>& roots,
                                  const std::unordered_set<std::string>& touched,
                                  const std::string& emulator) {
-    // How the emulator loads a set : through its romof chain.
-    const SetStyle style = SetStyle::Split;
 
     CacheIndex index(db, roots);
     if (index.empty()) return 0;
@@ -473,7 +422,7 @@ int resolve_inherited_from_cache(std::shared_ptr<DatabaseManager> db,
         const Archive* own = index.for_game(g);
         if (!own) continue;   // the cache has nothing to say about this set
 
-        std::string status = status_of(g, own, style, archive_for, game_for);
+        std::string status = status_of(g, own, archive_for, game_for);
         if (status.empty() || status == g.status) continue;
         // With the folder the set's own archive sits in, like the live scan
         // records it : that is what lets a removed ROM directory take its
@@ -515,7 +464,7 @@ struct CachePass {
     // Judges `g` and writes its status when it changed. `need_own` : leave the
     // set alone when the cache holds no archive of its own.
     void judge(std::shared_ptr<DatabaseManager> db, const Game& g, const std::vector<std::string>& roots,
-               SetStyle style, const std::string& emulator, bool need_own, CacheResolveResult& out) {
+               const std::string& emulator, bool need_own, CacheResolveResult& out) {
         // A CHD-only set (MAME's "CHDs (merged)" DAT, or a machine of the
         // single-folder DAT with no ROM of its own) : judged by the headers of
         // its disk files, which no cache holds. A few hundred small reads.
@@ -536,7 +485,7 @@ struct CachePass {
 
         const Archive* own = index.for_game(g);
         if (!own && need_own) return;
-        Verdict v = evaluate(g, own, style, archive_for, game_for);
+        Verdict v = evaluate(g, own, archive_for, game_for);
         // A zip and CHDs (single-folder MAME DAT : kinst) : one verdict for
         // the set, the zip's and the disks' together.
         if (!g.disks.empty()) v.status = combine_status(v.status, evaluate_disks(g, roots).status);
@@ -562,14 +511,13 @@ CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
                                           const std::string& emulator,
                                           const std::function<bool(size_t, size_t)>& progress) {
     CacheResolveResult out;
-    const SetStyle style = SetStyle::Split;   // through the romof chain : playable
     CachePass pass(db, roots, emulator, CacheIndex::OnDisk::Verify);
     const auto& games = pass.games;
 
     db->beginTransaction();
     for (size_t i = 0; i < games.size(); ++i) {
         if (progress && (i % 1024) == 0 && !progress(i, games.size())) { out.cancelled = true; break; }
-        pass.judge(db, games[i], roots, style, emulator, /*need_own=*/false, out);
+        pass.judge(db, games[i], roots, emulator, /*need_own=*/false, out);
     }
     db->commitTransaction();
     if (progress && !out.cancelled) progress(games.size(), games.size());
@@ -582,7 +530,6 @@ CacheResolveResult resolve_changed_from_cache(std::shared_ptr<DatabaseManager> d
                                               const std::unordered_set<std::string>& changed,
                                               const std::function<bool(size_t, size_t)>& progress) {
     CacheResolveResult out;
-    const SetStyle style = SetStyle::Split;   // through the romof chain : playable
     if (changed.empty()) return out;
     CachePass pass(db, roots, emulator, CacheIndex::OnDisk::Trust);
     const auto& games = pass.games;
@@ -608,7 +555,7 @@ CacheResolveResult resolve_changed_from_cache(std::shared_ptr<DatabaseManager> d
     db->beginTransaction();
     for (size_t k = 0; k < todo.size(); ++k) {
         if (progress && (k % 256) == 0 && !progress(k, todo.size())) { out.cancelled = true; break; }
-        pass.judge(db, games[todo[k].first], roots, style, emulator, todo[k].second, out);
+        pass.judge(db, games[todo[k].first], roots, emulator, todo[k].second, out);
     }
     db->commitTransaction();
     if (progress && !out.cancelled) progress(todo.size(), todo.size());
@@ -621,10 +568,12 @@ std::unordered_map<std::string, DatReading> dat_readings(std::shared_ptr<Databas
     std::unordered_map<std::string, DatReading> out;
     const auto groups = DatSource::load_groups();
     for (const auto& [file, st] : db->getDatFileStats()) {
+        const DatSource::Group* group = DatSource::group_of(groups, file);
         const DatSource::DatRule* rule = DatSource::rule_of(groups, file);
         DatReading r;
-        r.mode   = DatSource::effective_merge({st.linked, st.declared}, rule);
-        r.folder = (rule && !rule->folder.empty()) ? rule->folder : st.header;
+        r.mode     = DatSource::effective_merge({st.linked, st.declared}, rule);
+        r.folder   = (rule && !rule->folder.empty()) ? rule->folder : st.header;
+        r.emulator = group ? group->emulator : std::string();
         out[file] = std::move(r);
     }
     return out;

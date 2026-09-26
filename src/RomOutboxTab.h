@@ -70,7 +70,7 @@ private:
     // Where a system folder of the outbox goes : an explicit mapping, else
     // the configured ROM directory whose name matches. Empty when neither.
     std::string destination_for(const std::string& system_folder, const Paths& p) const;
-    static std::string emulator_of_folder(const std::string& system_folder);
+    std::string emulator_of_folder(const std::string& system_folder) const;
     void on_edit_destinations();
 
     void populate();

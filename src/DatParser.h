@@ -32,15 +32,6 @@ public:
     static bool isSoftwareListHeader(const std::string& headerName);
     static bool parseAllDatsToDatabase(const std::string& directory, std::shared_ptr<DatabaseManager> db);
     static bool synchronizeDatsToDatabase(const std::string& directory, std::shared_ptr<DatabaseManager> db);
-    // L'emulateur dont vient un DAT, deduit de son en-tete.
-    //
-    // Un fichier DAT ne porte aucune autre marque d'origine : ni le nom du
-    // fichier (l'utilisateur le renomme), ni le dossier (les deux emulateurs
-    // peuvent partager le meme) ne sont fiables. L'en-tete <header><name>,
-    // lui, est ecrit par le producteur du DAT et voyage avec le fichier.
-    // Rend "mame" ou "fbneo" ; un en-tete inconnu vaut "fbneo", le seul
-    // catalogue qui existait avant.
-    static std::string emulatorFromHeader(const std::string& headerName);
 
     // Le systeme d'un DAT, tel que la colonne games.system le range :
     // « FinalBurn Neo - Arcade Games » → « Arcade », « MAME ROMs (split) » →
@@ -57,5 +48,6 @@ private:
     // `dat_source` ; no dat_files registration.
     static int importDatafile(const std::string& filepath, std::shared_ptr<DatabaseManager> db,
                               const std::string& dat_source, std::string* note,
-                              std::string* declared_merge = nullptr);
+                              std::string* declared_merge = nullptr,
+                              const std::string& emulator = "fbneo");
 };

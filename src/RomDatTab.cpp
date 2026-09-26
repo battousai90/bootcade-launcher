@@ -707,7 +707,7 @@ void RomDatTab::on_add_group() {
     g.source    = group().source;
     g.emulator  = group().emulator;
     g.url       = group().url;
-    g.set_style = group().set_style;
+    g.rules     = group().rules;   // same folder, same DATs : each keeps its rule
     g.all_files = true;
     auto before = union_files();
     m_groups.push_back(std::move(g));

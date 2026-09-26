@@ -124,7 +124,6 @@ struct OrphanArchive {
 
 struct Report {
     std::string emulator = "fbneo";  // whose sets were audited
-    RomResolve::SetStyle style = RomResolve::SetStyle::NonMerged;  // the rule applied
     std::vector<GameEntry> games;   // problem sets (or all, per `problems_only`)
     std::vector<OrphanArchive> orphans; // archives no game in the DAT claims at all
     int  total = 0, available = 0, incorrect = 0, missing = 0;

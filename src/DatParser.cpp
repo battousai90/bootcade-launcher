@@ -52,6 +52,9 @@ void read_devices(const pugi::xml_node& game_node, Game& game) {
 } // namespace
 
 std::vector<Game> DatParser::parse(const std::string& filepath) {
+    // The emulator a DAT describes is its group's.
+    std::string emulator = DatSource::emulator_of_path(filepath);
+    if (emulator.empty()) emulator = "fbneo";
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_file(filepath.c_str());
 
@@ -130,11 +133,11 @@ std::vector<Game> DatParser::parse(const std::string& filepath) {
             std::string headerName = header.child("name").text().get();
             game.system = extractSystemFromHeader(headerName);
             game.dat_header = headerName;
-            game.emulator = emulatorFromHeader(headerName);
         } else {
             game.system = "Unknown";
         }
 
+        game.emulator = emulator;
         game.status = "missing";  // tous les jeux commencent comme missing
         games.push_back(game);
     }
@@ -167,6 +170,11 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
     const std::string filename = std::filesystem::path(filepath).filename().string();
     int games_count = -1;
     std::string declared_merge;   // -listxml declares none
+    // Which emulator the DAT describes : its group's. A file no group holds
+    // falls back on the format : a -listxml is MAME's own, anything else
+    // FinalBurn Neo, the one catalogue there was before groups had one.
+    std::string emulator = DatSource::emulator_of_path(filepath);
+    if (emulator.empty()) emulator = datKind(filepath) == DatKind::MameListxml ? "mame" : "fbneo";
 
     if (datKind(filepath) == DatKind::MameListxml) {
         // Un fichier -listxml brut (celui de progettosnaps, ou la sortie de
@@ -181,12 +189,13 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
             g.dat_header = MameCatalog::kHeader;
             g.dat_source = filename;
             g.status     = "missing";
+            g.emulator   = emulator;
         }
         games_count = insertGames(sets, db);
         if (games_count < 0) return -1;
         if (note) *note = "MAME -listxml " + version + ": " + std::to_string(games_count) + " sets";
     } else {
-        games_count = importDatafile(filepath, db, filename, note, &declared_merge);
+        games_count = importDatafile(filepath, db, filename, note, &declared_merge, emulator);
         if (games_count < 0) return -1;
     }
 
@@ -234,7 +243,8 @@ std::string DatParser::declaredMerge(const pugi::xml_node& header) {
 }
 
 int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<DatabaseManager> db,
-                              const std::string& dat_source, std::string* note, std::string* declared_merge) {
+                              const std::string& dat_source, std::string* note, std::string* declared_merge,
+                              const std::string& emulator) {
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_file(filepath.c_str());
 
@@ -262,8 +272,8 @@ int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<Datab
     }
     // L'emulateur fait partie de l'identite d'un set : sans lui, les 28 203
     // machines de MAME ecraseraient leurs homonymes FinalBurn Neo, qui vivent
-    // dans le meme system 'Arcade' (mslug existe des deux cotes).
-    const std::string emulator = emulatorFromHeader(dat_header);
+    // dans le meme system 'Arcade' (mslug existe des deux cotes). C'est celui
+    // du groupe du DAT, donne par l'appelant.
     const std::string& filename = dat_source;
 
     // Les listes de logiciels de MAME (cartouches, disquettes : « MAME
@@ -497,21 +507,6 @@ bool DatParser::synchronizeDatsToDatabase(const std::string& directory, std::sha
     }
     
     return true;
-}
-
-std::string DatParser::emulatorFromHeader(const std::string& headerName) {
-    // On se fie a l'en-tete parce que c'est la seule chose que le fichier
-    // porte lui-meme : le nom du fichier peut etre change et le dossier peut
-    // etre partage par les deux emulateurs, alors que <header><name> est
-    // ecrit par celui qui produit le DAT. MameCatalog::generate_dats ecrit
-    // « MAME ROMs (split) », « MAME ROMs (bios-devices) », « MAME CHDs
-    // (merged) », comme Pleasuredome, ou « MAME » seul pour une collection en
-    // un seul dossier ; ses versions precedentes ecrivaient
-    // « MAME - Arcade Games ». FinalBurn Neo ecrit « FinalBurn Neo - ... ».
-    if (headerName == "MAME" || headerName.rfind("MAME ", 0) == 0) return "mame";
-    // Tout le reste est traite comme FinalBurn Neo : c'est le seul catalogue
-    // qui existait avant, et une base deja remplie doit garder son emulateur.
-    return "fbneo";
 }
 
 std::string DatParser::extractSystemFromHeader(const std::string& headerName) {
