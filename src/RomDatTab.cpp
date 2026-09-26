@@ -244,24 +244,7 @@ void RomDatTab::build_group_card() {
     folder_line->pack_start(*m_btn_browse, Gtk::PACK_SHRINK);
     body->pack_start(*folder_line, Gtk::PACK_SHRINK);
 
-    // The set style belongs to the group : it says how the library this
-    // group describes is laid out, and the audit judges by it.
-    auto* style_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
-    auto* style_label = ui::title_label(_("Set style"));
-    style_label->set_valign(Gtk::ALIGN_CENTER);
-    m_combo_style.append("non-merged", _("Non-merged — every ROM inside each set's archive"));
-    m_combo_style.append("split",      _("Split — inherited ROMs stay in the parent's archive"));
-    m_combo_style.set_tooltip_text(_("How the sets of this group are laid out on disk. The scan and the audit judge them by this rule."));
-    m_combo_style.signal_changed().connect([this] {
-        std::string v = m_combo_style.get_active_id().raw();
-        if (v.empty() || v == group().set_style) return;
-        group().set_style = v;
-        save_groups();
-        groups_changed();
-    });
-    style_line->pack_start(*style_label, Gtk::PACK_SHRINK);
-    style_line->pack_start(m_combo_style, Gtk::PACK_EXPAND_WIDGET);
-    body->pack_start(*style_line, Gtk::PACK_SHRINK);
+
 
     // L'emulateur appartient au groupe, pas a la source : c'est lui qui dit
     // quel catalogue le groupe decrit, donc quel executable produit ses DAT
@@ -461,6 +444,44 @@ void RomDatTab::build_table() {
     m_btn_open_in_folder->signal_clicked().connect(sigc::mem_fun(*this, &RomDatTab::on_open_folder));
     info.body->pack_start(*m_btn_open_in_folder, Gtk::PACK_SHRINK);
     m_info_column.pack_start(*info.frame, Gtk::PACK_SHRINK);
+
+    // How this DAT is read : a rule of its own, never one of the group's.
+    auto rule = ui::card("bc-sliders.svg", _("How this DAT is read"), "");
+    m_rule_grid.set_column_spacing(14);
+    m_rule_grid.set_row_spacing(3);
+    m_rule_grid.set_hexpand(false);
+    m_rule_grid.set_margin_top(8);
+    r = 0;
+    for (auto kv : {std::pair<const char*, const char*>{"links", N_("Links between sets")}, {"declared", N_("Declared by the DAT")},
+                    {"mode", N_("Read as")}})
+        grid_row(m_rule_grid, r++, _(kv.second), m_rule_values, kv.first);
+    rule.body->pack_start(m_rule_grid, Gtk::PACK_SHRINK);
+    m_combo_merge.append(DatSource::kMergeSplit,     _("Split — a clone holds only its own ROMs"));
+    m_combo_merge.append(DatSource::kMergeNonMerged, _("Non-merged — every set holds all it needs"));
+    m_combo_merge.append(DatSource::kMergeMerged,    _("Merged — clones inside their parent's archive"));
+    m_combo_merge.set_tooltip_text(_("How the linked sets of this DAT are laid out in its folder. Applies to this DAT only."));
+    m_combo_merge.signal_changed().connect(sigc::mem_fun(*this, &RomDatTab::store_dat_rule));
+    auto* merge_label = ui::title_label(_("Merge mode"));
+    merge_label->set_valign(Gtk::ALIGN_CENTER);
+    m_rule_merge_line.pack_start(*merge_label, Gtk::PACK_SHRINK);
+    m_rule_merge_line.pack_start(m_combo_merge, Gtk::PACK_EXPAND_WIDGET);
+    m_rule_merge_line.set_margin_top(8);
+    m_rule_merge_line.set_no_show_all(true);
+    rule.body->pack_start(m_rule_merge_line, Gtk::PACK_SHRINK);
+    m_check_override.set_label(_("Use this mode instead of the one the DAT declares"));
+    m_check_override.set_no_show_all(true);
+    m_check_override.signal_toggled().connect(sigc::mem_fun(*this, &RomDatTab::store_dat_rule));
+    rule.body->pack_start(m_check_override, Gtk::PACK_SHRINK);
+    auto* folder_row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+    auto* dat_folder_label = ui::title_label(_("Folder"));
+    dat_folder_label->set_valign(Gtk::ALIGN_CENTER);
+    m_entry_dat_folder.set_tooltip_text(_("The folder of the library this DAT's sets belong in. Empty : named after the DAT's header."));
+    m_entry_dat_folder.signal_changed().connect(sigc::mem_fun(*this, &RomDatTab::store_dat_rule));
+    folder_row->pack_start(*dat_folder_label, Gtk::PACK_SHRINK);
+    folder_row->pack_start(m_entry_dat_folder, Gtk::PACK_EXPAND_WIDGET);
+    folder_row->set_margin_top(6);
+    rule.body->pack_start(*folder_row, Gtk::PACK_SHRINK);
+    m_info_column.pack_start(*rule.frame, Gtk::PACK_SHRINK);
 
     auto src = ui::card("bc-cloud.svg", _("Source information"), "");
     m_source_grid.set_column_spacing(14);
@@ -1009,7 +1030,6 @@ void RomDatTab::refresh() {
     m_group_card.title->set_text(g.name);
     m_entry_folder.set_text(g.folder);
     m_entry_url.set_text(g.url);
-    if (!m_combo_style.set_active_id(g.set_style)) m_combo_style.set_active_id("non-merged");
     // Un groupe peut porter un emulateur que cette version ignore : mieux
     // vaut laisser le selecteur vide que lui en faire dire un autre.
     if (!m_combo_emulator.set_active_id(g.emulator)) m_combo_emulator.set_active(-1);
@@ -1036,7 +1056,12 @@ void RomDatTab::refresh() {
         item.date = h.date.empty() ? file_mtime_iso(item.path) : h.date;
         item.system = system_of_header(h.name);
         auto st = m_stats.find(item.name);
-        if (st != m_stats.end()) { item.games = st->second.games; item.roms = st->second.roms; }
+        if (st != m_stats.end()) {
+            item.games    = st->second.games;
+            item.roms     = st->second.roms;
+            item.linked   = st->second.linked;
+            item.declared = st->second.declared;
+        }
         // What the last Check said about it, when one was made for this group.
         if (compared)
             for (const auto& c : m_last_compare)
@@ -1125,6 +1150,7 @@ void RomDatTab::on_selection_changed() {
 
 void RomDatTab::show_file_info(int index) {
     auto set = [&](const char* key, const std::string& v) { m_info_values[key]->set_text(v); };
+    show_dat_rule(index);
     if (index < 0 || index >= (int)m_items.size()) {
         for (auto& [k, l] : m_info_values) l->set_text("");
         m_preview_buffer->set_text("");
@@ -1154,6 +1180,65 @@ void RomDatTab::show_file_info(int index) {
     if (it.on_disk) for (const auto& l : DatSource::read_header(it.path, 14).preview) preview += l + "\n";
     m_preview_buffer->set_text(preview);
     m_btn_open_in_folder->set_sensitive(it.on_disk);
+}
+
+// A merge mode, as the screen names it.
+static std::string merge_label(const std::string& mode) {
+    if (mode == DatSource::kMergeSplit)     return _("Split");
+    if (mode == DatSource::kMergeNonMerged) return _("Non-merged");
+    if (mode == DatSource::kMergeMerged)    return _("Merged");
+    return "";
+}
+
+void RomDatTab::show_dat_rule(int index) {
+    m_rule_filling = true;
+    m_rule_item = index;
+    const bool known = index >= 0 && index < (int)m_items.size();
+    const Item* it = known ? &m_items[index] : nullptr;
+    const DatSource::DatRule* rule = nullptr;
+    if (it) {
+        auto r = group().rules.find(it->name);
+        if (r != group().rules.end()) rule = &r->second;
+    }
+    auto set = [&](const char* key, const std::string& v) { m_rule_values[key]->set_text(v); };
+    if (!it || !it->games) {
+        // Not loaded yet : what the DAT holds is not known.
+        set("links", it ? std::string(_("known once the DAT is loaded")) : std::string());
+        set("declared", "");
+        set("mode", "");
+    } else {
+        DatSource::DatTraits traits{it->linked, it->declared};
+        const std::string mode = DatSource::effective_merge(traits, rule);
+        set("links", it->linked ? std::string(_("parent / clone, shared ROMs or devices"))
+                                : std::string(_("none : every set is read as it is")));
+        set("declared", it->declared.empty() ? std::string(_("nothing")) : merge_label(it->declared));
+        set("mode", mode.empty() ? std::string(_("as it is")) : merge_label(mode));
+    }
+    const bool linked = it && it->games && it->linked;
+    m_rule_merge_line.set_visible(linked);
+    m_combo_merge.set_visible(linked);
+    m_check_override.set_visible(linked && !it->declared.empty());
+    m_combo_merge.set_active_id(rule && !rule->merge.empty() ? rule->merge
+                                : (it && !it->declared.empty() ? it->declared : std::string(DatSource::kMergeSplit)));
+    m_check_override.set_active(rule && rule->override_dat);
+    // With a mode the DAT declares, the choice only counts when overriding.
+    m_combo_merge.set_sensitive(linked && (it->declared.empty() || (rule && rule->override_dat)));
+    m_entry_dat_folder.set_sensitive(it != nullptr);
+    m_entry_dat_folder.set_text(rule ? rule->folder : std::string());
+    m_entry_dat_folder.set_placeholder_text(it ? it->header_name : std::string());
+    m_rule_filling = false;
+}
+
+void RomDatTab::store_dat_rule() {
+    if (m_rule_filling || m_rule_item < 0 || m_rule_item >= (int)m_items.size()) return;
+    const Item& it = m_items[m_rule_item];
+    DatSource::DatRule& rule = group().rules[it.name];
+    rule.merge        = m_combo_merge.get_active_id().raw();
+    rule.override_dat = m_check_override.get_active();
+    rule.folder       = m_entry_dat_folder.get_text().raw();
+    save_groups();
+    show_dat_rule(m_rule_item);
+    m_sig_groups.emit();
 }
 
 void RomDatTab::show_source_info() {
@@ -1419,7 +1504,7 @@ void RomDatTab::on_worker_finished() {
 void RomDatTab::set_busy(bool busy) {
     m_busy = busy;
     for (auto* w : std::vector<Gtk::Widget*>{m_btn_browse, m_btn_add, m_btn_more, m_btn_add_group, &m_group_list,
-                                             &m_entry_folder, &m_combo_style, &m_combo_emulator,
+                                             &m_entry_folder, &m_combo_emulator,
                                              &m_radio_emulator, &m_radio_http, &m_radio_folder})
         w->set_sensitive(!busy);
     if (busy) { m_progress.set_fraction(0.0); m_progress.show(); m_progress_label.show(); m_btn_cancel->show(); }

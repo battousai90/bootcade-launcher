@@ -171,7 +171,10 @@ public:
     int forgetZipContents(const std::vector<std::string>& filepaths);
 
     // DAT file management
-    bool registerDatFile(const std::string& filename, const std::string& filepath, time_t last_modified, size_t file_size, int games_count);
+    // `declared_merge` : the merge mode the DAT's header declares, as
+    // "split" / "non-merged" / "merged", "" when none.
+    bool registerDatFile(const std::string& filename, const std::string& filepath, time_t last_modified, size_t file_size, int games_count,
+                         const std::string& declared_merge = "");
     bool isDatFileUpToDate(const std::string& filename, time_t last_modified, size_t file_size);
     std::vector<std::string> getOutdatedDatFiles(const std::string& dat_directory);
     bool removeGamesFromDat(const std::string& filename);
@@ -249,7 +252,9 @@ public:
     std::vector<std::string> getDatHeaders();
     // Per DAT file (games.dat_source): how many sets and ROM entries it
     // contributed, and its header name.
-    struct DatFileStats { int games = 0, roms = 0; std::string header; };
+    // `linked` : its sets refer to one another (cloneof / romof, merge=,
+    // device_ref) ; `declared` : the merge mode its header declares.
+    struct DatFileStats { int games = 0, roms = 0; std::string header; bool linked = false; std::string declared; };
     std::map<std::string, DatFileStats> getDatFileStats();
     // progress_cb, when set, is invoked periodically (not per file) with the
     // number of files checked so far and the root currently being walked : this

@@ -146,13 +146,16 @@ int main(int argc, char *argv[]) {
      *  BOOTCADE_ROM_AUDIT=<groupe> audit de l'onglet Bibliotheque pour ce
      *                              groupe ; BOOTCADE_ROM_AUDIT_SETS=1 ecrit en
      *                              plus le verdict de chaque set.
-     * Les trois peuvent se combiner, dans cet ordre.
+     *  BOOTCADE_DAT_RULES=1        pour chaque DAT charge : ses liens, le mode
+     *                              que son en-tete declare, celui retenu.
+     * Ils peuvent se combiner, dans cet ordre.
      */
     {
         const char* upd  = std::getenv("BOOTCADE_UPDATE_DAT");
         const char* scan = std::getenv("BOOTCADE_ROM_SCAN");
         const char* grp  = std::getenv("BOOTCADE_ROM_AUDIT");
-        const bool any = (upd && *upd) || (scan && *scan) || (grp && *grp);
+        const char* rules = std::getenv("BOOTCADE_DAT_RULES");
+        const bool any = (upd && *upd) || (scan && *scan) || (grp && *grp) || (rules && *rules == '1');
         if (upd && *upd) {
             Gtk::Window host;
             const auto t0 = std::chrono::steady_clock::now();
@@ -165,6 +168,17 @@ int main(int argc, char *argv[]) {
                              std::chrono::steady_clock::now() - t0).count() / 1000.0
                       << " fbneo=" << database->getGameCount("fbneo")
                       << " mame=" << database->getGameCount("mame") << std::endl;
+        }
+        if (rules && *rules == '1') {
+            const auto groups = DatSource::load_groups();
+            for (const auto& [file, st] : database->getDatFileStats()) {
+                const DatSource::DatRule* rule = DatSource::rule_of(groups, file);
+                const std::string mode = DatSource::effective_merge({st.linked, st.declared}, rule);
+                std::cout << "[DATRULE] " << file << " linked=" << st.linked
+                          << " declared=" << (st.declared.empty() ? "-" : st.declared)
+                          << " rule=" << (rule ? (rule->merge.empty() ? "-" : rule->merge) + (rule->override_dat ? "+override" : "") : "none")
+                          << " mode=" << (mode.empty() ? "as-is" : mode) << std::endl;
+            }
         }
         if (scan && *scan) {
             const auto t0 = std::chrono::steady_clock::now();

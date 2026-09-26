@@ -812,6 +812,11 @@ bool DatabaseManager::createTables() {
         err_msg = nullptr;
     }
 
+    // Le mode de merge que l'en-tete d'un DAT declare (forcemerging de
+    // clrmamepro, rommode de RomCenter), traduit en split / non-merged /
+    // merged ; vide quand il n'en declare aucun.
+    sqlite3_exec(m_db, "ALTER TABLE dat_files ADD COLUMN declared_merge TEXT NOT NULL DEFAULT '';", 0, 0, nullptr);
+
     // Les CHD des sets MAME. Table a part, nouvelle et
     // additive : ni games ni roms ne changent de forme, et une base anterieure
     // l'obtient vide a son premier demarrage. Pas de cle etrangere : les
@@ -2071,8 +2076,9 @@ std::vector<Game> DatabaseManager::getRecentlyPlayed(int limit) {
     return result;
 }
 
-bool DatabaseManager::registerDatFile(const std::string& filename, const std::string& filepath, time_t last_modified, size_t file_size, int games_count) {
-    const char* sql = "INSERT OR REPLACE INTO dat_files (filename, filepath, last_modified, file_size, games_count) VALUES (?, ?, ?, ?, ?);";
+bool DatabaseManager::registerDatFile(const std::string& filename, const std::string& filepath, time_t last_modified, size_t file_size, int games_count,
+                                      const std::string& declared_merge) {
+    const char* sql = "INSERT OR REPLACE INTO dat_files (filename, filepath, last_modified, file_size, games_count, declared_merge) VALUES (?, ?, ?, ?, ?, ?);";
     
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -2084,6 +2090,7 @@ bool DatabaseManager::registerDatFile(const std::string& filename, const std::st
     sqlite3_bind_int64(stmt, 3, last_modified);
     sqlite3_bind_int64(stmt, 4, file_size);
     sqlite3_bind_int(stmt, 5, games_count);
+    sqlite3_bind_text(stmt, 6, declared_merge.c_str(), -1, SQLITE_TRANSIENT);
     
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -3305,6 +3312,29 @@ std::map<std::string, DatabaseManager::DatFileStats> DatabaseManager::getDatFile
             -1, &stmt, nullptr) == SQLITE_OK) {
         while (sqlite3_step(stmt) == SQLITE_ROW)
             out[safe_column_text(stmt, 0)].roms = sqlite3_column_int(stmt, 1);
+        sqlite3_finalize(stmt);
+    }
+    // Linked sets : a parent or BIOS (cloneof / romof), a ROM or a disk
+    // another set owns (merge=), a device. Any one of them and the DAT needs
+    // a merge mode to say what each archive holds.
+    for (const char* sql : {
+             "SELECT DISTINCT dat_source FROM games WHERE cloneof <> '' OR romof <> '';",
+             "SELECT DISTINCT g.dat_source FROM roms r JOIN games g ON g.id = r.game_id "
+             "WHERE r.merge IS NOT NULL AND r.merge <> '';",
+             "SELECT DISTINCT g.dat_source FROM disks d JOIN games g ON g.id = d.game_id WHERE d.merge <> '';",
+             "SELECT DISTINCT g.dat_source FROM devices v JOIN games g ON g.id = v.game_id;"}) {
+        if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) continue;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            auto it = out.find(safe_column_text(stmt, 0));
+            if (it != out.end()) it->second.linked = true;
+        }
+        sqlite3_finalize(stmt);
+    }
+    if (sqlite3_prepare_v2(m_db, "SELECT filename, declared_merge FROM dat_files;", -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            auto it = out.find(safe_column_text(stmt, 0));
+            if (it != out.end()) it->second.declared = safe_column_text(stmt, 1);
+        }
         sqlite3_finalize(stmt);
     }
     return out;

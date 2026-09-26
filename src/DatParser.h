@@ -5,6 +5,8 @@
 #include "Game.h"
 #include "DatabaseManager.h"
 
+namespace pugi { class xml_node; }
+
 class DatParser {
 public:
     static std::vector<Game> parse(const std::string& filepath);
@@ -46,10 +48,14 @@ public:
     static std::string extractSystemFromHeader(const std::string& headerName);
 
 private:
+    // The merge mode a Logiqx header declares : "split", "non-merged",
+    // "merged", or "" when it declares none.
+    static std::string declaredMerge(const pugi::xml_node& header);
     // One transaction for a whole DAT's sets. Returns how many, -1 on error.
     static int insertGames(const std::vector<Game>& games, std::shared_ptr<DatabaseManager> db);
     // One Logiqx datafile into the database, its games recorded under
     // `dat_source` ; no dat_files registration.
     static int importDatafile(const std::string& filepath, std::shared_ptr<DatabaseManager> db,
-                              const std::string& dat_source, std::string* note);
+                              const std::string& dat_source, std::string* note,
+                              std::string* declared_merge = nullptr);
 };

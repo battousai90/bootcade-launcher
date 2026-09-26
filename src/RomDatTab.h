@@ -168,7 +168,19 @@ private:
     Gtk::Label          m_group_sub;
     Gtk::Entry          m_entry_folder;
     Gtk::Button*        m_btn_browse = nullptr;
-    Gtk::ComboBoxText   m_combo_style;
+    // How the selected DAT is read (its DatSource::DatRule) : the merge mode
+    // when its sets are linked, whether it overrides the DAT's own, and the
+    // folder its sets go to.
+    Gtk::Grid           m_rule_grid;
+    std::map<std::string, Gtk::Label*> m_rule_values;
+    Gtk::Box            m_rule_merge_line{Gtk::ORIENTATION_HORIZONTAL, 8};
+    Gtk::ComboBoxText   m_combo_merge;
+    Gtk::CheckButton    m_check_override;
+    Gtk::Entry          m_entry_dat_folder;
+    int                 m_rule_item = -1;      // index into m_items the controls describe
+    bool                m_rule_filling = false;
+    void show_dat_rule(int index);
+    void store_dat_rule();
     Gtk::ComboBoxText   m_combo_emulator;   // rempli depuis EmulatorRegistry
     Gtk::Button*        m_btn_primary = nullptr;
     Gtk::Button*        m_btn_check = nullptr;
@@ -208,6 +220,8 @@ private:
         std::string name, path, system, header_name, version, date;
         uint64_t    size = 0;
         int         games = 0, roms = 0;
+        bool        linked = false;        // its sets refer to one another : a merge mode applies
+        std::string declared;              // the merge mode its header declares
         bool        in_group = true;
         bool        on_disk = true;
         DatSource::State remote_state = DatSource::State::LocalOnly;

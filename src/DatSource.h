@@ -44,6 +44,42 @@ constexpr int kManifestSchema = 1;
 // The Bootcade file server : what a fresh install points at.
 constexpr const char* kDefaultManifestUrl = "https://files.gcourtot.duckdns.org/dat/dat-manifest.json";
 
+// ── How one DAT is read ─────────────────────────────────────────────────────
+//
+// A DAT is the contract : each of its sets says what one archive (or one
+// folder of CHDs) of the folder the DAT describes holds. A DAT whose sets
+// are linked (cloneof / romof, merge= on a ROM or a disk, device_ref) needs
+// one more thing to say that : its merge mode, as in RomVault's DAT rules.
+//   split      : a set holds its own ROMs ; merge= ones stay with the
+//                parent or the BIOS, devices in their own sets ;
+//   non-merged : every set holds everything it runs on, parent's, BIOS's
+//                and devices' ROMs included ;
+//   merged     : a parent's archive holds its clones too ; clones have none.
+// The mode the DAT's header declares (clrmamepro forcemerging, romcenter
+// rommode) applies unless the user overrides it ; a linked DAT declaring
+// nothing is split, as in RomVault. A DAT without links is read as it is :
+// no mode at all. Nothing depends on where a DAT comes from or on its name.
+constexpr const char* kMergeSplit     = "split";
+constexpr const char* kMergeNonMerged = "non-merged";
+constexpr const char* kMergeMerged    = "merged";
+
+// The user's rule for one DAT file, kept in the group that selects it.
+struct DatRule {
+    std::string merge;              // "" = the DAT's own mode, else split
+    bool        override_dat = false;  // use `merge` even when the DAT declares one
+    std::string folder;             // where its sets go ; "" = named after the DAT's header
+};
+
+// What a DAT is, as far as reading it goes : whether its sets are linked,
+// and the mode its header declares ("" when none).
+struct DatTraits {
+    bool        linked = false;
+    std::string declared;
+};
+
+// The merge mode a DAT is read with : "" for a DAT without links.
+std::string effective_merge(const DatTraits& traits, const DatRule* rule);
+
 struct Group {
     std::string id;                 // "fbneo", "fbneo-gba", … : stable, never shown
     std::string name;               // "FinalBurn Neo", "FBNeo - GBA"
@@ -56,7 +92,11 @@ struct Group {
     // champ et decrivent tous FinalBurn Neo.
     std::string emulator = "fbneo";  // "fbneo" | "mame"
     std::string url;                // manifest URL, Kind::Http
-    std::string set_style = "non-merged";   // how the library this group describes is laid out
+    // Before merge modes were per DAT, the group had one. Read only to give
+    // each of the group's DATs that mode once (load_groups), and by the
+    // audit until it reads each DAT's own mode.
+    std::string set_style = "non-merged";
+    std::map<std::string, DatRule> rules;   // DAT file name → its rule
     bool        active = true;      // an inactive group loads nothing and is not offered for audit
     // The selection. all_files: every DAT file the source provides, today
     // and tomorrow. Otherwise `files` names them one by one.
@@ -83,6 +123,10 @@ std::string        make_id(const std::string& name, const std::vector<Group>& ta
 
 // The DAT files present in a folder (*.dat, sorted by name).
 std::vector<std::string> list_folder(const std::string& folder);
+
+// The rule of a DAT file : that of the first active group selecting it (the
+// one files_to_load takes it from). Null when no group does, or it has none.
+const DatRule* rule_of(const std::vector<Group>& groups, const std::string& file);
 
 // Every DAT file the database must be built from : the union of what active
 // groups select, one path per file name. Two groups pointing at different

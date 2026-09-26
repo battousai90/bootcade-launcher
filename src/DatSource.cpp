@@ -92,6 +92,29 @@ Kind kind_from_key(const std::string& s) {
     return Kind::Http;
 }
 
+std::string effective_merge(const DatTraits& traits, const DatRule* rule) {
+    if (!traits.linked) return "";
+    auto known = [](const std::string& m) {
+        return m == kMergeSplit || m == kMergeNonMerged || m == kMergeMerged;
+    };
+    if (known(traits.declared) && !(rule && rule->override_dat && known(rule->merge)))
+        return traits.declared;
+    if (rule && known(rule->merge)) return rule->merge;
+    return kMergeSplit;
+}
+
+const DatRule* rule_of(const std::vector<Group>& groups, const std::string& file) {
+    for (const auto& g : groups) {
+        // A group taking every file of its folder selects any name : the
+        // file must also be in that folder.
+        std::error_code ec;
+        if (!g.active || !g.selects(file) || !fs::is_regular_file(fs::path(g.folder) / file, ec)) continue;
+        auto it = g.rules.find(file);
+        return it == g.rules.end() ? nullptr : &it->second;
+    }
+    return nullptr;
+}
+
 bool Group::selects(const std::string& file) const {
     if (all_files) return true;
     return std::find(files.begin(), files.end(), file) != files.end();
@@ -207,6 +230,22 @@ std::vector<Group> load_groups() {
                         if (std::find(inactive.begin(), inactive.end(), f) == inactive.end()) grp.files.push_back(f);
                 }
             }
+            if (g.contains("dat_rules") && g["dat_rules"].is_object()) {
+                for (auto it = g["dat_rules"].begin(); it != g["dat_rules"].end(); ++it) {
+                    if (!it.value().is_object()) continue;
+                    DatRule r;
+                    r.merge        = str(it.value(), "merge");
+                    r.override_dat = flag(it.value(), "override", false);
+                    r.folder       = str(it.value(), "folder");
+                    grp.rules[it.key()] = std::move(r);
+                }
+            } else {
+                // Written before merge modes were per DAT : each DAT the group
+                // selects takes the mode the group had, once. Saving writes
+                // dat_rules, and this never runs again for that group.
+                for (const auto& f : list_folder(grp.folder))
+                    if (grp.selects(f)) grp.rules[f].merge = grp.set_style;
+            }
             if (!grp.id.empty()) groups.push_back(std::move(grp));
         }
     }
@@ -223,6 +262,7 @@ std::vector<Group> load_groups() {
         fb.source    = Kind::Http;
         fb.url       = kDefaultManifestUrl;
         fb.set_style = legacy_style;
+        for (const auto& f : list_folder(fb.folder)) fb.rules[f].merge = legacy_style;
         groups.push_back(std::move(fb));
     }
     return groups;
@@ -245,6 +285,15 @@ bool save_groups(const std::vector<Group>& groups) {
         o["active"] = g.active;
         o["all_files"] = g.all_files;
         o["files"] = g.files;
+        nlohmann::json rules = nlohmann::json::object();
+        for (const auto& [file, r] : g.rules) {
+            nlohmann::json one;
+            if (!r.merge.empty())  one["merge"] = r.merge;
+            if (r.override_dat)    one["override"] = true;
+            if (!r.folder.empty()) one["folder"] = r.folder;
+            if (!one.empty()) rules[file] = std::move(one);
+        }
+        o["dat_rules"] = std::move(rules);
         o["last_check"] = g.last_check;
         o["last_update"] = g.last_update;
         arr.push_back(std::move(o));

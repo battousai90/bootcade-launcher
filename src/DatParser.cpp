@@ -166,6 +166,7 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
                                std::string* note) {
     const std::string filename = std::filesystem::path(filepath).filename().string();
     int games_count = -1;
+    std::string declared_merge;   // -listxml declares none
 
     if (datKind(filepath) == DatKind::MameListxml) {
         // Un fichier -listxml brut (celui de progettosnaps, ou la sortie de
@@ -185,7 +186,7 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
         if (games_count < 0) return -1;
         if (note) *note = "MAME -listxml " + version + ": " + std::to_string(games_count) + " sets";
     } else {
-        games_count = importDatafile(filepath, db, filename, note);
+        games_count = importDatafile(filepath, db, filename, note, &declared_merge);
         if (games_count < 0) return -1;
     }
 
@@ -193,7 +194,7 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
     auto ftime = std::filesystem::last_write_time(std::filesystem::path(filepath));
     time_t last_modified = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
     size_t file_size = std::filesystem::file_size(filepath);
-    db->registerDatFile(filename, filepath, last_modified, file_size, games_count);
+    db->registerDatFile(filename, filepath, last_modified, file_size, games_count, declared_merge);
 
     std::cout << "Imported " << games_count << " games from " << filepath << std::endl;
     return games_count;
@@ -218,8 +219,22 @@ int DatParser::insertGames(const std::vector<Game>& games, std::shared_ptr<Datab
     return (int)games.size();
 }
 
+std::string DatParser::declaredMerge(const pugi::xml_node& header) {
+    // clrmamepro : <clrmamepro forcemerging="none|split|full"/>.
+    const std::string force = header.child("clrmamepro").attribute("forcemerging").value();
+    if (force == "none")  return "non-merged";
+    if (force == "split") return "split";
+    if (force == "full")  return "merged";
+    // RomCenter : <romcenter rommode="merged|split|unmerged"/>.
+    const std::string mode = header.child("romcenter").attribute("rommode").value();
+    if (mode == "unmerged") return "non-merged";
+    if (mode == "split")    return "split";
+    if (mode == "merged")   return "merged";
+    return "";
+}
+
 int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<DatabaseManager> db,
-                              const std::string& dat_source, std::string* note) {
+                              const std::string& dat_source, std::string* note, std::string* declared_merge) {
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_file(filepath.c_str());
 
@@ -243,6 +258,7 @@ int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<Datab
     if (header) {
         dat_header = header.child("name").text().get();
         system = extractSystemFromHeader(dat_header);
+        if (declared_merge) *declared_merge = declaredMerge(header);
     }
     // L'emulateur fait partie de l'identite d'un set : sans lui, les 28 203
     // machines de MAME ecraseraient leurs homonymes FinalBurn Neo, qui vivent
