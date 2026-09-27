@@ -19,6 +19,7 @@
 #include "ConfirmationDialog.h"
 #include "DatabaseManager.h"
 #include "DownloadDialog.h"
+#include "EmulatorRegistry.h"
 #include "GenerateDAT.h"
 #include "FbneoUpdateCheck.h"
 #include "HiscoreClient.h"
@@ -780,10 +781,6 @@ Gtk::Widget* SettingsPanel::build_page_random() {
                                    _("Start the game as soon as it is picked, without pressing Play."),
                                    &m_switch_random_launch));
     rnd.body->pack_start(*rnd_rows, Gtk::PACK_SHRINK);
-    m_random_systems_box.set_selection_mode(Gtk::SELECTION_NONE);
-    m_random_systems_box.set_max_children_per_line(4);
-    m_random_systems_box.set_column_spacing(12);
-    m_random_systems_box.set_row_spacing(4);
     m_random_systems_box.set_margin_top(8);
     rnd.body->pack_start(m_random_systems_box, Gtk::PACK_SHRINK);
     m_combo_random_from.signal_changed().connect([this] {
@@ -3866,8 +3863,8 @@ bool SettingsPanel::load_from_file(const std::string& filename) {
         m_random_systems_saved.clear();
         if (j.contains("random_systems") && j["random_systems"].is_array())
             for (const auto& v : j["random_systems"]) if (v.is_string()) m_random_systems_saved.insert(v.get<std::string>());
-        for (auto* c : m_random_system_checks)
-            c->set_active(m_random_systems_saved.empty() || m_random_systems_saved.count(c->get_label()));
+        for (size_t i = 0; i < m_random_system_checks.size(); ++i)
+            m_random_system_checks[i]->set_active(random_system_saved(m_random_system_keys[i]));
         m_switch_auto_update.set_active(j.value("check_updates_auto", true));
         // Les fonctions en ligne : allumees par defaut, parce que c'est ce que
         // le lanceur faisait deja quand les classements etaient actifs. Les
@@ -4011,7 +4008,9 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
         nlohmann::json arr = nlohmann::json::array();
         bool all = true;
         for (auto* c : m_random_system_checks) if (!c->get_active()) { all = false; break; }
-        if (!all) for (auto* c : m_random_system_checks) if (c->get_active()) arr.push_back(c->get_label().raw());
+        if (!all)
+            for (size_t i = 0; i < m_random_system_checks.size(); ++i)
+                if (m_random_system_checks[i]->get_active()) arr.push_back(m_random_system_keys[i]);
         j["random_systems"] = arr;
     }
     j["check_updates_auto"]   = m_switch_auto_update.get_active();
@@ -4257,19 +4256,60 @@ SettingsPanel::RandomPick SettingsPanel::random_pick() const {
     r.launch         = m_switch_random_launch.get_active();
     bool all = true;
     for (auto* c : m_random_system_checks) if (!c->get_active()) { all = false; break; }
-    if (!all) for (auto* c : m_random_system_checks) if (c->get_active()) r.systems.insert(c->get_label().raw());
+    if (!all)
+        for (size_t i = 0; i < m_random_system_checks.size(); ++i)
+            if (m_random_system_checks[i]->get_active()) r.systems.insert(m_random_system_keys[i]);
     if (m_random_system_checks.empty()) r.systems = m_random_systems_saved;
     return r;
 }
 
-void SettingsPanel::set_random_systems(const std::vector<std::string>& systems) {
-    for (auto* c : m_random_system_checks) m_random_systems_box.remove(*c);
+bool SettingsPanel::random_system_saved(const std::string& key) const {
+    if (m_random_systems_saved.empty() || m_random_systems_saved.count(key)) return true;
+    // Avant la 1.5.1 on ne retenait que le systeme (« Arcade ») : une telle
+    // entree vaut pour tous les emulateurs qui le portent.
+    const auto slash = key.find('/');
+    return slash != std::string::npos && m_random_systems_saved.count(key.substr(slash + 1));
+}
+
+void SettingsPanel::set_random_systems(
+        const std::vector<std::pair<std::string, std::string>>& systems) {
+    for (auto& g : m_random_groups) m_random_systems_box.remove(*g);
+    m_random_groups.clear();
     m_random_system_checks.clear();
-    for (const auto& sys : systems) {
-        auto* c = Gtk::make_managed<Gtk::CheckButton>(sys);
-        c->set_active(m_random_systems_saved.empty() || m_random_systems_saved.count(sys));
-        m_random_systems_box.add(*c);
-        m_random_system_checks.push_back(c);
+    m_random_system_keys.clear();
+
+    std::map<std::string, std::vector<std::string>> by_emu;
+    for (const auto& [emu, sys] : systems) by_emu[emu].push_back(sys);
+    // Le nom de l'emulateur en tete de groupe n'apprend rien quand il n'y en
+    // a qu'un.
+    const bool several = by_emu.size() > 1;
+
+    for (const auto& e : EmulatorRegistry::all()) {
+        const auto it = by_emu.find(e.id);
+        if (it == by_emu.end()) continue;
+        auto group = std::make_unique<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 4);
+        if (several) {
+            auto* title = Gtk::make_managed<Gtk::Label>();
+            title->set_markup("<b>" + Glib::Markup::escape_text(e.name) + "</b>");
+            title->set_xalign(0);
+            group->pack_start(*title, Gtk::PACK_SHRINK);
+        }
+        auto* flow = Gtk::make_managed<Gtk::FlowBox>();
+        flow->set_selection_mode(Gtk::SELECTION_NONE);
+        flow->set_max_children_per_line(4);
+        flow->set_column_spacing(12);
+        flow->set_row_spacing(4);
+        for (const auto& sys : it->second) {
+            const std::string key = e.id + "/" + sys;
+            auto* c = Gtk::make_managed<Gtk::CheckButton>(sys);
+            c->set_active(random_system_saved(key));
+            flow->add(*c);
+            m_random_system_checks.push_back(c);
+            m_random_system_keys.push_back(key);
+        }
+        group->pack_start(*flow, Gtk::PACK_SHRINK);
+        m_random_systems_box.pack_start(*group, Gtk::PACK_SHRINK);
+        m_random_groups.push_back(std::move(group));
     }
     m_random_systems_box.show_all_children();
     m_random_systems_box.set_visible(m_combo_random_from.get_active_id() == "own");

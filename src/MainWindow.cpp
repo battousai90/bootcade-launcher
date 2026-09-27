@@ -1890,9 +1890,10 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     { std::lock_guard<std::mutex> lk(m_filter_mutex); m_filtered_games.clear(); }
     {
         // Les systemes connus, pour la carte « Random game » des reglages.
-        std::set<std::string> systems;
-        for (const auto& g : m_cached_games) if (!g.system.empty()) systems.insert(g.system);
-        m_settings_panel.set_random_systems(std::vector<std::string>(systems.begin(), systems.end()));
+        std::set<std::pair<std::string, std::string>> systems;
+        for (const auto& g : m_cached_games)
+            if (!g.system.empty()) systems.emplace(g.emulator, g.system);
+        m_settings_panel.set_random_systems({systems.begin(), systems.end()});
     }
     
     // Populate system filter and display games
@@ -4656,12 +4657,15 @@ void MainWindow::on_random_game_clicked() {
         if (opt.hiscore_only   && !game_ranks_online(g.emulator, g.system, g.name)) return false;
         if (opt.originals_only && !g.cloneof.empty()) return false;
         if (opt.unplayed_only  && g.play_count > 0) return false;
-        if (!opt.from_shown && !opt.systems.empty() && !opt.systems.count(g.system)) return false;
+        if (!opt.from_shown && !opt.systems.empty() &&
+            !opt.systems.count(g.emulator + "/" + g.system)) return false;
         return true;
     };
 
     static std::mt19937 rng{std::random_device{}()};
-    std::string pick_name, pick_system;
+    // L'emulateur fait partie de l'identite : '88games existe chez FinalBurn
+    // Neo et chez MAME, tous deux en « Arcade ».
+    std::string pick_name, pick_system, pick_emulator;
     int pick_index = -1;   // ligne du modele quand on tire dans l'affiche
     if (opt.from_shown) {
         std::vector<int> idx;
@@ -4673,6 +4677,7 @@ void MainWindow::on_random_game_clicked() {
                 pick_index  = idx[std::uniform_int_distribution<size_t>(0, idx.size() - 1)(rng)];
                 pick_name   = m_filtered_games[pick_index]->name;
                 pick_system = m_filtered_games[pick_index]->system;
+                pick_emulator = m_filtered_games[pick_index]->emulator;
             }
         }
     } else {
@@ -4680,7 +4685,7 @@ void MainWindow::on_random_game_clicked() {
         for (const auto& g : m_cached_games) if (eligible(g)) pool.push_back(&g);
         if (!pool.empty()) {
             const Game* g = pool[std::uniform_int_distribution<size_t>(0, pool.size() - 1)(rng)];
-            pick_name = g->name; pick_system = g->system;
+            pick_name = g->name; pick_system = g->system; pick_emulator = g->emulator;
         }
     }
     if (pick_name.empty()) {
@@ -4695,7 +4700,8 @@ void MainWindow::on_random_game_clicked() {
     if (pick_index < 0) {
         std::lock_guard<std::mutex> lock(m_filter_mutex);
         for (size_t i = 0; i < m_filtered_games.size(); ++i)
-            if (m_filtered_games[i]->name == pick_name && m_filtered_games[i]->system == pick_system) { pick_index = (int)i; break; }
+            if (m_filtered_games[i]->name == pick_name && m_filtered_games[i]->system == pick_system &&
+                m_filtered_games[i]->emulator == pick_emulator) { pick_index = (int)i; break; }
     }
     if (pick_index < 0) {
         m_search_entry.set_text("");
@@ -4704,7 +4710,8 @@ void MainWindow::on_random_game_clicked() {
         apply_tree_filters();
         std::lock_guard<std::mutex> lock(m_filter_mutex);
         for (size_t i = 0; i < m_filtered_games.size(); ++i)
-            if (m_filtered_games[i]->name == pick_name && m_filtered_games[i]->system == pick_system) { pick_index = (int)i; break; }
+            if (m_filtered_games[i]->name == pick_name && m_filtered_games[i]->system == pick_system &&
+                m_filtered_games[i]->emulator == pick_emulator) { pick_index = (int)i; break; }
     }
     if (pick_index < 0) return;
 
@@ -4712,7 +4719,7 @@ void MainWindow::on_random_game_clicked() {
     auto it = m_model_games->get_iter(path);
     if (!it) return;
     reveal_model_row(it);
-    std::cout << "[RANDOM] " << pick_system << "/" << pick_name << (opt.launch ? " (launch)" : "") << std::endl;
+    std::cout << "[RANDOM] " << pick_emulator << "/" << pick_system << "/" << pick_name << (opt.launch ? " (launch)" : "") << std::endl;
     if (opt.launch) on_play_clicked();
 }
 
