@@ -216,7 +216,11 @@ jobs:
         with:
           bundle: bootcade.flatpak
           manifest-path: packaging/io.github.battousai90.Bootcade.yml
-          cache-key: flatpak-builder-${{ needs.version.outputs.tag }}
+          # Nommee d'apres le manifeste et non d'apres la version : une cle par
+          # tag n'etait jamais retrouvee a la release suivante, qui recompilait
+          # alors gtkmm et toute sa pile (une dizaine de minutes). Ici, seul un
+          # changement de bibliotheque dans le manifeste repart de zero.
+          cache-key: flatpak-deps-${{ hashFiles('packaging/io.github.battousai90.Bootcade.yml') }}
 
       # Le bundle portait le meme nom a chaque version. Impossible de savoir
       # lequel on tient, et un navigateur enregistre le suivant sous
