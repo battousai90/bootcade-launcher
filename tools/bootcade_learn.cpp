@@ -79,11 +79,20 @@ public:
     // Le hiscore.dat que sert le service, entrees apprises comprises : sans
     // lui, un jeu tout juste ajoute depuis la page n'ecrirait toujours rien.
     // -> contenu, vide en cas d'echec.
-    std::string hiscore_dat() {
+    // La sauvegarde marquee (faux records) du mode « mark », pour ce type de
+    // fichier : vide si le service n'en a pas.
+    std::string marked(const std::string& kind) {
+        return get("/api/learn/" + link_.game + "/marked?kind=" + kind + "&token=" + link_.token);
+    }
+
+    std::string hiscore_dat() { return get("/api/hiscore-dat"); }
+
+private:
+    std::string get(const std::string& path) {
         CURL* curl = curl_easy_init();
         if (!curl) return {};
         std::string body;
-        const std::string url = base_ + "/api/hiscore-dat";
+        const std::string url = base_ + path;
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, sink);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
@@ -96,6 +105,7 @@ public:
         return res == CURLE_OK && status == 200 ? body : std::string();
     }
 
+public:
     bool upload(const std::vector<fs::path>& shots, const fs::path& hi, const fs::path& fsave) {
         return post("upload", [&](curl_mime* mime) {
             for (const auto& s : shots) add_file(mime, "shot", s);
@@ -294,9 +304,28 @@ int main(int argc, char* argv[]) {
     // Une seconde de marge : l'horloge des fichiers et celle-ci peuvent
     // differer d'un arrondi.
     std::optional<AsideRecords> aside;
-    if (link.mode == "factory") {
+    if (link.mode == "factory" || link.mode == "mark") {
         aside.emplace(link.game);
         service.event("records_aside", link.game);
+    }
+    // Mode « mark » : la sauvegarde aux faux records prend la place de la
+    // vraie, le temps de la seance (AsideRecords la retire en rendant la vraie).
+    if (link.mode == "mark") {
+        const fs::path base_dir = fbneo_data_dir();
+        bool placed = false;
+        for (const auto& [kind, target] : {std::pair<std::string, fs::path>{"hi", base_dir / "support/hiscores" / (link.game + ".hi")},
+                                           std::pair<std::string, fs::path>{"saveram", base_dir / "config/games" / (link.game + ".fs")}}) {
+            const std::string data = service.marked(kind);
+            if (data.empty()) continue;
+            std::error_code ec;
+            fs::create_directories(target.parent_path(), ec);
+            std::ofstream(target, std::ios::binary) << data;
+            placed = true;
+        }
+        if (!placed) {
+            service.event("error", "sauvegarde marquée introuvable");
+            return 1;
+        }
     }
 
     const auto since = fs::file_time_type::clock::now() - std::chrono::seconds(1);
