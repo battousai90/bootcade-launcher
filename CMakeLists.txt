@@ -195,6 +195,7 @@ add_executable(bootcade
     src/LoginDialog.cpp
     src/ScreenshotAssignDialog.cpp
     src/SystemPrefix.cpp
+    src/RomDownload.cpp
     src/RomCleanup.cpp
     src/SplashScreen.cpp
     src/ThumbnailDownloader.cpp

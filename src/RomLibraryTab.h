@@ -99,11 +99,20 @@ private:
     void worker_fix();
     std::vector<Gtk::TreeModel::Row> fix_candidates() const;
     void on_export(int format);   // 0 text, 1 csv, 2 dat
+    // Download from Bootcade's ROM server, with the player's account (quota
+    // per account) : FinalBurn Neo sets that are missing or wrong and cannot
+    // be rebuilt from the library. Into the import folder, which verifies
+    // and files them as for any other ROM. On the given rows, else the
+    // checked ones, else every row shown.
+    bool can_download(const RomAudit::GameEntry& g) const;
+    std::vector<Gtk::TreeModel::Row> download_candidates() const;
+    void on_download_clicked(std::vector<Gtk::TreeModel::Row> rows = {});
+    void worker_download();
     void update_action_buttons();
     std::vector<Gtk::TreeModel::Row> checked_rows() const;
 
     // ── Worker plumbing ─────────────────────────────────────────────────────
-    enum class Job { None, Audit, Fix };
+    enum class Job { None, Audit, Fix, Download };
     RomInbox::Callbacks make_callbacks();
     void push_progress(double pct, const std::string& msg);
     void push_log(const std::string& msg);
@@ -152,6 +161,7 @@ private:
     Gtk::Label          m_status;
     Gtk::Button*        m_btn_cancel = nullptr;
     Gtk::Button*        m_btn_fix    = nullptr;
+    Gtk::Button*        m_btn_download = nullptr;
     Gtk::Button*        m_btn_select_all = nullptr;
     Gtk::Button*        m_btn_select_none = nullptr;
     sigc::connection    m_flash_timer;
@@ -208,6 +218,15 @@ private:
         std::vector<std::string> sent;         // what actually landed there (copied or already present)
         int moved = 0, cleaned = 0, copied = 0, failed = 0;
     } m_fix;
+
+    // Download job : the sets asked for, what arrived, why it stopped.
+    struct DownloadJob {
+        struct Item { std::string dat_header, name; };
+        std::vector<Item> items;
+        std::vector<std::string> got;       // zips written into the import folder
+        std::vector<std::string> failed;    // "name : reason"
+        std::string stopped;                // set when the whole job stopped early
+    } m_dl;
 
     Job              m_job = Job::None;
     std::thread      m_worker;
