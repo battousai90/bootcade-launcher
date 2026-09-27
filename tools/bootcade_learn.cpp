@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <optional>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -36,7 +37,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-struct Link { std::string game, token; };
+struct Link { std::string game, token, mode; };
 
 bool parse_link(const std::string& url, Link& out) {
     static const std::regex re(R"(^bootcade-learn://learn/?\?(.*)$)");
@@ -47,6 +48,7 @@ bool parse_link(const std::string& url, Link& out) {
     for (std::sregex_iterator it(query.begin(), query.end(), kv), end; it != end; ++it) {
         if ((*it)[1] == "game")  out.game  = (*it)[2];
         if ((*it)[1] == "token") out.token = (*it)[2];
+        if ((*it)[1] == "mode")  out.mode  = (*it)[2];
     }
     return std::regex_match(out.game, std::regex("[a-z0-9_]{1,32}")) && out.token.size() >= 16;
 }
@@ -186,6 +188,46 @@ std::vector<fs::path> shots_since(const std::string& game, fs::file_time_type si
     return out;
 }
 
+/* Mode « factory » : le pack d'images montre la table d'USINE. Pour que le
+ * jeu ecrive la meme, les records du joueur sont mis de cote le temps de la
+ * seance, puis remis a l'identique. Le dossier de sauvegarde vit a cote des
+ * fichiers (meme disque, un renommage) ; s'il reste d'une seance
+ * interrompue, il est restaure avant toute chose. */
+class AsideRecords {
+public:
+    explicit AsideRecords(const std::string& game) : game_(game) {
+        const fs::path base = fbneo_data_dir();
+        files_ = {base / "support/hiscores" / (game + ".hi"),
+                  base / "config/games" / (game + ".fs")};
+        keep_ = base / "learn-backup" / game;
+        restore();                                   // restes d'une seance interrompue
+        std::error_code ec;
+        fs::create_directories(keep_, ec);
+        for (const auto& f : files_)
+            if (fs::exists(f, ec)) fs::rename(f, keep_ / f.filename(), ec);
+    }
+    ~AsideRecords() { restore(); }
+    void restore() {
+        std::error_code ec;
+        if (!fs::exists(keep_, ec)) return;
+        for (const auto& f : files_) {
+            const fs::path saved = keep_ / f.filename();
+            if (fs::exists(saved, ec)) {
+                fs::remove(f, ec);                   // la table d'usine de la seance
+                fs::rename(saved, f, ec);
+            } else {
+                fs::remove(f, ec);                   // absent avant : absent apres
+            }
+        }
+        fs::remove_all(keep_, ec);
+        fs::remove(keep_.parent_path(), ec);         // learn-backup, s'il est vide
+    }
+private:
+    std::string game_;
+    std::vector<fs::path> files_;
+    fs::path keep_;
+};
+
 fs::path if_exists(const fs::path& p) {
     std::error_code ec;
     return fs::exists(p, ec) ? p : fs::path();
@@ -251,6 +293,12 @@ int main(int argc, char* argv[]) {
 
     // Une seconde de marge : l'horloge des fichiers et celle-ci peuvent
     // differer d'un arrondi.
+    std::optional<AsideRecords> aside;
+    if (link.mode == "factory") {
+        aside.emplace(link.game);
+        service.event("records_aside", link.game);
+    }
+
     const auto since = fs::file_time_type::clock::now() - std::chrono::seconds(1);
     const auto started = std::chrono::steady_clock::now();
     pid_t pid = fork();
@@ -280,6 +328,10 @@ int main(int argc, char* argv[]) {
               << (hi.empty() ? "absent" : "present") << ", .fs "
               << (fsave.empty() ? "absent" : "present") << std::endl;
     const bool ok = service.upload(shots, hi, fsave);
+    if (aside) {
+        aside.reset();                               // records du joueur remis
+        service.event("records_back", link.game);
+    }
     curl_global_cleanup();
     return ok ? 0 : 1;
 }
