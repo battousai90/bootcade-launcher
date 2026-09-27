@@ -20,6 +20,7 @@
 #include <cctype>
 #include <ctime>
 #include <map>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -116,11 +117,34 @@ bool is_noise(const char* line, size_t len) {
 
 namespace MameCatalog {
 
+bool is_runnable(const std::string& exe) {
+    if (exe.empty()) return false;
+    if (access(exe.c_str(), X_OK) == 0) return true;
+    if (!AppContext::in_flatpak()) return false;
+
+    // Chaque question a l'hote coute un processus, et les Reglages la posent a
+    // chaque rafraichissement : on retient les reponses positives. Une reponse
+    // negative se repose, pour voir un MAME installe en cours de route.
+    static std::mutex m;
+    static std::unordered_set<std::string> known;
+    {
+        std::lock_guard<std::mutex> lock(m);
+        if (known.count(exe)) return true;
+    }
+    const bool yes =
+        run_capture({"sh", "-c", "[ -x \"$1\" ] && echo ok", "sh", exe}) == "ok";
+    if (yes) {
+        std::lock_guard<std::mutex> lock(m);
+        known.insert(exe);
+    }
+    return yes;
+}
+
 std::string find_executable() {
     // Les emplacements usuels d'abord : Debian et Fedora ne rangent pas MAME
     // au meme endroit, et `which` coute un processus de plus.
     for (const char* p : {"/usr/games/mame", "/usr/bin/mame", "/usr/local/bin/mame"}) {
-        if (access(p, X_OK) == 0) return p;
+        if (is_runnable(p)) return p;
     }
     const std::string found = run_capture({"which", "mame"});
     return found.find('/') == std::string::npos ? std::string() : found;

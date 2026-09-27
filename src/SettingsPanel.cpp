@@ -1584,7 +1584,7 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     m_btn_test_mame.signal_clicked().connect([this] {
         const std::string path = mame_executable();
         auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
-        if (path.empty() || ::access(path.c_str(), X_OK) != 0) {
+        if (!MameCatalog::is_runnable(path)) {
             refresh_emulator_pill();
             if (win)
                 ui::notice(*win, _("The emulator cannot be run."),
@@ -2311,7 +2311,7 @@ void SettingsPanel::refresh_catver_state() {
 
 std::string SettingsPanel::catver_url_default() const {
     const std::string exe = mame_executable();
-    const bool ready = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+    const bool ready = MameCatalog::is_runnable(exe);
     const std::string version =
         ready ? MameCatalog::version_number(MameCatalog::installed_build(exe))
               : std::string();
@@ -2525,7 +2525,7 @@ void SettingsPanel::download_catver_clicked() {
 void SettingsPanel::refresh_mame_state() {
     const bool        chosen = !m_entry_mame_exe.get_text().empty();
     const std::string exe    = mame_executable();
-    const bool        ready  = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+    const bool        ready  = MameCatalog::is_runnable(exe);
 
     // L'indication sous le champ repond a « et si je laisse vide ? ».
     if (chosen)
@@ -2608,7 +2608,7 @@ void SettingsPanel::refresh_emulator_pill() {
     if (m_emu_shown_mame) {
         refresh_mame_state();
         const std::string exe = mame_executable();
-        ready = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+        ready = MameCatalog::is_runnable(exe);
     } else {
         const std::string exe = get_fbneo_executable();
         ready = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
@@ -2694,7 +2694,7 @@ void SettingsPanel::check_mame_update_async() {
     // La version installee se lit AVANT de partir : elle demande le binaire,
     // donc un widget, et un fil detache n'a rien a faire dans les widgets.
     const std::string exe = mame_executable();
-    const bool ready = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+    const bool ready = MameCatalog::is_runnable(exe);
     const std::string installed =
         ready ? MameCatalog::version_number(MameCatalog::installed_build(exe))
               : std::string();
