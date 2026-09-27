@@ -459,6 +459,10 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
         std::filesystem::exists(BootcadeAuth::session_path());
     m_account_settled.connect([this] {
         m_account_pending = false;
+        if (m_account_question_waiting) {
+            m_account_question_waiting = false;
+            ask_hiscore_account_again();
+        }
         // Le seul affichage que la restauration laissait derriere elle. Le
         // bouton du compte et le panneau de reglages sont deja traites par
         // m_account_restored ; le bandeau, lui, n'etait prevenu par personne
@@ -5080,6 +5084,15 @@ void MainWindow::ask_hiscore_account_again() {
      * Jamais reposee a un joueur connecte : pour lui tout fonctionne, et une
      * question sans objet a chaque mise a jour serait du harcelement.
      */
+    /* Posee depuis le premier tour de boucle, elle passait AVANT que le fil
+     * de restauration ait relu la session : signed_in() repondait non, et un
+     * joueur connecte se voyait demander de se connecter a chaque nouvelle
+     * version. Comme le bandeau, elle attend que la reponse soit connue ;
+     * m_account_settled la rappelle. */
+    if (m_account_pending) {
+        m_account_question_waiting = true;
+        return;
+    }
     if (BootcadeAuth::signed_in()) {
         // Sa reponse vaut pour cette version : inutile de la lui redemander
         // s'il se deconnecte plus tard dans la meme.
