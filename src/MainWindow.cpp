@@ -2902,8 +2902,11 @@ void MainWindow::on_play_clicked() {
     // Snapshot of the score table BEFORE play. Without it the server cannot
     // tell what this session achieved from what the table already held : a
     // fresh table ships with factory scores that belong to nobody.
-    std::string hi_before = read_file_bytes(
-        fbneo_score_state_path(game_system, rom_name, fbneo_rom_name));
+    // The file is chosen once, here, and read again after the session : a
+    // game can have both a .hi and a .fs, and comparing one before with the
+    // other after would compare two unrelated tables.
+    const std::string score_path = fbneo_score_state_path(game_system, rom_name, fbneo_rom_name);
+    std::string hi_before = read_file_bytes(score_path);
     // Read here, on the GTK thread, and carried into the watcher: the panel
     // must not be touched from there. Empty means "do not send".
     // Le nom vient du COMPTE, plus d'un champ de reglages : c'est le seul du
@@ -2932,7 +2935,7 @@ void MainWindow::on_play_clicked() {
         std::optional<ControllerConfig> profile;
         if (const ControllerConfig* p = controller_profile_for(fbneo_rom_name))
             profile = *p;
-        std::thread([this, pid, rom_name, game_system, fbneo_rom_name, previews_dir, titles_dir, launch_time, hi_before, hiscore_player, hiscore_country,
+        std::thread([this, pid, rom_name, game_system, fbneo_rom_name, previews_dir, titles_dir, launch_time, score_path, hi_before, hiscore_player, hiscore_country,
                      hiscore_enabled, keep_history, share_playtime, profile = std::move(profile), own_profile,
                      alive = m_alive_token]() {
             watch_playtime(pid, m_database, rom_name, game_system, "fbneo", keep_history);
@@ -2943,7 +2946,7 @@ void MainWindow::on_play_clicked() {
             std::lock_guard<std::mutex> live(alive->mutex);
             if (!alive->alive) return;
             // FBNeo writes the .hi on exit, so this must come after the wait.
-            submit_session_score(game_system, rom_name, fbneo_rom_name, hi_before, hiscore_player, hiscore_country, hiscore_enabled, share_playtime);
+            submit_session_score(game_system, rom_name, fbneo_rom_name, score_path, hi_before, hiscore_player, hiscore_country, hiscore_enabled, share_playtime);
             // FBNeo has just written config/games/<rom>.ini on exit : this is
             // the only moment a complete file exists to repair.
             ControllerManager::fix_player2_input_conflicts(fbneo_rom_name);
@@ -5618,6 +5621,7 @@ void MainWindow::sort_games(std::vector<const Game*>& games) {
 void MainWindow::submit_session_score(const std::string& system,
                                       const std::string& game,
                                       const std::string& fbneo_rom_name,
+                                      const std::string& score_path,
                                       const std::string& hi_before,
                                       const std::string& player,
                                       const std::string& country,
@@ -5680,12 +5684,24 @@ void MainWindow::submit_session_score(const std::string& system,
      * (flush_outbox, appele par refresh_hiscore_data_async). Seul le score
      * est gare : la duree de jeu d'un joueur sans compte n'a personne a qui
      * etre attribuee, et empiler une entree par partie ne servirait a rien. */
+    /* Le meme fichier qu'avant la partie. S'il n'existait pas au lancement
+     * (premiere partie), celui qui vient d'apparaitre est le seul candidat :
+     * il n'y a pas d'etat d'avant a confondre avec lui. */
+    const std::string after_path = hi_before.empty()
+        ? fbneo_score_state_path(system, game, fbneo_rom_name) : score_path;
+    /* Un jeu non classe envoie aussi sa table, avant et apres : c'est ce qui
+     * permet au service d'apprendre ou le jeu range son score, et d'en
+     * ecrire la definition. Le joueur n'en entend parler que si un score est
+     * publie : tout le reste (en attente, refuse, garde hors ligne) ne lui
+     * promettait rien. */
+    const bool ranked = game_ranks_online("fbneo", system, game);
+
     if (player.empty()) {
-        if (!game_ranks_online("fbneo", system, game)) return;
-        std::string hi_after = read_file_bytes(fbneo_score_state_path(system, game, fbneo_rom_name));
+        std::string hi_after = read_file_bytes(after_path);
         if (hi_after.empty() || hi_after == hi_before) return;
         HiscoreClient::queue_submission(system, game, player, country, pt,
                                         hi_before, hi_after);
+        if (!ranked) return;
         std::cerr << "[HISCORE] deconnecte : score gare pour " << system << "/"
                   << game << ", envoye a la prochaine connexion" << std::endl;
         std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
@@ -5696,9 +5712,7 @@ void MainWindow::submit_session_score(const std::string& system,
         return;
     }
 
-    if (!game_ranks_online("fbneo", system, game)) { send_playtime_only(); return; }
-
-    std::string hi_after = read_file_bytes(fbneo_score_state_path(system, game, fbneo_rom_name));
+    std::string hi_after = read_file_bytes(after_path);
     if (hi_after.empty() || hi_after == hi_before) {   // no score table, or nothing new in it
         send_playtime_only();
         return;
@@ -5742,6 +5756,7 @@ void MainWindow::submit_session_score(const std::string& system,
         HiscoreClient::queue_submission(system, game, player, country, pt,
                                         hi_before, hi_after);
         std::cerr << "[HISCORE] queued for later (" << r.error << ")" << std::endl;
+        if (!ranked) return;
 
         /* Dire la VRAIE raison. Le score est gare dans les trois cas, mais
          * une session expiree, une panne du service et une absence de reseau
@@ -5782,12 +5797,20 @@ void MainWindow::submit_session_score(const std::string& system,
         std::cerr << "[HISCORE] sans objet pour " << system << "/" << game
                   << " : " << (r.reason.empty() ? "aucune raison donnee" : r.reason)
                   << std::endl;
-        if (game_ranks_online("fbneo", system, game) && !r.reason.empty()) {
+        if (ranked && !r.reason.empty()) {
             std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
             m_hiscore_results.push_back(Glib::ustring::compose(
                 _("Score not recorded : %1"), r.reason).raw());
             m_hiscore_result_dispatcher.emit();
         }
+        return;
+    }
+
+    // Non classe : rien n'a ete promis au joueur. Seul un score publie
+    // (le service a appris le jeu depuis) merite d'etre annonce.
+    if (!ranked && !r.accepted) {
+        std::cerr << "[HISCORE] non classe, table envoyee pour " << system << "/" << game
+                  << (r.reason.empty() ? std::string() : " : " + r.reason) << std::endl;
         return;
     }
 

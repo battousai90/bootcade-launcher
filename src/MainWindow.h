@@ -588,9 +588,12 @@ private:
     // runs on the watcher thread, and touching a GTK widget from outside the
     // main thread is undefined behaviour. Both values are captured at launch,
     // which is also the moment the player's intent actually applies.
+    // `score_path` : the score file chosen at launch, read again after the
+    // session ; `hi_before` its content then.
     void submit_session_score(const std::string& system,
                               const std::string& game,
                               const std::string& fbneo_rom_name,
+                              const std::string& score_path,
                               const std::string& hi_before,
                               const std::string& player,
                               const std::string& country,
