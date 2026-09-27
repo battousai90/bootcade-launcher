@@ -3,6 +3,8 @@
 
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
+#include "DatParser.h"
+#include "DatSource.h"
 #include "RomArchive.h"
 #include "RomResolve.h"
 #include "i18n.h"
@@ -54,17 +56,13 @@ std::string join(const std::vector<std::string>& items, const char* sep) {
     return out;
 }
 
-// "FinalBurn Neo - GBA Games" -> "GBA" : the same fallback formula RomAudit
-// uses in the other direction (system -> dat_header), so a folder built from
-// that formula always parses back to the exact system string the DAT uses.
+// "FinalBurn Neo - GBA Games" -> "GBA", "MAME ROMs (split)" -> "ROMs (split)" :
+// the folder is the DAT header (RomResolve::expected_folder), so the rule
+// DatParser applies to that header gives back the exact system string the
+// database holds. A folder that follows neither naming is its own system.
 std::string system_of_folder(const std::string& folder) {
-    std::string system = folder;
-    const std::string prefix = "FinalBurn Neo - ", suffix = " Games";
-    if (system.rfind(prefix, 0) == 0) system = system.substr(prefix.size());
-    if (system.size() > suffix.size() &&
-        system.compare(system.size() - suffix.size(), suffix.size(), suffix) == 0)
-        system = system.substr(0, system.size() - suffix.size());
-    return system;
+    const std::string system = DatParser::extractSystemFromHeader(folder);
+    return system == "Unknown" ? folder : system;
 }
 
 bool move_file(const fs::path& src, const fs::path& dest, std::string& error) {
@@ -128,10 +126,17 @@ void RomOutboxTab::build_header() {
                          _("Repaired sets, ready to be moved into your library. Verify them here first."));
     auto* body = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 8);
     body->set_margin_top(10);
-    m_path_label.set_xalign(0.0f);
-    m_path_label.set_ellipsize(Pango::ELLIPSIZE_MIDDLE);
-    m_path_label.get_style_context()->add_class("set-mono");
-    body->pack_start(m_path_label, Gtk::PACK_SHRINK);
+    // Le dossier se choisit la ou on regarde son contenu, comme le dossier
+    // d'import dans l'onglet Import : meme ligne, meme bouton.
+    auto* path_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+    m_entry_folder.set_hexpand(true);
+    m_entry_folder.set_placeholder_text(_("No outbox folder set yet"));
+    m_entry_folder.signal_activate().connect([this] { apply_outbox_path(m_entry_folder.get_text().raw()); });
+    m_btn_browse = ui::button(_("Browse…"), "bc-folder.svg");
+    m_btn_browse->signal_clicked().connect(sigc::mem_fun(*this, &RomOutboxTab::on_browse_folder));
+    path_line->pack_start(m_entry_folder, Gtk::PACK_EXPAND_WIDGET);
+    path_line->pack_start(*m_btn_browse, Gtk::PACK_SHRINK);
+    body->pack_start(*path_line, Gtk::PACK_SHRINK);
     auto* actions = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
     m_btn_open = ui::button(_("Open folder"), "bc-external.svg");
     m_btn_open->signal_clicked().connect(sigc::mem_fun(*this, &RomOutboxTab::on_open_folder));
@@ -140,7 +145,7 @@ void RomOutboxTab::build_header() {
     actions->pack_start(*m_btn_open, Gtk::PACK_SHRINK);
     actions->pack_start(*m_btn_refresh, Gtk::PACK_SHRINK);
     body->pack_start(*actions, Gtk::PACK_SHRINK);
-    auto* hint = ui::sub_label(_("The outbox folder is set in Settings › Library › ROM Management."));
+    auto* hint = ui::sub_label(_("Import writes the sets it repairs into this folder."));
     body->pack_start(*hint, Gtk::PACK_SHRINK);
     card.body->pack_start(*body, Gtk::PACK_SHRINK);
     card.frame->set_size_request(380, -1);
@@ -301,13 +306,16 @@ void RomOutboxTab::reload_settings() {
     std::ifstream fi(AppContext::get_config_path());
     if (fi) { try { fi >> j; } catch (...) { j = nlohmann::json{}; } }
     nlohmann::json rm = (j.contains("rom_manager") && j["rom_manager"].is_object()) ? j["rom_manager"] : nlohmann::json::object();
-    m_check_keep_replaced.set_active(!(rm.contains("outbox_keep_replaced") && rm["outbox_keep_replaced"].is_boolean()) || rm["outbox_keep_replaced"].get<bool>());
-    std::string coll = (rm.contains("outbox_collision") && rm["outbox_collision"].is_string()) ? rm["outbox_collision"].get<std::string>() : "replace";
-    if (!m_combo_collision.set_active_id(coll)) m_combo_collision.set_active_id("replace");
+    // The mapping first : the two widgets below save the settings as soon as
+    // their value changes, mapping included. Read after them, the first
+    // opening of the window wrote an empty mapping over the saved one.
     m_destinations.clear();
     if (rm.contains("destinations") && rm["destinations"].is_object())
         for (auto it = rm["destinations"].begin(); it != rm["destinations"].end(); ++it)
             if (it.value().is_string()) m_destinations[it.key()] = it.value().get<std::string>();
+    m_check_keep_replaced.set_active(!(rm.contains("outbox_keep_replaced") && rm["outbox_keep_replaced"].is_boolean()) || rm["outbox_keep_replaced"].get<bool>());
+    std::string coll = (rm.contains("outbox_collision") && rm["outbox_collision"].is_string()) ? rm["outbox_collision"].get<std::string>() : "replace";
+    if (!m_combo_collision.set_active_id(coll)) m_combo_collision.set_active_id("replace");
     refresh();
 }
 
@@ -324,18 +332,82 @@ void RomOutboxTab::save_settings() const {
     if (fo) fo << j.dump(4);
 }
 
-std::string RomOutboxTab::destination_for(const std::string& system_folder, const Paths& p) const {
+// config.json est aussi ecrit par le panneau de reglages : on relit le fichier
+// entier, on ne change que cette cle, et on le reecrit. Un fichier illisible
+// n'est pas reecrit du tout, plutot que remplace par un fichier presque vide.
+void RomOutboxTab::save_outbox_path(const std::string& folder) const {
+    nlohmann::json j;
+    const std::string path = AppContext::get_config_path();
+    { std::ifstream fi(path); if (fi) { try { fi >> j; } catch (...) { return; } } }
+    j["rom_manager"]["outbox_path"] = folder;
+    std::ofstream fo(path);
+    if (fo) fo << j.dump(4);
+}
+
+void RomOutboxTab::apply_outbox_path(const std::string& folder) {
+    if (m_busy) return;
+    if (folder == m_paths().outbox) return;
+    save_outbox_path(folder);
+    m_entry_folder.set_text(folder);
+    m_sig_outbox_path.emit(folder);
+    // Sans cela l'ecran continuerait de montrer le contenu de l'ancien dossier.
+    refresh();
+}
+
+void RomOutboxTab::on_browse_folder() {
+    auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
+    Gtk::FileChooserDialog dlg(_("Select the outbox folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    if (top) dlg.set_transient_for(*top);
+    dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+    dlg.add_button(_("Select"), Gtk::RESPONSE_OK);
+    const std::string current = m_entry_folder.get_text().raw();
+    if (!current.empty()) dlg.set_filename(current);
+    if (dlg.run() != Gtk::RESPONSE_OK) return;
+    apply_outbox_path(dlg.get_filename());
+}
+
+// Which emulator a system folder of the outbox belongs to : the folder is
+// named after the folder of a DAT, whose group says which emulator it
+// describes.
+std::string RomOutboxTab::emulator_of_folder(const std::string& system_folder) const {
+    for (const auto& [file, reading] : RomResolve::dat_readings(m_db))
+        if (!reading.emulator.empty() && lower(reading.folder) == lower(system_folder)) return reading.emulator;
+    return "";
+}
+
+std::string RomOutboxTab::destination_for(const std::string& system_folder, const Paths&) const {
     auto it = m_destinations.find(system_folder);
     if (it != m_destinations.end() && !it->second.empty()) return it->second;
-    for (const auto& root : p.roms_paths)
-        if (fs::path(root).filename().string() == system_folder) return root;
+    return auto_destination(system_folder);
+}
+
+// Where a DAT's folder is in the library, the way the audit looks for it
+// (RomResolve::CacheIndex::in_folder) : a ROM directory of that name, else a
+// directory of that name under one of them, else, when the emulator has a
+// single ROM directory, that directory's subfolder of that name. Among the ROM directories of the
+// emulator the folder belongs to : a MAME set never lands in a FinalBurn Neo
+// folder. Compared without case : the DAT "MAME" lands in a folder "Mame".
+std::string RomOutboxTab::auto_destination(const std::string& system_folder) const {
+    const auto roots = DatSource::roms_paths_for(emulator_of_folder(system_folder));
+    for (const auto& root : roots)
+        if (lower(fs::path(root).filename().string()) == lower(system_folder)) return root;
+    std::error_code ec;
+    for (const auto& root : roots) {
+        for (auto e = fs::directory_iterator(root, ec); !ec && e != fs::directory_iterator(); e.increment(ec))
+            if (e->is_directory(ec) && lower(e->path().filename().string()) == lower(system_folder))
+                return e->path().string();
+    }
+    // Not in the library yet (the first set of a DAT) : with a single ROM
+    // directory for the emulator there is only one place for it, created
+    // when the first set moves in. With several, the user says which.
+    if (roots.size() == 1 && !system_folder.empty()) return (fs::path(roots.front()) / system_folder).string();
     return "";
 }
 
 // A small table of "system folder → ROM directory", one row per DAT header
 // the database knows plus whatever the outbox holds. An empty directory
-// means "the ROM directory with the same name", which is what almost every
-// row wants.
+// means "the folder of that name in the library" (auto_destination), which
+// is what almost every row wants.
 void RomOutboxTab::on_edit_destinations() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
     Paths p = m_paths();
@@ -373,8 +445,7 @@ void RomOutboxTab::on_edit_destinations() {
         entry->set_hexpand(true);
         auto it = m_destinations.find(f);
         if (it != m_destinations.end()) entry->set_text(it->second);
-        std::string by_name;
-        for (const auto& root : p.roms_paths) if (fs::path(root).filename().string() == f) by_name = root;
+        const std::string by_name = auto_destination(f);
         entry->set_placeholder_text(by_name.empty() ? Glib::ustring(_("no ROM directory of that name : set one")) : Glib::ustring(by_name));
         line->pack_start(*entry, Gtk::PACK_EXPAND_WIDGET);
         auto* browse = ui::button(_("Browse…"), "bc-folder.svg");
@@ -423,7 +494,9 @@ void RomOutboxTab::refresh() {
     Paths p = m_paths();
     std::error_code ec;
     m_items.clear();
-    m_path_label.set_text(p.outbox.empty() ? Glib::ustring(_("No outbox folder configured.")) : Glib::ustring(p.outbox));
+    // Pas de set_text inconditionnel : l'utilisateur peut etre en train de
+    // taper dans le champ pendant qu'un refresh arrive.
+    if (m_entry_folder.get_text().raw() != p.outbox) m_entry_folder.set_text(p.outbox);
     if (p.outbox.empty() || !fs::is_directory(p.outbox, ec)) {
         m_manifest = RomManifest::Manifest();
         populate();
@@ -451,11 +524,12 @@ void RomOutboxTab::refresh() {
             item.game = z.stem().string();
             item.system = system_of_folder(folder);
             item.dat_header = folder;
+            item.emulator = emulator_of_folder(folder);
             item.bytes = fs::file_size(z, ec);
             item.destination = destination;
             item.dest_exists = !destination.empty() && fs::exists(fs::path(destination) / z.filename(), ec);
             item.entry = m_manifest.find(m_manifest.relative(z.string()));
-            Game g = m_db->getGame(item.game, item.system);
+            Game g = m_db->getGame(item.game, item.system, item.emulator);
             if (!g.name.empty()) {
                 item.parent = g.cloneof;
                 if (!g.system.empty()) item.system = g.system;
@@ -463,6 +537,35 @@ void RomOutboxTab::refresh() {
             }
             std::vector<std::string> names;
             if (RomArchive::list_names(z.string(), names)) item.files = (int)names.size();
+            m_items.push_back(std::move(item));
+        }
+        // CHDs, one folder per set as the DAT's layout puts them.
+        std::vector<fs::path> disks;
+        for (auto it = fs::directory_iterator(sysdir, ec); it != fs::directory_iterator(); ++it) {
+            if (!it->is_directory(ec)) continue;
+            for (auto f = fs::directory_iterator(it->path(), ec); f != fs::directory_iterator(); ++f)
+                if (f->is_regular_file(ec) && lower(f->path().extension().string()) == ".chd") disks.push_back(f->path());
+        }
+        std::sort(disks.begin(), disks.end());
+        for (const auto& d : disks) {
+            Item item;
+            item.disk = true;
+            item.path = d.string();
+            item.system_folder = folder;
+            item.game = d.parent_path().filename().string();
+            item.system = system_of_folder(folder);
+            item.dat_header = folder;
+            item.emulator = emulator_of_folder(folder);
+            item.bytes = fs::file_size(d, ec);
+            item.destination = destination;
+            item.dest_exists = !destination.empty() && fs::exists(fs::path(destination) / item.game / d.filename(), ec);
+            item.entry = m_manifest.find(m_manifest.relative(d.string()));
+            item.files = item.files_expected = 1;
+            Game g = m_db->getGame(item.game, item.system, item.emulator);
+            if (!g.name.empty()) {
+                item.parent = g.cloneof;
+                if (!g.system.empty()) item.system = g.system;
+            }
             m_items.push_back(std::move(item));
         }
     }
@@ -480,14 +583,17 @@ void RomOutboxTab::populate() {
         row[m_cols.include] = it.selected && !it.destination.empty();
         row[m_cols.game]    = it.game;
         row[m_cols.system]  = it.system;
-        row[m_cols.archive] = fs::path(it.path).filename().string();
+        row[m_cols.archive] = it.disk ? it.game + "/" + fs::path(it.path).filename().string()
+                                      : fs::path(it.path).filename().string();
         row[m_cols.parent]  = it.parent;
         row[m_cols.files]   = it.files_expected ? std::to_string(it.files) + "/" + std::to_string(it.files_expected) : std::to_string(it.files);
         row[m_cols.size]    = human_size(it.bytes);
         row[m_cols.mapped]  = !it.destination.empty();
         row[m_cols.destination] = it.destination.empty()
             ? Glib::ustring(_("no destination : map this system folder"))
-            : Glib::ustring((fs::path(it.destination) / fs::path(it.path).filename()).string() + (it.dest_exists ? _("  (exists)") : ""));
+            : Glib::ustring((fs::path(it.destination) / (it.disk ? fs::path(it.game) / fs::path(it.path).filename()
+                                                                  : fs::path(it.path).filename())).string()
+                            + (it.dest_exists ? _("  (exists)") : ""));
         std::string fix;
         if (it.entry) {
             fix = it.entry->action == RomManifest::action::Rebuilt ? _("rebuilt") : _("moved");
@@ -708,34 +814,58 @@ void RomOutboxTab::worker_move() {
     MoveJob& job = m_job;
 
     // The DAT is the ground truth for what "correct" means : not whatever
-    // happens to already sit in the library. Same rule as the scan and the
-    // audit (RomResolve), with the library's own archives at hand so that an
-    // inherited ROM of a split set is looked for in the parent's.
+    // happens to already sit in the library. The archive must hold every
+    // entry its set's DAT, read with that DAT's merge mode, lists for it
+    // (DatLayout), exactly as the audit will judge it once moved.
+    //
+    // Per emulator : the outbox can hold sets of both, each checked against
+    // its own DAT.
     push_progress(0.0, _("Indexing the library…"));
-    const RomResolve::SetStyle style = RomResolve::load_style();
-    RomResolve::CacheIndex library_index(m_db, job.paths.roms_paths);
-    RomResolve::ArchiveLookup archive_for = [&](const Game& g) { return library_index.for_game(g); };
-    RomResolve::GameLookup    game_for    = [&](const std::string& n, const std::string& s) { return m_db->getGame(n, s); };
+    std::map<std::string, std::unique_ptr<RomResolve::LayoutBook>> books;
+    auto book_of = [&](const std::string& emulator) -> RomResolve::LayoutBook& {
+        auto it = books.find(emulator);
+        if (it == books.end())
+            it = books.emplace(emulator, std::make_unique<RomResolve::LayoutBook>(m_db, emulator)).first;
+        return *it->second;
+    };
     auto verify = [&](const Item& it, std::string& reason) -> bool {
-        Game game = m_db->getGame(it.game, it.system);
-        if (game.roms.empty()) { reason = "not found in the DAT for system \"" + it.system + "\""; return false; }
+        RomResolve::LayoutBook& book = book_of(it.emulator);
+        const Game* game = book.game(it.game, it.system);
+        if (!game) { reason = "not found in the DAT for system \"" + it.system + "\""; return false; }
+        const DatLayout::Archive* layout = book.archive_for(*game);
+        if (it.disk) {
+            // A CHD : its set's archive must list a disk of that name, and
+            // the SHA1 its header declares must be that disk's.
+            if (!layout || layout->name != game->name) { reason = "its DAT expects no disk in this folder"; return false; }
+            const std::string name = fs::path(it.path).stem().string();
+            const std::string sha1 = RomResolve::chd_header_sha1(it.path);
+            if (sha1.empty()) { reason = "not a readable CHD"; return false; }
+            for (const auto& d : layout->disks) {
+                if (d.name != name) continue;
+                if (d.sha1 == sha1) return true;
+                reason = "SHA1 mismatch for " + name + ".chd (the DAT expects " + d.sha1 + ", the file declares " + sha1 + ")";
+                return false;
+            }
+            reason = "its DAT lists no disk " + name + " for " + game->name;
+            return false;
+        }
+        if (!layout || layout->entries.empty()) { reason = "its DAT expects no archive for this set"; return false; }
+        if (layout->name != game->name) { reason = "its DAT puts it in " + layout->name + "'s archive"; return false; }
         std::vector<RomArchive::Entry> entries;
         if (!RomArchive::read_entries(it.path, entries)) { reason = "cannot read the archive"; return false; }
         RomResolve::Archive incoming;
         incoming.path = it.path;
         for (const auto& e : entries) incoming.add(e.name, e.crc);
-        RomResolve::Verdict v = RomResolve::evaluate(game, &incoming, style, archive_for, game_for);
-        if (v.status == "available") return true;
-        for (const auto& r : v.roms) {
-            if (r.state == RomResolve::RomState::Present) continue;
-            if (r.state == RomResolve::RomState::Absent)
-                reason = "missing ROM required by the DAT: " + r.name + (r.inherited ? " (inherited : the parent/BIOS set is not in the library)" : "");
-            else if (r.state == RomResolve::RomState::Corrupt) reason = "CRC mismatch for " + r.name;
-            else reason = "wrong entry name for " + r.name + " (found as " + r.found_as + ")";
+        for (const auto& entry : layout->entries) {
+            std::string found;
+            const auto state = RomResolve::probe_rom(&incoming, entry.name, entry.crc, &found);
+            if (state == RomResolve::RomState::Present) continue;
+            if (state == RomResolve::RomState::Absent)       reason = "missing ROM required by the DAT: " + entry.name;
+            else if (state == RomResolve::RomState::Corrupt) reason = "CRC mismatch for " + entry.name;
+            else reason = "wrong entry name for " + entry.name + " (found as " + found + ")";
             return false;
         }
-        reason = "does not satisfy the DAT";
-        return false;
+        return true;
     };
 
     RomManifest::Manifest outbox_manifest = RomManifest::Manifest::load(job.paths.outbox);
@@ -746,9 +876,11 @@ void RomOutboxTab::worker_move() {
         if (m_cancelled) break;
         const Item& it = job.items[i];
         fs::path src(it.path);
-        fs::path dest = fs::path(it.destination) / src.filename();
+        const fs::path dest_dir = it.disk ? fs::path(it.destination) / it.game : fs::path(it.destination);
+        fs::path dest = dest_dir / src.filename();
         push_progress(100.0 * (double)i / (double)job.items.size(), src.filename().string());
         touched_dirs.insert(src.parent_path());
+        if (it.disk) touched_dirs.insert(src.parent_path().parent_path());
 
         std::string reason;
         if (!verify(it, reason)) {
@@ -756,7 +888,7 @@ void RomOutboxTab::worker_move() {
             ++job.refused;
             continue;
         }
-        fs::create_directories(it.destination, ec);
+        fs::create_directories(dest_dir, ec);
         const bool exists = fs::exists(dest, ec);
         const std::string rel = outbox_manifest.relative(it.path);
         if (exists) {
@@ -814,14 +946,16 @@ void RomOutboxTab::worker_move() {
         }
         outbox_manifest.remove(rel, RomManifest::outcome::MovedToLibrary);
         ++job.moved;
+        job.moved_emulators.insert(it.emulator);
         push_log("moved " + src.filename().string() + " → " + dest.string());
     }
 
     // A system folder emptied by the move above shouldn't linger : once its
     // contents are in the library, the outbox goes back to being empty.
-    for (const auto& dir : touched_dirs) {
+    // Deepest first : a set's CHD folder, then the system folder holding it.
+    for (auto dir = touched_dirs.rbegin(); dir != touched_dirs.rend(); ++dir) {
         std::error_code rmec;
-        if (fs::is_empty(dir, rmec) && !rmec) fs::remove(dir, rmec);
+        if (fs::is_empty(*dir, rmec) && !rmec) fs::remove(*dir, rmec);
     }
     if (job.moved + job.identical > 0) outbox_manifest.save();
     if (job.replaced > 0 && job.keep_replaced) quarantine_manifest.save();
@@ -885,12 +1019,15 @@ void RomOutboxTab::on_worker_finished() {
     status += ".";
     flash(status);
     if (m_job.replaced && m_job.keep_replaced) m_sig_quarantine.emit();
-    if (m_job.moved > 0) m_sig_scan.emit();
+    // One scan per library the move wrote into.
+    if (m_job.moved > 0) for (const auto& emulator : m_job.moved_emulators) m_sig_scan.emit(emulator);
 }
 
 void RomOutboxTab::set_busy(bool busy) {
     m_busy = busy;
     m_btn_refresh->set_sensitive(!busy);
+    m_btn_browse->set_sensitive(!busy);
+    m_entry_folder.set_sensitive(!busy);
     m_btn_destinations->set_sensitive(!busy);
     m_btn_select_all->set_sensitive(!busy);
     m_btn_select_none->set_sensitive(!busy);

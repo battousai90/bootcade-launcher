@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <map>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -32,13 +34,12 @@ Report audit(std::shared_ptr<DatabaseManager> db,
              const std::vector<std::string>& roms_paths,
              bool problems_only,
              const RomInbox::Callbacks& cb,
-             const std::set<std::string>& dat_sources) {
+             const std::set<std::string>& dat_sources,
+             const std::string& emulator) {
     Report rep;
-    rep.style = RomResolve::load_style();
+    rep.emulator = emulator;
 
     // ── 1. Index the scan cache ──────────────────────────────────────────────
-    // The same index the scanner's split pass reads, so the two pick the same
-    // archive for a set and judge it by the same rule.
     report(cb, 2.0, _("Reading the ROM cache…"));
     RomResolve::CacheIndex index(db, roms_paths);
 
@@ -50,27 +51,35 @@ Report audit(std::shared_ptr<DatabaseManager> db,
             crc_to_archive.emplace(crc, path);
 
     rep.pool_empty = index.empty();
-    log(cb, "Indexed " + std::to_string(index.size()) + " archive(s) from the scan cache; collection style: "
-            + RomResolve::to_string(rep.style) + ".");
-    if (rep.pool_empty) {
-        log(cb, "  WARNING: the cache is empty : run a ROM scan first.");
-        report(cb, 100.0, _("Nothing to audit."));
-        return rep;
-    }
+    log(cb, "Indexed " + std::to_string(index.size()) + " archive(s) from the scan cache.");
 
     // ── 2. Walk every game in the database ───────────────────────────────────
     report(cb, 12.0, _("Loading the game list…"));
-    std::vector<Game> games = db->getAllGames();
-    // The romof chain and the orphan check still see every game the database
-    // holds : a parent outside the group is still a parent. Only the verdicts
-    // reported are the group's.
+    // One emulator's sets, those of the audited group. The romof chain and the
+    // orphan check still see every set of that emulator : a parent outside
+    // the group is still a parent. They never see the other emulator's :
+    // MAME's mslug is not the parent of a FinalBurn Neo clone, and a MAME zip
+    // is not "a known game" to a FinalBurn Neo library, nor the reverse. Only
+    // the verdicts reported are the group's.
+    std::vector<Game> games = db->getAllGames(emulator);
     auto in_group = [&](const Game& g) { return dat_sources.empty() || dat_sources.count(g.dat_source) > 0; };
-    rep.total = 0;
-    for (const auto& g : games) if (in_group(g)) rep.total++;
+    // No archive in the cache : nothing can be said about zips before a
+    // scan. CHDs are judged on disk by their headers and need no scan : a
+    // group of CHD DATs only is audited all the same.
+    if (rep.pool_empty) {
+        bool zips_expected = false;
+        for (const auto& g : games) if (in_group(g) && !g.roms.empty()) { zips_expected = true; break; }
+        if (zips_expected) {
+            log(cb, "  WARNING: the cache is empty : run a ROM scan first.");
+            report(cb, 100.0, _("Nothing to audit."));
+            return rep;
+        }
+        rep.pool_empty = false;
+    }
 
     // Sets the user asked not to hear about again (see DatabaseManager::ignoreSet).
     std::unordered_set<std::string> ignored;
-    for (const auto& ig : db->getIgnoredSets()) ignored.insert(ig.name + '\x1f' + ig.system);
+    for (const auto& ig : db->getIgnoredSets(emulator)) ignored.insert(ig.name + '\x1f' + ig.system);
 
     // Every short name the current DAT knows about, regardless of which exact
     // archive ends up "claimed" for it. The same short name legitimately exists
@@ -81,27 +90,43 @@ Report audit(std::shared_ptr<DatabaseManager> db,
     // the look-alikes. The other must not be reported as an orphan just
     // because it lost that coin flip; it is exactly as real a game.
     std::unordered_set<std::string> known_stems;
+    std::unordered_map<std::string, std::vector<size_t>> games_by_stem;
     std::unordered_map<std::string, size_t> by_key;
     by_key.reserve(games.size());
     for (size_t i = 0; i < games.size(); ++i) {
         known_stems.insert(lower(games[i].name));
+        games_by_stem[lower(games[i].name)].push_back(i);
         by_key[games[i].name + '\x1f' + games[i].system] = i;
     }
-
-    // The romof chain is walked through this in-memory list, never the database.
-    RomResolve::GameLookup game_for = [&](const std::string& name, const std::string& system) -> Game {
-        auto it = by_key.find(name + '\x1f' + system);
-        return it == by_key.end() ? Game{} : games[it->second];
-    };
-    RomResolve::ArchiveLookup archive_for = [&](const Game& g) { return index.for_game(g); };
-
-    // Archives named after no game that a set nevertheless claimed by content
-    // (see below) : real games, not orphans.
-    std::unordered_set<std::string> claimed_by_content;
 
     // Every set's verdict, for the BIOS dependency count below.
     std::unordered_map<std::string, std::string> status_by_key;
     status_by_key.reserve(games.size());
+
+    // What each DAT of the group says every archive of its folder holds :
+    // its sets, read with ITS merge mode (DatLayout). A set is judged against
+    // that list and nothing else : never against a parent's or a device's
+    // archive.
+    const auto readings = RomResolve::dat_readings(db);
+    std::map<std::string, std::vector<const Game*>> sets_by_dat;
+    for (const auto& g : games) if (in_group(g)) sets_by_dat[g.dat_source].push_back(&g);
+    std::map<std::string, std::unique_ptr<DatLayout::Layout>> layouts;
+    std::map<std::string, std::string> folder_of;   // DAT file → its folder
+    for (const auto& [dat, sets] : sets_by_dat) {
+        auto rd = readings.find(dat);
+        const std::string mode = rd == readings.end() ? std::string() : rd->second.mode;
+        folder_of[dat] = rd == readings.end() ? std::string() : rd->second.folder;
+        layouts[dat] = std::make_unique<DatLayout::Layout>(sets, mode);
+        log(cb, "  " + dat + " : " + (mode.empty() ? std::string("read as it is") : mode + " sets")
+                + ", folder \"" + folder_of[dat] + "\"");
+    }
+    // Only a set the DAT expects something for is counted.
+    rep.total = 0;
+    for (const auto& [dat, sets] : sets_by_dat)
+        for (const Game* g : sets) {
+            const auto& lay = *layouts[dat];
+            if (!lay.entries_of(g->name).empty() || !lay.disks_of(g->name).empty()) rep.total++;
+        }
 
     for (size_t gi = 0; gi < games.size(); ++gi) {
         if (cancelled(cb)) { rep.cancelled = true; return rep; }
@@ -110,141 +135,111 @@ Report audit(std::shared_ptr<DatabaseManager> db,
                    _("Auditing ") + std::to_string(gi) + " / " + std::to_string(games.size()));
 
         const Game& g = games[gi];
-        if (g.roms.empty() || !in_group(g)) continue;
+        if (!in_group(g)) continue;
+        const DatLayout::Layout& lay = *layouts[g.dat_source];
+        const DatLayout::Archive* arc = lay.archive_of(g.name);
+        const auto& need       = lay.entries_of(g.name);
+        const auto& need_disks = lay.disks_of(g.name);
+        if (!arc || (need.empty() && need_disks.empty())) continue;   // the DAT expects nothing for it
+        const std::string& folder = folder_of[g.dat_source];
 
         GameEntry e;
-        e.name        = g.name;
-        e.system      = g.system;
-        e.description = g.description;
-        e.cloneof     = g.cloneof;
-        e.is_bios     = g.is_bios;
-        e.dat_header  = g.dat_header.empty()
-                          ? ("FinalBurn Neo - " + g.system + " Games") : g.dat_header;
+        e.name           = g.name;
+        e.system         = g.system;
+        e.description    = g.description;
+        e.cloneof        = g.cloneof;
+        e.is_bios        = g.is_bios;
+        e.dat_header     = folder;
+        e.archive_is_own = arc->name == g.name;
 
-        // Which archive should hold this set? By name first (the index scores
-        // same-named candidates and breaks ties by folder, see CacheIndex).
-        const RomResolve::Archive* own = index.for_game(g);
-        if (own) {
-            e.archive = own->path;
-            e.archive_found = true;
-        }
-
-        // No archive carries this set's name. The scanner falls back to matching on
-        // content alone, so a correctly-dumped set inside a differently-named ZIP
-        // still counts as available : mirror that, or the audit would invent
-        // "missing" sets the scanner is happy with. Mirror it exactly : the
-        // scanner only ever tries archives whose name matches NO game, and
-        // only upgrades a set every ROM of which is in there. An archive that
-        // carries another game's name is that game's, whatever it shares :
-        // a clone pinned on its parent's zip by the two ROMs they have in
-        // common would report the parent's own data as "extra", and Fix
-        // would then pull a correct set apart.
-        if (!own) {
-            // A CRC shared across many archives (a BIOS, a common expansion ROM)
-            // cannot tell one archive from another and must not count as
-            // evidence. Same reasoning, same threshold, as RomInbox's
-            // content-discovery axis.
-            constexpr size_t kMaxArchivesPerDiscriminatingCrc = 32;
-            std::unordered_map<std::string, int> hits;
-            int wanted = 0;   // the set's own ROMs with a CRC : what must all be there
-            for (const auto& rom : g.roms) {
-                if (rom.crc.empty()) continue;
-                if (rom.merge.empty()) ++wanted;
-                unsigned long want = strtoul(rom.crc.c_str(), nullptr, 16);
-                std::unordered_set<std::string> seen;
-                auto range = crc_to_archive.equal_range(want);
-                for (auto it = range.first; it != range.second; ++it) {
-                    const std::string stem = lower(fs::path(it->second).stem().string());
-                    if (known_stems.count(stem)) continue;   // named after a game : that game's
-                    seen.insert(it->second);
-                }
-                if (seen.size() > kMaxArchivesPerDiscriminatingCrc) continue;
-                for (const auto& path : seen) if (rom.merge.empty()) hits[path]++;
+        // The archive : named after `arc` (the set's own, or its parent's in
+        // merged), in the DAT's folder. Several candidates (the same folder
+        // name under two roots) : the one that holds most of what is needed.
+        const RomResolve::Archive* own = nullptr;
+        if (!arc->entries.empty()) {
+            int best = -1;
+            for (const RomResolve::Archive* cand : index.in_folder(folder, arc->name)) {
+                int score = 0;
+                for (size_t i : need)
+                    if (RomResolve::probe_rom(cand, arc->entries[i].name, arc->entries[i].crc) == RomState::Present) ++score;
+                if (score > best) { best = score; own = cand; }
             }
-            int best_hits = 0;
-            for (const auto& [path, n] : hits)
-                if (n > best_hits) { best_hits = n; e.archive = path; }
-            if (best_hits > 0 && best_hits >= wanted) {
+            if (own) {
+                e.archive = own->path;
                 e.archive_found = true;
-                own = index.by_path(e.archive);
-                claimed_by_content.insert(e.archive);
+            }
+        }
+
+        std::string zip_status;
+        if (!need.empty()) {
+            bool all_present = true, all_correct = true;
+            for (size_t i : need) {
+                const DatLayout::Entry& x = arc->entries[i];
+                RomEntry r;
+                r.name      = x.name;
+                r.crc       = x.crc;
+                r.size      = x.size;
+                r.inherited = !x.owner.empty() && x.owner != g.name;
+                r.state     = RomResolve::probe_rom(own, x.name, x.crc, &r.found_as, &r.found_crc);
+                if (r.found_as == x.name) r.found_as.clear();
+                if (r.state == RomState::Corrupt || r.state == RomState::Absent) {
+                    // A good copy anywhere else in the library : the set can be
+                    // rebuilt locally instead of re-downloaded.
+                    auto range = crc_to_archive.equal_range(r.crc);
+                    for (auto it = range.first; it != range.second; ++it)
+                        if (!own || it->second != own->path) { r.found_in = it->second; break; }
+                }
+                if (r.state == RomState::Corrupt)        { e.corrupt++; all_correct = false; }
+                else if (r.state == RomState::Absent)    { e.absent++;  all_present = false; }
+                else if (r.state == RomState::WrongName) { e.wrong++;   all_correct = false; }
+                e.roms.push_back(std::move(r));
+            }
+            zip_status = !all_present ? "missing" : !all_correct ? "incorrect" : "available";
+
+            // Entries the archive holds and its DAT does not list for it
+            // (RomVault's "not needed here"). Only on the archive's own set :
+            // a merged clone's row speaks for its part of its parent's archive.
+            if (own && e.archive_is_own) {
+                std::unordered_set<std::string> required;
+                for (const auto& x : arc->entries) required.insert(x.name);
+                for (const auto& r : e.roms) if (!r.found_as.empty()) required.insert(r.found_as);
+                for (const auto& name : own->entries)
+                    if (!required.count(name) && !required.count(RomScanner::normalize_name(name))
+                        && !required.count(DatLayout::entry_path(name)))
+                        e.extra_entries.push_back(name);
+            }
+        }
+        e.status = zip_status;
+
+        // Its CHDs, in the folder of its archive's set.
+        if (!need_disks.empty()) {
+            std::vector<DatLayout::DiskEntry> disks;
+            for (size_t i : need_disks) disks.push_back(arc->disks[i]);
+            const RomResolve::DiskResult d = RomResolve::evaluate_layout_disks(arc->name, disks, roms_paths, folder);
+            for (const auto& v : d.disks) {
+                RomEntry r;
+                r.name       = v.name + ".chd";
+                r.state      = v.state;
+                r.is_disk    = true;
+                r.sha1       = v.sha1;
+                r.found_sha1 = v.found_sha1;
+                r.found_in   = v.path;
+                if (r.state == RomState::Absent)       e.absent++;
+                else if (r.state == RomState::Corrupt) e.corrupt++;
+                e.roms.push_back(std::move(r));
+            }
+            if (need.empty()) {
+                // A set of CHDs only : its "archive" is its folder.
+                e.is_chd        = true;
+                e.archive       = d.folder;
+                e.archive_found = !d.folder.empty();
+                e.status        = d.status;
             } else {
-                e.archive.clear();
+                e.has_disks  = true;
+                e.zip_status = zip_status;
+                e.status     = RomResolve::combine_status(zip_status, d.status);
             }
         }
-
-        // The verdict, ROM by ROM, by the one shared rule. In a split
-        // collection an inherited ROM the set's own zip lacks is looked for in
-        // the parent's, then the BIOS's, and the verdict says which one had it.
-        RomResolve::Verdict verdict = RomResolve::evaluate(g, own, rep.style, archive_for, game_for);
-        if (verdict.roms.empty()) continue;
-
-        for (const auto& v : verdict.roms) {
-            RomEntry r;
-            r.name           = v.name;
-            r.crc            = v.crc;
-            r.size           = v.size;
-            r.state          = v.state;
-            r.found_as       = v.found_as;
-            r.found_crc      = v.found_crc;
-            r.found_in       = v.found_in;
-            r.inherited      = v.inherited;
-            r.inherited_from = v.inherited_from;
-
-            if (r.state == RomState::Corrupt) {
-                e.corrupt++;
-                // Does a good copy exist anywhere else in the library? If so the
-                // set can be repaired locally instead of re-downloaded.
-                auto other = crc_to_archive.find(r.crc);
-                if (other != crc_to_archive.end()) r.found_in = other->second;
-            } else if (r.state == RomState::Absent) {
-                auto other = crc_to_archive.find(r.crc);
-                if (other != crc_to_archive.end()) r.found_in = other->second;
-                e.absent++;
-            } else if (r.state == RomState::WrongName) {
-                e.wrong++;
-            }
-            e.roms.push_back(std::move(r));
-        }
-
-        // Entries physically present in the archive that no rom above needs at
-        // all (RomVault calls these Purple/Brown: "not needed here"). Harmless
-        // for FBNeo : it only ever reads what it asks for by name : but worth
-        // surfacing so they can be swept into quarantine like anything else.
-        // An inherited ROM a split zip still carries is required-but-optional,
-        // not extra : it is in e.roms, so it never lands here.
-        // Does the archive hold anything of this set at all? A same-named zip
-        // of another system (Arcade's circus.zip next to ColecoVision's
-        // "circus") answers to the name and to nothing else : it is not this
-        // set's archive, and its content is not this set's "extra files".
-        // Reporting it as such would let Fix pull a correct set apart.
-        bool belongs = false;
-        for (const auto& r : e.roms)
-            if (r.state != RomState::Absent && r.inherited_from.empty()) { belongs = true; break; }
-        if (own && !belongs) {
-            e.archive_found = false;
-            e.archive.clear();
-            own = nullptr;
-        }
-
-        if (own && !e.archive.empty()) {
-            // DAT rom names are already canonical (e.g. "Spider-Man: Return…").
-            // Archive entry names are what needs normalizing here : many were
-            // saved with '-' where the DAT has ':' (filesystem-safe substitution)
-            // : same direction the cache itself normalizes in when built.
-            // An entry that answered a ROM under another name (found_as) is
-            // that ROM, misnamed : not an extra.
-            std::unordered_set<std::string> required;
-            for (const auto& r : e.roms) {
-                required.insert(r.name);
-                if (!r.found_as.empty() && r.inherited_from.empty()) required.insert(r.found_as);
-            }
-            for (const auto& name : own->entries)
-                if (!required.count(name) && !required.count(RomScanner::normalize_name(name)))
-                    e.extra_entries.push_back(name);
-        }
-
-        e.status  = verdict.status;
         e.ignored = ignored.count(g.name + '\x1f' + g.system) > 0;
         status_by_key[g.name + '\x1f' + g.system] = e.status;
 
@@ -254,7 +249,10 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         // too : its row still says what it is, it just is not counted.
         e.repairable = (e.status != "available");
         for (const auto& r : e.roms) {
-            if ((r.state == RomState::Absent || r.state == RomState::Corrupt) && r.found_in.empty()) {
+            // A CHD is never rebuilt : one that is not right keeps the set
+            // from being repaired, whatever `found_in` says of it.
+            if (r.is_disk ? r.state != RomState::Present
+                          : ((r.state == RomState::Absent || r.state == RomState::Corrupt) && r.found_in.empty())) {
                 e.repairable = false;
                 break;
             }
@@ -300,6 +298,11 @@ Report audit(std::shared_ptr<DatabaseManager> db,
             auto st = status_by_key.find(g.name + '\x1f' + g.system);
             if (st == status_by_key.end() || st->second == "available") continue;
             auto dep = dependents.find(g.name + '\x1f' + g.system);
+            // MAME's DATs are resolved (no romof : ROMs (split), ROMs
+            // (bios-devices), CHDs) : no set runs off another's archive, so a
+            // missing BIOS takes nothing down with it. It is one more missing
+            // set, already counted, not a line of its own.
+            if (emulator == "mame" && dep == dependents.end()) continue;
             rep.missing_bios.push_back({g.name, g.system, st->second,
                                         dep == dependents.end() ? 0 : dep->second});
         }
@@ -323,8 +326,26 @@ Report audit(std::shared_ptr<DatabaseManager> db,
     report(cb, 96.0, _("Checking for orphan archives…"));
     for (const auto& [path, a] : index.all()) {
         if (cancelled(cb)) { rep.cancelled = true; return rep; }
-        if (known_stems.count(lower(fs::path(path).stem().string()))) continue;
-        if (claimed_by_content.count(path)) continue;
+        // A name is not enough on its own : the archive must also hold some ROM
+        // of a set so named. A zip left under a set's former name (the DAT
+        // renamed MSX berserk to berzerk, and NES has a berserk of its own)
+        // carries none of the NES set's data, and hiding it for its name
+        // alone would leave it in the library for good.
+        auto named_set_holds_it = [&](const RomResolve::Archive& arc) {
+            auto it = games_by_stem.find(lower(fs::path(path).stem().string()));
+            if (it == games_by_stem.end()) return false;
+            for (size_t gi : it->second) {
+                bool any_crc = false;
+                for (const auto& rom : games[gi].roms) {
+                    if (rom.crc.empty()) continue;
+                    any_crc = true;
+                    if (arc.name_by_crc.count(strtoul(rom.crc.c_str(), nullptr, 16))) return true;
+                }
+                if (!any_crc) return true;   // nothing to check it against : trust the name
+            }
+            return false;
+        };
+        if (named_set_holds_it(a)) continue;
         if (a.entries.empty()) continue;
 
         OrphanArchive orphan;

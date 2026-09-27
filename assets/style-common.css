@@ -831,6 +831,10 @@ expander > title { min-height: 0; padding: 2px 0; }
 .cc-window .cc-num-4 { background-color: @btn_4; }
 .cc-window .cc-num-5 { background-color: @btn_5; }
 .cc-window .cc-num-6 { background-color: @btn_6; }
+/* Boutons 7 a 16 : une pastille neutre, les six couleurs restent aux six
+   boutons de la borne. */
+.cc-window .cc-num-extra { background-color: @tile_bg; }
+.cc-window .cc-num-extra .cc-num-label { color: @text; }
 
 /* La tuile qui porte le pictogramme d'une direction. */
 .cc-glyph {
@@ -1369,4 +1373,40 @@ expander > title { min-height: 0; padding: 2px 0; }
 .set-window .set-log text {
   background-color: transparent;
   color: @text;
+}
+
+/* ── Bandeau des emulateurs, au-dessus des filtres ─────────────────────────
+   Deux logos qui disent quel catalogue on regarde. L'etat se lit a
+   l'opacite plutot qu'a une bordure : les logos sont deja colores, et un
+   cadre de plus alourdirait une colonne qui porte surtout du texte. */
+
+
+
+
+
+/* ── Selecteur d'emulateur ─────────────────────────────────────────────────
+   L'encart au-dessus des filtres, et les cartes de la modale de choix. */
+.emu-picker {
+  padding: 9px 10px;
+  border-radius: 10px;
+  border-bottom: 1px solid @border;
+}
+
+.emu-picker:hover {
+  background-color: @surface_hover;
+}
+
+.emu-card {
+  border-radius: 12px;
+  border: 1px solid @border;
+  background-color: @surface;
+}
+
+.emu-card:hover {
+  background-color: @surface_hover;
+  border-color: @border_strong;
+}
+
+.emu-card.selected {
+  border-color: @accent;
 }

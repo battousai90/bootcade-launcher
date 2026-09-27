@@ -13,6 +13,10 @@ struct ModelColumns : public Gtk::TreeModel::ColumnRecord {
     // ISO-8601 or empty. Carried in the model so "recently played" can sort
     // without a database round-trip per row.
     Gtk::TreeModelColumn<Glib::ustring> m_col_last_played;
+    // De quel catalogue vient la ligne : « fbneo » ou « mame ». Sans elle,
+    // deux machines de meme nom dans les deux catalogues seraient
+    // indiscernables au moment de lancer.
+    Gtk::TreeModelColumn<Glib::ustring> m_col_emulator;
     Gtk::TreeModelColumn<Glib::ustring> m_col_name;
     Gtk::TreeModelColumn<Glib::ustring> m_col_title;
     Gtk::TreeModelColumn<Glib::ustring> m_col_year;
@@ -40,6 +44,7 @@ struct ModelColumns : public Gtk::TreeModel::ColumnRecord {
         add(m_col_favorite);
         add(m_col_hiscore);
         add(m_col_last_played);
+        add(m_col_emulator);
         add(m_col_name);
         add(m_col_title);
         add(m_col_year);

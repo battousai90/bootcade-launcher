@@ -1,15 +1,63 @@
 // src/ThumbnailDownloader.cpp
 #include "ThumbnailDownloader.h"
+#include "AppContext.h"
 #include "SystemPrefix.h"
 #include <curl/curl.h>
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
 #include <sstream>
 #include <iomanip>
 
-const std::string ThumbnailDownloader::GITHUB_THUMBNAILS_BASE = 
-    "https://raw.githubusercontent.com/finalburnneo/FBNeo-extras/main/";
+namespace ArtworkSources {
+
+std::vector<std::string> defaults_for(const std::string& emulator) {
+    if (emulator.empty() || emulator == "fbneo")
+        return {"https://raw.githubusercontent.com/finalburnneo/FBNeo-extras/main/"};
+    return {};
+}
+
+std::vector<std::string> load_for(const std::string& emulator) {
+    const std::string id = emulator.empty() ? std::string("fbneo") : emulator;
+
+    nlohmann::json j;
+    std::ifstream in(AppContext::get_config_path());
+    if (in) { try { in >> j; } catch (...) { j = nlohmann::json{}; } }
+
+    std::vector<std::string> out;
+    if (j.contains("emulators") && j["emulators"].is_object() &&
+        j["emulators"].contains(id) && j["emulators"][id].is_object()) {
+        const auto& e = j["emulators"][id];
+        if (e.contains("artwork_sources") && e["artwork_sources"].is_array()) {
+            for (const auto& v : e["artwork_sources"]) {
+                // Une chaine aujourd'hui ; un objet le jour ou une source
+                // portera autre chose que son adresse. Accepter les deux des
+                // maintenant evite qu'un fichier ecrit par une version plus
+                // recente vide la liste au lieu de la lire.
+                std::string url;
+                if (v.is_string())                                 url = v.get<std::string>();
+                else if (v.is_object() && v.contains("url") &&
+                         v["url"].is_string())                     url = v["url"].get<std::string>();
+                if (!url.empty()) out.push_back(url);
+            }
+            // La cle existe et elle est vide : c'est un choix, pas un oubli.
+            // Y remettre les valeurs d'usine irait contre ce que le joueur a
+            // demande en retirant la derniere source.
+            return out;
+        }
+    }
+    return defaults_for(id);
+}
+
+std::string artwork_url(const std::string& base, const std::string& folder,
+                        const std::string& encoded_name) {
+    std::string root = base;
+    while (!root.empty() && root.back() == '/') root.pop_back();
+    return root + "/" + folder + "/" + encoded_name + ".png";
+}
+
+}  // namespace ArtworkSources
 
 // libcurl is initialised once, in main(), before any thread exists : this
 // downloader used to init it in its constructor and clean it up in its
@@ -85,6 +133,7 @@ void ThumbnailDownloader::download_worker(const std::vector<Game> games,
                                          ProgressCallback progress_callback) {
     m_is_downloading.store(true);
     
+    std::map<std::string, std::vector<std::string>> sources;
     int total_games = games.size();
     int current_index = 0;
     int successful_downloads = 0;
@@ -121,8 +170,17 @@ void ThumbnailDownloader::download_worker(const std::vector<Game> games,
             continue;
         }
         
+        /* Les sources sont relues UNE fois par emulateur rencontre : les
+         * lire a chaque jeu ouvrirait config.json trente mille fois pour y
+         * trouver la meme chose. */
+        auto known = sources.find(game.emulator);
+        if (known == sources.end())
+            known = sources.emplace(game.emulator,
+                                    ArtworkSources::load_for(game.emulator)).first;
+
         // Télécharger le artwork - use ROM name with system prefix
-        if (download_single_file(game.name, game.system, artwork_dir, artwork_type)) {
+        if (download_single_file(game.name, game.system, game.emulator, artwork_dir,
+                                 artwork_type, known->second)) {
             successful_downloads++;
             std::cout << "[SUCCESS] Downloaded: " << filename << std::endl;
         } else {
@@ -153,8 +211,10 @@ void ThumbnailDownloader::download_worker(const std::vector<Game> games,
 
 bool ThumbnailDownloader::download_single_file(const std::string& rom_name,
                                               const std::string& system,
+                                              const std::string& emulator,
                                               const std::string& artwork_dir,
-                                              ArtworkType artwork_type) {
+                                              ArtworkType artwork_type,
+                                              const std::vector<std::string>& sources) {
     // Déterminer le dossier selon le type d'artwork
     const char* folder = (artwork_type == ArtworkType::Previews) ? "previews" : "titles";
 
@@ -176,62 +236,68 @@ bool ThumbnailDownloader::download_single_file(const std::string& rom_name,
         }
     }
 
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        return false;
-    }
+    /* Les sources, dans l'ordre, jusqu'a ce qu'une reponde.
+     *
+     * Une image absente d'un depot est le cas ORDINAIRE, pas une panne :
+     * aucun depot ne couvre un catalogue entier. C'est pourquoi on passe a
+     * la suivante en silence, et qu'on ne rend false qu'apres les avoir
+     * toutes essayees. */
+    const std::string encoded = url_encode(filename_with_prefix);
+    for (const auto& base : sources) {
+        if (base.empty()) continue;
+        if (m_cancel_requested.load()) return false;
 
-    // Construire l'URL complète pour FBNeo-extras avec préfixe système
-    std::string url = GITHUB_THUMBNAILS_BASE + folder + "/" + url_encode(filename_with_prefix) + ".png";
+        const std::string url = ArtworkSources::artwork_url(base, folder, encoded);
 
-    // Only show debug info for successful downloads
-    // std::cout << "[DEBUG] Type: " << folder << std::endl;
-    // std::cout << "[DEBUG] Trying to download: " << url << std::endl;
-    
-    // Ouvrir le fichier de destination
-    std::ofstream file(filepath, std::ios::binary);
-    if (!file.is_open()) {
+        CURL* curl = curl_easy_init();
+        if (!curl) return false;
+
+        std::ofstream file(filepath, std::ios::binary);
+        if (!file.is_open()) {
+            curl_easy_cleanup(curl);
+            return false;
+        }
+
+        DownloadData data;
+        data.file = &file;
+        data.total_size = 0;
+        data.downloaded_size = 0;
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &data);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);  // 30 secondes timeout
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, "FBNeo-Launcher/1.0");
+        curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);  // Fail sur HTTP errors
+
+        CURLcode res = curl_easy_perform(curl);
+
+        long response_code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+
         curl_easy_cleanup(curl);
-        return false;
+        file.close();
+
+        if (res == CURLE_OK && response_code == 200 && data.downloaded_size > 0)
+            return true;
+
+        // Un fichier vide ou partiel ferait passer la source suivante pour
+        // deja servie : la bibliotheque afficherait alors une vignette vide.
+        std::error_code ec;
+        std::filesystem::remove(filepath, ec);
     }
-    
-    DownloadData data;
-    data.file = &file;
-    data.total_size = 0;
-    data.downloaded_size = 0;
-    
-    // Configuration de CURL
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &data);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);  // 30 secondes timeout
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "FBNeo-Launcher/1.0");
-    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);  // Fail sur HTTP errors
-    
-    // Effectuer le téléchargement
-    CURLcode res = curl_easy_perform(curl);
-    
-    long response_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-    
-    curl_easy_cleanup(curl);
-    file.close();
-    
-    if (res != CURLE_OK || response_code != 200) {
-        // Supprimer le fichier partiel en cas d'erreur
-        std::filesystem::remove(filepath);
-        return false;
-    }
-    
-    return true;
+
+    (void)emulator;
+    return false;
 }
 
 void ThumbnailDownloader::download_single_artwork(const std::string& game_name,
                                                  const std::string& game_system,
                                                  const std::string& artwork_dir,
                                                  ArtworkType artwork_type,
-                                                 ProgressCallback progress_callback) {
+                                                 ProgressCallback progress_callback,
+                                                 const std::string& emulator) {
     if (m_is_downloading.load()) {
         std::cout << "[WARNING] Download already in progress" << std::endl;
         return;
@@ -256,7 +322,9 @@ void ThumbnailDownloader::download_single_artwork(const std::string& game_name,
     }
     
     // Download the single artwork using ROM name with system info
-    bool success = download_single_file(game_name, game_system, artwork_dir, artwork_type);
+    bool success = download_single_file(game_name, game_system, emulator, artwork_dir,
+                                       artwork_type,
+                                       ArtworkSources::load_for(emulator));
     
     if (success) {
         std::cout << "[SUCCESS] Downloaded " << artwork_type_str << " for: " << game_name << std::endl;
@@ -292,79 +360,6 @@ std::string ThumbnailDownloader::url_encode(const std::string& text) {
     return result;
 }
 
-std::string ThumbnailDownloader::clean_filename_for_github(const std::string& description) {
-    std::string cleaned = description;
-    
-    // Supprimer les suffixes communs qui ne sont pas dans les noms GitHub
-    size_t pos;
-    
-    // Supprimer ": The ..." et remplacer par juste le nom principal
-    if ((pos = cleaned.find(": The ")) != std::string::npos) {
-        cleaned = cleaned.substr(0, pos);
-    }
-    if ((pos = cleaned.find(": ")) != std::string::npos) {
-        cleaned = cleaned.substr(0, pos);
-    }
-    
-    // Supprimer les parenthèses et leur contenu (sauf pour les apostrophes au début)
-    if (cleaned[0] != '\'') {  // Garder les noms comme "'88 Games"
-        if ((pos = cleaned.find(" (")) != std::string::npos) {
-            cleaned = cleaned.substr(0, pos);
-        }
-    }
-    
-    // Nettoyer les caractères problématiques mais garder les apostrophes importantes
-    // Les apostrophes au début sont importantes pour GitHub ('88 Games, '96 Flag Rally)
-    
-    return cleaned;
-}
-
 std::string ThumbnailDownloader::get_system_prefix(const std::string& system) {
     return get_fbneo_system_prefix(system);
-}
-
-std::string ThumbnailDownloader::get_repository_for_system(const std::string& system) {
-    // Mapping système (valeurs réelles stockées en base, cf. SystemPrefix.cpp)
-    // vers le repository GitHub finalburnneo/FBNeo-extras correspondant. Les
-    // comparaisons précédentes utilisaient des clés à underscores ("MegaDrive",
-    // "Sinclair_ZX_Spectrum"...) qui ne correspondaient à aucune valeur réelle
-    // : tout retombait silencieusement sur Arcade.
-    if (system == "Neo Geo") {
-        return "SNK_-_Neo_Geo";
-    } else if (system == "SuprGrafx" || system == "NEC SGX") {
-        return "NEC_-_PC_Engine_SuperGrafx";
-    } else if (system == "SNES") {
-        return "Nintendo_-_Super_Nintendo_Entertainment_System";
-    } else if (system == "ColecoVision") {
-        return "Coleco_-_ColecoVision";
-    } else if (system == "NeoGeo Pocket" || system == "Neo Geo Pocket") {
-        return "SNK_-_Neo_Geo_Pocket";
-    } else if (system == "Game Gear" || system == "Sega GameGear") {
-        return "Sega_-_Game_Gear";
-    } else if (system == "TurboGrafx 16" || system == "NEC TurboGraphX 16") {
-        return "NEC_-_PC_Engine_-_TurboGrafx_16";
-    } else if (system == "Fairchild Channel F") {
-        return "Fairchild_-_Channel_F";
-    } else if (system == "NES") {
-        return "Nintendo_-_Nintendo_Entertainment_System";
-    } else if (system == "Master System" || system == "Sega MasterSystem") {
-        return "Sega_-_Master_System_-_Mark_III";
-    } else if (system == "Megadrive" || system == "Sega Megadrive Genesis") {
-        return "Sega_-_Mega_Drive_-_Genesis";
-    } else if (system == "FDS" || system == "Nintendo FDS") {
-        return "Nintendo_-_Family_Computer_Disk_System";
-    } else if (system == "Sega SG-1000" || system == "SG-1000") {
-        return "Sega_-_SG-1000";
-    } else if (system == "MSX 1") {
-        return "Microsoft_-_MSX";
-    } else if (system == "PC-Engine" || system == "NEC PC Engine") {
-        return "NEC_-_PC_Engine_-_TurboGrafx_16"; // Fallback pour PC Engine
-    } else if (system == "ZX Spectrum" || system == "Sinclar Spectrum") {
-        return "Sinclair_-_ZX_Spectrum";
-    } else {
-        // Arcade, GBA, Astrocade Home Computer, etc. : pas de repository dédié
-        // connu chez finalburnneo/FBNeo-extras (GBA/Astrocade n'y ont jamais
-        // eu de couverture, l'upstream ne les gère pas non plus).
-        return "FBNeo_-_Arcade_Games";
-    }
 }

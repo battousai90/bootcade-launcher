@@ -22,6 +22,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,9 +47,13 @@ public:
     void log(const std::string& line, SettingsUi::LogPanel::Level level = SettingsUi::LogPanel::Level::Info);
 
     // Files landed in the library : the owner rescans, silently.
-    sigc::signal<void>& signal_scan_requested() { return m_sig_scan; }
+    // Carries the emulator whose library received sets : that one is rescanned.
+    sigc::signal<void, std::string>& signal_scan_requested() { return m_sig_scan; }
     // Files were moved to quarantine (replaced copies).
     sigc::signal<void>& signal_quarantine_changed() { return m_sig_quarantine; }
+    // The user picked another outbox folder here : the same key lives in
+    // config.json, so whoever else displays it is told.
+    sigc::signal<void, std::string>& signal_outbox_path_changed() { return m_sig_outbox_path; }
 
 private:
     enum class Collision { Replace, SkipIdentical, Skip };
@@ -57,10 +62,18 @@ private:
     void build_table();
     void build_footer();
     void save_settings() const;
+    void on_browse_folder();
+    // Take a folder the user chose : store it, tell the others, show it.
+    void apply_outbox_path(const std::string& folder);
+    void save_outbox_path(const std::string& folder) const;
 
     // Where a system folder of the outbox goes : an explicit mapping, else
     // the configured ROM directory whose name matches. Empty when neither.
     std::string destination_for(const std::string& system_folder, const Paths& p) const;
+    std::string emulator_of_folder(const std::string& system_folder) const;
+    // The library folder a system folder of the outbox goes to when the user
+    // mapped none : a ROM directory of that name, or one under them.
+    std::string auto_destination(const std::string& system_folder) const;
     void on_edit_destinations();
 
     void populate();
@@ -90,7 +103,8 @@ private:
 
     // ── Widgets ─────────────────────────────────────────────────────────────
     Gtk::Box            m_top{Gtk::ORIENTATION_HORIZONTAL, SettingsUi::kCardSpacing};
-    Gtk::Label          m_path_label;
+    Gtk::Entry          m_entry_folder;
+    Gtk::Button*        m_btn_browse = nullptr;
     Gtk::Button*        m_btn_open = nullptr;
     Gtk::Button*        m_btn_refresh = nullptr;
     Gtk::CheckButton    m_check_keep_replaced;
@@ -118,6 +132,10 @@ private:
     // ── Model ───────────────────────────────────────────────────────────────
     struct Item {
         std::string path, system_folder, game, system, dat_header, parent;
+        // A CHD in <system folder>/<set>/ : `path` is the .chd file, and it
+        // lands in <destination>/<set>/.
+        bool        disk = false;
+        std::string emulator = "fbneo";   // from the system folder's name
         std::string destination;      // resolved directory, empty when unmapped
         bool        dest_exists = false;
         uintmax_t   bytes = 0;
@@ -153,6 +171,7 @@ private:
         bool keep_replaced = true;
         std::vector<Item> items;
         int moved = 0, replaced = 0, skipped = 0, identical = 0, refused = 0, failed = 0;
+        std::set<std::string> moved_emulators;   // whose libraries to rescan
     } m_job;
     std::thread      m_worker;
     Glib::Dispatcher m_progress_dispatcher;
@@ -164,6 +183,7 @@ private:
     std::string              m_current_message;
     std::vector<std::string> m_log_messages;
 
-    sigc::signal<void> m_sig_scan;
+    sigc::signal<void, std::string> m_sig_scan;
     sigc::signal<void> m_sig_quarantine;
+    sigc::signal<void, std::string> m_sig_outbox_path;
 };

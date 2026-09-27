@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.16)
 #
 # Packaging (CPack, plus bas) l'utilise tel quel : un nom de paquet veut un
 # numero de release propre, jamais une empreinte de commit.
-project(bootcade VERSION 1.4.1 LANGUAGES CXX)
+project(bootcade VERSION 1.5.0 LANGUAGES CXX)
 
 # --- Ce que le binaire annonce -------------------------------------------
 #
@@ -164,6 +164,8 @@ unset(CMAKE_REQUIRED_LIBRARIES)
 add_executable(bootcade
     src/main.cpp
     src/MainWindow.cpp
+    src/MameCatalog.cpp
+    src/EmulatorRegistry.cpp
     src/GameRow.cpp
     src/SettingsPanel.cpp
     src/SettingsUi.cpp
@@ -173,6 +175,7 @@ add_executable(bootcade
     src/RomInbox.cpp
     src/RomAudit.cpp
     src/RomResolve.cpp
+    src/DatLayout.cpp
     src/RomManifest.cpp
     src/RomLibraryTab.cpp
     src/RomImportTab.cpp
@@ -192,6 +195,7 @@ add_executable(bootcade
     src/LoginDialog.cpp
     src/ScreenshotAssignDialog.cpp
     src/SystemPrefix.cpp
+    src/RomDownload.cpp
     src/RomCleanup.cpp
     src/SplashScreen.cpp
     src/ThumbnailDownloader.cpp
@@ -200,6 +204,7 @@ add_executable(bootcade
     src/ConfirmationDialog.cpp
     src/FilterCache.cpp
     src/ControllerManager.cpp
+    src/MameControls.cpp
     src/ControllerDialog.cpp
     src/i18n.cpp
 )
@@ -279,6 +284,20 @@ install(FILES packaging/${APP_ID}.metainfo.xml
 install(FILES assets/logo.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
         RENAME ${APP_ID}.svg)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Outils de developpement, jamais livres aux joueurs : OFF par defaut, donc
+# absents du Flatpak, des paquets et des releases, et sans regle install().
+#   bootcade-learn : recoit le lien bootcade-learn:// du bouton « Apprendre »
+#   de l'admin des scores, lance le jeu et envoie captures F6 et fichier de
+#   scores (tools/bootcade_learn.cpp, tools/bootcade-learn.desktop).
+# ─────────────────────────────────────────────────────────────────────────────
+option(BOOTCADE_DEV_TOOLS "Build developer-only tools (never shipped)" OFF)
+if(BOOTCADE_DEV_TOOLS)
+    add_executable(bootcade-learn tools/bootcade_learn.cpp src/AppContext.cpp)
+    target_include_directories(bootcade-learn PRIVATE src ${CURL_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS})
+    target_link_libraries(bootcade-learn ${CURL_LIBRARIES} ${SQLITE3_LIBRARIES})
+endif()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CPack : produces the .deb and the .tar.gz. The AppImage and the Flatpak are

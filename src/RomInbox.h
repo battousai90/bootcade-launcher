@@ -38,10 +38,11 @@ struct PiecePlan {
     uint64_t      size = 0;
     PieceSource   src;
     bool          resolved = false;
-    // The DAT marks this ROM merge= : it belongs to the parent or the BIOS. In
-    // a split collection it is left out of the produced ZIP and its absence
-    // from every source is not a gap : FBNeo reads it from the parent's.
-    bool          inherited = false;
+    // The set the ROM belongs to when it is not the archive's own : a clone
+    // in its parent's merged archive, a device in a non-merged set.
+    std::string   owner;
+    // A CHD's identity : the SHA1 its header declares (no CRC applies).
+    std::string   sha1;
 };
 
 // A DAT ROM that could be found neither in the inbox nor in the library. Carries
@@ -59,10 +60,13 @@ enum class Action {
     AlreadyInLibrary, // the library already holds this set correctly; nothing to do
 };
 
+// One archive to produce, as the DAT of its set, read with that DAT's merge
+// mode, lays it out (DatLayout) : `game_name` is the archive's set (a merged
+// clone's parent), `pieces` every entry it holds.
 struct SetPlan {
     std::string game_name;
     std::string system;
-    std::string dat_header;      // raw DAT header = outbox subfolder name
+    std::string dat_header;      // the folder of its DAT = outbox subfolder name
     std::string description;
     Action      action = Action::Incomplete;
     std::string dest_path;       // <outbox>/<dat_header>/<game_name>.zip
@@ -77,6 +81,12 @@ struct SetPlan {
     // tells a wrong build from a stray file.
     struct ExtraEntry { std::string name; unsigned long crc = 0; uint64_t size = 0; };
     std::vector<ExtraEntry>  extra_entries;
+    // A disk image (CHD) rather than an archive : `dest_path` is
+    // <outbox>/<DAT folder>/<set>/<disk>.chd, `trigger_archive` the CHD file,
+    // and the only action is Move (or AlreadyInLibrary). A CHD is never
+    // rebuilt : its header's SHA1 is what the DAT lists, and it is either
+    // that disk or not.
+    bool disk = false;
     int  pieces_from_library = 0;            // how many pieces come from roms_paths
     int  renamed_entries     = 0;            // pieces whose source entry name differs
     bool selected = true;                    // UI checkbox
@@ -95,8 +105,6 @@ struct Options {
     // Rebuild even a set that is already perfect as it sits : normalises the
     // archive (DAT names, deflate, nothing extra) instead of relocating it.
     bool rebuild_correct  = false;
-    // Layout of the produced sets. Split leaves inherited ROMs out.
-    RomResolve::SetStyle style = RomResolve::SetStyle::NonMerged;
     // What becomes of an inbox file once every piece it held has been used.
     enum class Processed { Subfolder, Delete, Keep };
     Processed processed   = Processed::Subfolder;
@@ -110,6 +118,10 @@ struct Options {
     // those are not "the library" any more, neither as a source of pieces nor
     // as proof a set is already there. Empty accepts every cached archive.
     std::vector<std::string> roms_paths;
+    // Whose sets the inbox is matched against : the library group's emulator.
+    // An archive is only ever recognised as a set of that emulator, and the
+    // library pool above is that emulator's ROM directories.
+    std::string emulator = "fbneo";
 };
 
 // The subfolder processed sources are moved into; skipped when listing.
@@ -162,10 +174,6 @@ struct ApplyResult {
 };
 
 ApplyResult apply(const Report& report, const Callbacks& cb);
-
-// Outbox subfolder for a game: its raw DAT header when known, otherwise
-// reconstructed from the trimmed system name. Exposed for the UI's preview column.
-std::string outbox_subdir_for(const Game& game);
 
 const char* action_label(Action a);
 

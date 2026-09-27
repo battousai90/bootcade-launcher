@@ -53,10 +53,12 @@ public:
     bool busy() const { return m_busy.load(); }
 
     // "Scan ROMs": the owner starts the scan with its usual confirmation.
-    sigc::signal<void>& signal_rescan_requested() { return m_sig_rescan; }
+    // Both scan signals carry the emulator of the DAT group : the library
+    // to scan is that emulator's, its ROM directories and its sets.
+    sigc::signal<void, std::string>& signal_rescan_requested() { return m_sig_rescan; }
     // Files were moved out of the library (quarantine): the owner should
     // rescan, silently, to keep statuses honest.
-    sigc::signal<void>& signal_scan_requested()   { return m_sig_scan; }
+    sigc::signal<void, std::string>& signal_scan_requested()   { return m_sig_scan; }
     // Archives of repairable sets, already copied into the import folder by
     // Fix : the owner owns the Import tab and knows how to switch to it.
     sigc::signal<void, std::vector<std::string>>& signal_send_to_import() { return m_sig_send_to_import; }
@@ -97,11 +99,20 @@ private:
     void worker_fix();
     std::vector<Gtk::TreeModel::Row> fix_candidates() const;
     void on_export(int format);   // 0 text, 1 csv, 2 dat
+    // Download from Bootcade's ROM server, with the player's account (quota
+    // per account) : FinalBurn Neo sets that are missing or wrong and cannot
+    // be rebuilt from the library. Into the import folder, which verifies
+    // and files them as for any other ROM. On the given rows, else the
+    // checked ones, else every row shown.
+    bool can_download(const RomAudit::GameEntry& g) const;
+    std::vector<Gtk::TreeModel::Row> download_candidates() const;
+    void on_download_clicked(std::vector<Gtk::TreeModel::Row> rows = {});
+    void worker_download();
     void update_action_buttons();
     std::vector<Gtk::TreeModel::Row> checked_rows() const;
 
     // ── Worker plumbing ─────────────────────────────────────────────────────
-    enum class Job { None, Audit, Fix };
+    enum class Job { None, Audit, Fix, Download };
     RomInbox::Callbacks make_callbacks();
     void push_progress(double pct, const std::string& msg);
     void push_log(const std::string& msg);
@@ -121,6 +132,8 @@ private:
     const DatSource::Group* current_group() const;
     void persist_group_choice();
     std::set<std::string> m_job_dat_sources;     // the group's files, for the worker
+    std::string           m_job_emulator = "fbneo";  // the group's emulator, for the worker
+    std::string           current_emulator() const;
     Gtk::Button*        m_btn_scan  = nullptr;
     Gtk::Button*        m_btn_audit = nullptr;
     Gtk::Label          m_last_audit;
@@ -148,6 +161,7 @@ private:
     Gtk::Label          m_status;
     Gtk::Button*        m_btn_cancel = nullptr;
     Gtk::Button*        m_btn_fix    = nullptr;
+    Gtk::Button*        m_btn_download = nullptr;
     Gtk::Button*        m_btn_select_all = nullptr;
     Gtk::Button*        m_btn_select_none = nullptr;
     sigc::connection    m_flash_timer;
@@ -205,6 +219,15 @@ private:
         int moved = 0, cleaned = 0, copied = 0, failed = 0;
     } m_fix;
 
+    // Download job : the sets asked for, what arrived, why it stopped.
+    struct DownloadJob {
+        struct Item { std::string dat_header, name; };
+        std::vector<Item> items;
+        std::vector<std::string> got;       // zips written into the import folder
+        std::vector<std::string> failed;    // "name : reason"
+        std::string stopped;                // set when the whole job stopped early
+    } m_dl;
+
     Job              m_job = Job::None;
     std::thread      m_worker;
     Glib::Dispatcher m_progress_dispatcher;
@@ -216,8 +239,8 @@ private:
     std::string              m_current_message;
     std::vector<std::string> m_log_messages;
 
-    sigc::signal<void> m_sig_rescan;
-    sigc::signal<void> m_sig_scan;
+    sigc::signal<void, std::string> m_sig_rescan;
+    sigc::signal<void, std::string> m_sig_scan;
     sigc::signal<void, std::vector<std::string>> m_sig_send_to_import;
     sigc::signal<void, std::string> m_sig_log;
 };

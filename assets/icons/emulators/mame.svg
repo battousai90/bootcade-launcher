@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="21.2 12.2 145.4 34.4" width="145" height="34">
+  <!-- Marque MAME : degrade bleu clair vers bleu profond et liseré clair,
+       releves sur le logo officiel, lettrage penche de 12 degres.
+       Le viewBox est cale sur l'encre : sans ce recadrage, plus de la moitie
+       de la hauteur du cadre etait vide et MAME s'affichait deux fois plus
+       plat que FinalBurn Neo dans la meme carte. -->
+  <defs>
+    <linearGradient id="mameBlue" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0"    stop-color="#8fdcff"/>
+      <stop offset="0.38" stop-color="#3f9fd0"/>
+      <stop offset="0.72" stop-color="#1a6396"/>
+      <stop offset="1"    stop-color="#0a3c66"/>
+    </linearGradient>
+  </defs>
+  <g font-family="DejaVu Sans, Verdana, Helvetica, sans-serif" text-anchor="middle">
+    <g transform="translate(100,0) skewX(-12) translate(-100,0)">
+      <text x="100" y="44" font-size="40" font-weight="bold" letter-spacing="1"
+            stroke="#a8e6ff" stroke-width="1.1" paint-order="stroke"
+            fill="url(#mameBlue)">MAME</text>
+    </g>
+  </g>
+</svg>

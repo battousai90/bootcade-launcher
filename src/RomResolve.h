@@ -17,6 +17,7 @@
 #pragma once
 
 #include "DatabaseManager.h"
+#include "DatLayout.h"
 #include "Game.h"
 
 #include <cstdint>
@@ -29,19 +30,16 @@
 
 namespace RomResolve {
 
-// How the collection is laid out. Merged (a clone has no zip of its own; its
-// ROMs sit in the parent's) is a later phase and deliberately not listed yet :
-// an enum value with no behaviour behind it would be a promise the code cannot
-// keep.
-enum class SetStyle { NonMerged, Split };
+// The folder a set's archive is expected in : its raw DAT header ("MAME ROMs
+// (split)"), else the same header rebuilt from the emulator and the system.
+// One DAT, one folder, as for FinalBurn Neo.
+std::string expected_folder(const Game& g);
 
-SetStyle    style_from_string(const std::string& s);   // unknown → NonMerged
-std::string to_string(SetStyle s);
-// The style of the collection : that of the DAT group the Library audits
-// against (rom_manager.library_group, else the first group), which carries
-// set_style. Missing or unknown → NonMerged, which is exactly the behaviour
-// every scan had before the setting existed.
-SetStyle    load_style();
+// Two verdicts on parts of one set (its zip and its CHDs) as one, by the rule
+// a single archive follows : anything absent → "missing", else anything wrong
+// → "incorrect", else "available". An empty status (no part to judge) yields
+// the other one.
+std::string combine_status(const std::string& a, const std::string& b);
 
 // What one archive holds, keyed the way the scanner keys it: every entry name
 // under its raw spelling *and* under RomScanner::normalize_name(), so ':' vs
@@ -89,16 +87,57 @@ struct Verdict {
     std::vector<RomVerdict> roms;     // every non-nodump ROM, in DAT order
 };
 
-// `own` is the set's own archive (null when none was found : every ROM then
-// counts as absent, save inherited ones an ancestor can still provide). In
-// NonMerged the lookups are never called and the outcome is byte-for-byte the
-// rule the scanner always applied.
-Verdict evaluate(const Game& game, const Archive* own, SetStyle style,
+// Whether the emulator can load `game` : `own` is the set's own archive
+// (null when none was found : every ROM then counts as absent, save
+// inherited ones an ancestor can still provide). With the lookups, a merge=
+// ROM its own archive lacks is looked for up the romof chain, as the
+// emulator does ; without them, only its own archive counts. This is the
+// playable status, never the ROM Manager's verdict (DatLayout, RomAudit).
+Verdict evaluate(const Game& game, const Archive* own,
                  const ArchiveLookup& archive_for, const GameLookup& game_for);
 
+// One ROM against one archive : the rule every judgement uses. Present (the
+// name holds the CRC), WrongName (the CRC is there under another name),
+// Corrupt (the name is there with another CRC), Absent. `found_entry` and
+// `found_crc` say which entry answered.
+RomState probe_rom(const Archive* archive, const std::string& name, unsigned long crc,
+                   std::string* found_entry = nullptr, unsigned long* found_crc = nullptr);
+
 // Convenience: status only, same rule.
-std::string status_of(const Game& game, const Archive* own, SetStyle style,
+std::string status_of(const Game& game, const Archive* own,
                       const ArchiveLookup& archive_for, const GameLookup& game_for);
+
+// ── CHDs ────────────────────────────────────────────────────────────────────
+//
+// A MAME disk image is a CHD file next to the zips, in a folder named after its
+// set : <root>/<set>/<disk>.chd (or <root>/<DAT header>/<set>/<disk>.chd when
+// the root holds one folder per DAT, as RomVault lays them out). CHDs weigh
+// hundreds of megabytes : they are never read, never cached in zip_contents,
+// never moved. Their header declares the SHA1 of their content, which is what
+// the DAT lists : comparing the two is the whole verdict.
+
+// The content SHA1 a CHD's header declares, lower-case hex ; empty when the
+// file is not a CHD (v3, v4 or v5) or cannot be read. Reads the header only.
+std::string chd_header_sha1(const std::string& path);
+
+struct DiskVerdict {
+    std::string name;          // disk name as the DAT gives it, without ".chd"
+    std::string sha1;          // expected
+    RomState    state = RomState::Absent;   // Present, Corrupt or Absent
+    std::string path;          // the file that answered, when one did
+    std::string found_sha1;    // what its header declares (differs when Corrupt)
+};
+
+struct DiskResult {
+    std::string status;               // "available" | "incorrect" | "missing" | "" (no disk)
+    std::string folder;               // the set folder the first found disk sits in
+    std::vector<DiskVerdict> disks;
+};
+
+// Every disk of `game`, looked for under each of `roots`. A good copy anywhere
+// wins over a wrong one ; status : all present → available, any absent →
+// missing, else incorrect.
+DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& roots);
 
 // ── The zip_contents cache as a source of archives ──────────────────────────
 //
@@ -111,12 +150,24 @@ std::string status_of(const Game& game, const Archive* own, SetStyle style,
 // audit, so the two never claim different archives for the same set.
 class CacheIndex {
 public:
+    // Whether each archive is checked on disk before being indexed. Scans
+    // forget the archives that disappeared (RomScanner::prune_zip_cache), so
+    // the cache can be trusted as it stands ; the ROM manager still checks,
+    // because its own moves (Fix, Quarantine) land before the scan that
+    // follows them.
+    enum class OnDisk { Verify, Trust };
+
     // `roots` restricts the index to archives under the configured ROM
-    // directories; empty accepts everything the cache knows. Archives that
-    // no longer exist on disk are skipped either way.
-    CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roots);
+    // directories; empty accepts everything the cache knows. With Verify,
+    // archives that no longer exist on disk are skipped too.
+    CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roots,
+               OnDisk on_disk = OnDisk::Verify);
 
     const Archive* for_game(const Game& game) const;
+    // The archives named `set` in a folder named `folder` (a directory of
+    // that name under a root, or a root of that name), compared without
+    // case. Where a DAT's archives must be, and nowhere else.
+    std::vector<const Archive*> in_folder(const std::string& folder, const std::string& set) const;
     const Archive* by_path(const std::string& path) const;
     const std::unordered_map<std::string, Archive>& all() const { return m_archives; }
     size_t         size() const { return m_archives.size(); }
@@ -125,10 +176,61 @@ public:
 private:
     std::unordered_map<std::string, Archive>                  m_archives;   // path → contents
     std::unordered_map<std::string, std::vector<std::string>> m_by_stem;    // lower stem → paths
+    std::unordered_set<std::string>                           m_headers;    // every DAT header the database knows
+    std::unordered_map<std::string, std::vector<std::string>> m_by_folder;  // lower "folder\x1fstem" → paths
 };
 
-// Re-derive the status of every set that inherits at least one ROM (style
-// Split), from the cache alone : no disk I/O. Sets whose own archive is not
+// ── Reading a DAT : its merge mode and its folder ───────────────────────────
+
+// How each loaded DAT file is read : the merge mode its traits and its rule
+// give (DatSource::effective_merge, "" for a DAT without links) and the
+// folder its sets belong in (its rule's, else its header).
+struct DatReading {
+    std::string mode;
+    std::string folder;
+    std::string emulator;   // its group's
+};
+std::unordered_map<std::string, DatReading> dat_readings(std::shared_ptr<DatabaseManager> db);
+
+// One emulator's DATs, as a ROM manager reads them : its sets loaded once,
+// each DAT's reading, and each DAT's layout built when first asked for.
+// What Import, Outbox and the audit share to say what an archive must hold.
+class LayoutBook {
+public:
+    LayoutBook(std::shared_ptr<DatabaseManager> db, const std::string& emulator);
+    const std::vector<Game>& games() const { return m_games; }
+    const Game* game(const std::string& name, const std::string& system) const;
+    // The layout of the DAT `dat` (a DAT file name, Game::dat_source).
+    const DatLayout::Layout& layout_of(const std::string& dat);
+    // How `dat` is read ; an empty reading when the DAT is not known.
+    const DatReading& reading_of(const std::string& dat) const;
+    // The archive `game` belongs in, and the folder of its DAT. Null when
+    // its DAT expects nothing for it.
+    const DatLayout::Archive* archive_for(const Game& game, std::string* folder = nullptr);
+
+private:
+    std::vector<Game> m_games;
+    std::unordered_map<std::string, size_t> m_by_key;     // "name\x1fsystem"
+    std::unordered_map<std::string, DatReading> m_readings;
+    std::unordered_map<std::string, std::unique_ptr<DatLayout::Layout>> m_layouts;
+};
+
+// The CHDs `disks` of the archive `set` (DatLayout), looked for in its folder
+// of `folder` under each root : <root>/<folder>/<set>/<disk>.chd, or
+// <root>/<set>/<disk>.chd when the root is that folder. Judged by the SHA1
+// their header declares.
+DiskResult evaluate_layout_disks(const std::string& set, const std::vector<DatLayout::DiskEntry>& disks,
+                                 const std::vector<std::string>& roots, const std::string& folder);
+
+// ── The playable status (games.status, what the game list shows) ───────────
+//
+// Can the emulator load this set? It reads the set's own archive, then its
+// parent's and its BIOS's for the ROMs the DAT marks merge= : whatever the
+// merge mode its DAT is read with. This is not the ROM Manager's verdict
+// (RomAudit, DatLayout), and never feeds it.
+
+// Re-derive the playable status of every set that inherits at least one ROM,
+// from the cache alone : no disk I/O. Sets whose own archive is not
 // in the cache are left untouched: the cache cannot say anything about them,
 // and a stale cache must not turn a real set into a missing one.
 //
@@ -140,7 +242,46 @@ private:
 // Returns the number of statuses that actually changed.
 int resolve_inherited_from_cache(std::shared_ptr<DatabaseManager> db,
                                  const std::vector<std::string>& roots,
-                                 SetStyle style,
-                                 const std::unordered_set<std::string>& touched = {});
+                                 const std::unordered_set<std::string>& touched = {},
+                                 const std::string& emulator = "fbneo");
+
+// Re-derive the playable status of EVERY set of one emulator from the cache
+// alone : the set's own archive (CacheIndex), then its romof chain for
+// inherited ROMs. Unlike the pass above, a set the cache has
+// no archive for becomes "missing" : this is the whole verdict for that
+// emulator, not a correction on top of a per-file scan. Only rows whose
+// status changes are written. Used by the MAME scan (ROMScanDialog), whose
+// files are read into zip_contents first, and after a DAT update.
+//
+// `progress(done, total)` returning false stops the pass; what was decided
+// so far is kept.
+struct CacheResolveResult {
+    // CHDs are evaluated too, by their headers (evaluate_disks) : no cache
+    // holds them. A set with both a zip and CHDs (single-folder MAME DAT) gets
+    // one verdict for the two (combine_status). They count in the totals.
+    int evaluated = 0, available = 0, incorrect = 0, missing = 0;
+    int changed = 0;
+    bool cancelled = false;
+};
+CacheResolveResult resolve_all_from_cache(std::shared_ptr<DatabaseManager> db,
+                                          const std::vector<std::string>& roots,
+                                          const std::string& emulator,
+                                          const std::function<bool(size_t, size_t)>& progress = {});
+
+// After a DAT update : judge only the sets that are new or whose ROM
+// definition changed (`changed`, keys "name\x1fsystem"), from the cache as it
+// stands, without touching the disk (CacheIndex::OnDisk::Trust). A set whose
+// parent or BIOS changed is judged again too, since what it inherits may
+// have, but only when the cache holds its own archive : otherwise its status
+// from the last scan stands. Same counters and progress as above.
+CacheResolveResult resolve_changed_from_cache(std::shared_ptr<DatabaseManager> db,
+                                              const std::vector<std::string>& roots,
+                                              const std::string& emulator,
+                                              const std::unordered_set<std::string>& changed,
+                                              const std::function<bool(size_t, size_t)>& progress = {});
+
+// Whether `path` lies under one of `roots`, compared as written (no disk
+// access) : both sides are expected canonical, as zip_contents stores them.
+bool under_any_root(const std::string& path, const std::vector<std::string>& roots);
 
 } // namespace RomResolve

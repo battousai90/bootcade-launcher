@@ -2,6 +2,7 @@
 // src/RomScanner.cpp
 #include "RomScanner.h"
 #include "RomResolve.h"
+#include "DatSource.h"
 #include <filesystem>
 #include <zlib.h>
 #include <zip.h>
@@ -11,7 +12,13 @@
 #include <string>
 #include <cstdint>
 #include <map>
+#include <set>
+#include <unordered_set>
 #include <unordered_map>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <thread>
 
 static bool find_rom_by_crc_in_zip(const std::string& zip_path, uLong expected_crc);
 
@@ -161,7 +168,7 @@ uLong hex_to_crc(const std::string& hex) {
 // cache, once every archive's contents are known (see RomResolve::
 // resolve_inherited_from_cache).
 static std::string check_game_maps(const Game& game, const RomResolve::Archive& archive) {
-    return RomResolve::status_of(game, &archive, RomResolve::SetStyle::NonMerged, {}, {});
+    return RomResolve::status_of(game, &archive, {}, {});
 }
 
 void RomScanner::check_availability(Game& game, const std::string& roms_path) {
@@ -449,71 +456,175 @@ RomScanner::scan_zip_file_collect(const std::string& zip_path,
 // Mirrors the live scan (name candidates + CRC-only discovery) but sources ZIP
 // contents from the DB instead of reading files. Only upgrades statuses
 // (missing → available/incorrect), never downgrades, exactly like a real scan.
-int RomScanner::rematch_from_cache(std::shared_ptr<DatabaseManager> db) {
-    std::vector<DatabaseManager::ZipContentRow> rows;
-    if (!db->getAllZipContents(rows) || rows.empty()) return 0;
+// ── Keeping zip_contents true to the libraries ──────────────────────────────
 
-    // Best status per (game, system), for the same reason as the live scan: a ZIP
-    // from another system's folder may hold the same dump under a different
-    // filename and would otherwise downgrade a perfectly available game.
-    auto rank = [](const std::string& s) {
-        return s == "available" ? 2 : s == "incorrect" ? 1 : 0;
+std::vector<std::string> RomScanner::all_library_roots() {
+    std::set<std::string> emulators = {"fbneo", "mame"};
+    for (const auto& g : DatSource::load_groups()) emulators.insert(g.emulator);
+    std::vector<std::string> roots;
+    std::error_code ec;
+    for (const auto& emu : emulators)
+        for (const auto& r : DatSource::roms_paths_for(emu))
+            if (!r.empty()) roots.push_back(std::filesystem::weakly_canonical(r, ec).string());
+    return roots;
+}
+
+int RomScanner::prune_zip_cache(std::shared_ptr<DatabaseManager> db) {
+    // Settings only, never the disk : a drive that is not plugged in keeps
+    // its archives, a folder removed from every library loses them.
+    const auto roots = all_library_roots();
+    if (roots.empty()) return 0;   // no library configured at all : nothing is decided
+    std::vector<std::string> out_of_libraries;
+    for (const auto& p : db->getZipContentPaths())
+        if (!RomResolve::under_any_root(p, roots)) out_of_libraries.push_back(p);
+    return db->forgetZipContents(out_of_libraries);
+}
+
+// ── Scan of one emulator's library into the cache ───────────────────────────
+
+RomScanner::CacheScanReport
+RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
+                            const std::vector<std::string>& roots,
+                            const std::string& emulator,
+                            bool recursive,
+                            const std::function<bool(double, const std::string&)>& progress,
+                            const std::function<void(const std::string&, bool)>& log) {
+    namespace fs = std::filesystem;
+    CacheScanReport rep;
+    auto say  = [&](const std::string& m) { if (log) log(m, false); };
+    auto warn = [&](const std::string& m) { if (log) log(m, true); };
+    auto step = [&](double pct, const std::string& m) {
+        if (progress && !progress(pct, m)) rep.cancelled = true;
+        return !rep.cancelled;
     };
-    struct Best { std::string name, system, status; };
-    std::unordered_map<std::string, Best> best_by_game;
-    auto vote = [&](const Game& game, const std::string& status) {
-        if (status != "available" && status != "incorrect") return;
-        std::string key = game.name + '\x1f' + game.system;
-        auto it = best_by_game.find(key);
-        if (it == best_by_game.end() || rank(status) > rank(it->second.status))
-            best_by_game[key] = {game.name, game.system, status};
-    };
 
-    size_t i = 0;
-    while (i < rows.size()) {
-        const std::string filepath = rows[i].filepath;
-
-        RomResolve::Archive archive;
-        archive.path = filepath;
-        while (i < rows.size() && rows[i].filepath == filepath) {
-            archive.add(rows[i].entry_name, rows[i].crc);
-            ++i;
-        }
-
-        // Skip stale cache entries for files that no longer exist on disk.
+    // ── 1. What the roots hold ──────────────────────────────────────────────
+    struct File { std::string path; long long size = 0, mtime = 0; };
+    std::vector<File> files;
+    // The roots listed to the end and holding at least one archive : only
+    // under those can an archive the cache knows be called gone. A root that
+    // lists nothing may be the mount point of a drive that is not plugged in.
+    std::vector<std::string> listed_roots;
+    for (const auto& root : roots) {
         std::error_code ec;
-        if (!std::filesystem::exists(filepath, ec)) continue;
-
-        std::string game_name = std::filesystem::path(filepath).stem().string();
-
-        std::vector<Game> candidates = db->getAllGamesWithName(game_name);
-        for (const auto& cand : candidates) {
-            Game game = db->getGame(cand.name, cand.system);
-            vote(game, check_game_maps(game, archive));
+        if (root.empty() || !fs::is_directory(root, ec)) {
+            warn("Configured ROM path does not exist: " + root);
+            ++rep.missing_roots;
+            continue;
         }
+        // Paths are built under the canonical root : the key zip_contents
+        // stores, so the freshness lookup below needs no realpath per file.
+        const fs::path base = fs::weakly_canonical(fs::path(root), ec);
+        auto visit = [&](const fs::directory_entry& e) {
+            std::error_code fec;
+            if (!e.is_regular_file(fec)) return;
+            std::string ext = e.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+            if (ext != ".zip") return;
+            File f;
+            f.path  = e.path().string();
+            f.size  = (long long)e.file_size(fec);
+            auto ft = e.last_write_time(fec);
+            f.mtime = (long long)std::chrono::system_clock::to_time_t(
+                std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                    ft - fs::file_time_type::clock::now() + std::chrono::system_clock::now()));
+            files.push_back(std::move(f));
+            if ((files.size() % 2048) == 0) step(2.0, "Listing archives… " + std::to_string(files.size()));
+        };
+        const size_t before = files.size();
+        if (recursive) {
+            for (auto it = fs::recursive_directory_iterator(base, fs::directory_options::skip_permission_denied, ec);
+                 it != fs::recursive_directory_iterator() && !rep.cancelled; it.increment(ec))
+                visit(*it);
+        } else {
+            for (auto it = fs::directory_iterator(base, ec); it != fs::directory_iterator() && !rep.cancelled; it.increment(ec))
+                visit(*it);
+        }
+        if (rep.cancelled) return rep;
+        if (!ec && files.size() > before) listed_roots.push_back(base.string());
+    }
+    rep.archives = files.size();
+    say("Found " + std::to_string(files.size()) + " archive(s) under " + std::to_string(roots.size()) + " ROM path(s)");
 
-        if (candidates.empty()) {
-            for (const auto& [crc, _] : archive.name_by_crc) {
-                std::vector<Game> crc_cands = db->getGamesByRomCrc(crc);
-                for (const auto& cand : crc_cands) {
-                    Game game = db->getGame(cand.name, cand.system);
-                    vote(game, check_game_maps(game, archive));
+    // ── 2. Only new or changed files are read ───────────────────────────────
+    const auto stamps = db->getZipContentStamps();
+    std::vector<const File*> to_read;
+    for (const auto& f : files) {
+        auto it = stamps.find(f.path);
+        // Same size, mtime within the tolerance rom_cache applies.
+        if (it != stamps.end() && it->second.first == f.size && std::llabs(it->second.second - f.mtime) <= 2) continue;
+        to_read.push_back(&f);
+    }
+    say(std::to_string(to_read.size()) + " archive(s) new or changed : reading them; "
+        + std::to_string(files.size() - to_read.size()) + " unchanged since the cache read them");
+
+    struct Read { const File* file = nullptr; bool ok = false; std::vector<ZipEntry> entries; };
+    std::vector<Read> reads(to_read.size());
+    {
+        std::atomic<size_t> next{0}, done{0};
+        std::atomic<bool> stop{false};
+        const size_t n_threads = std::max<size_t>(1, std::min<size_t>(std::thread::hardware_concurrency(), to_read.size()));
+        std::vector<std::thread> pool;
+        for (size_t t = 0; t < n_threads; ++t) {
+            pool.emplace_back([&] {
+                for (size_t i = next++; i < to_read.size() && !stop; i = next++) {
+                    reads[i].file = to_read[i];
+                    reads[i].ok = read_zip_entries(to_read[i]->path, reads[i].entries);
+                    ++done;
                 }
-            }
+            });
         }
+        // Progress from this thread only : the callbacks belong to the caller.
+        while (done < to_read.size()) {
+            if (!step(5.0 + 75.0 * (double)done / (double)to_read.size(),
+                      "Reading " + std::to_string(done.load()) + " / " + std::to_string(to_read.size())))
+                stop = true;
+            if (stop) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        for (auto& th : pool) th.join();
     }
 
-    int upgraded = 0;
+    // What was read is kept even on cancel : it is true of the files.
     db->beginTransaction();
-    for (const auto& [key, b] : best_by_game) {
-        db->updateGameStatus(b.name, b.status, b.system);
-        ++upgraded;
+    for (const auto& r : reads) {
+        if (!r.file) continue;   // never reached (cancelled)
+        if (!r.ok) { ++rep.unreadable; warn("Cannot read " + r.file->path); continue; }
+        std::vector<std::pair<std::string, unsigned long>> entries;
+        entries.reserve(r.entries.size());
+        for (const auto& e : r.entries) entries.emplace_back(e.name, e.crc);
+        db->storeZipContents(r.file->path, entries);
+        db->stampZipContents(r.file->path, r.file->size, r.file->mtime);
+        ++rep.reread;
     }
     db->commitTransaction();
+    if (rep.cancelled) return rep;
 
-    // A DAT update can change which ROMs a set inherits, so in a split
-    // collection every inheriting set is re-derived : the per-zip votes above
-    // could only see each set's own archive.
-    upgraded += RomResolve::resolve_inherited_from_cache(db, {}, RomResolve::load_style());
-    return upgraded;
+    // ── 3. What left the disk or the libraries leaves the cache ────────────
+    // So that whoever reads the cache afterwards (a DAT update) can trust it
+    // without checking every file on the disk.
+    {
+        std::unordered_set<std::string> listed;
+        listed.reserve(files.size());
+        for (const auto& f : files) listed.insert(f.path);
+        std::vector<std::string> gone;
+        for (const auto& p : db->getZipContentPaths())
+            if (!listed.count(p) && RomResolve::under_any_root(p, listed_roots)) gone.push_back(p);
+        rep.forgotten = db->forgetZipContents(gone) + prune_zip_cache(db);
+        if (rep.forgotten) say(std::to_string(rep.forgotten) + " archive(s) no longer in the library : forgotten");
+    }
+
+    // ── 4. Every status of this emulator, from the cache ────────────────────
+    step(82.0, "Resolving sets…");
+    say("Resolving which " + emulator + " sets can be played, from the cache...");
+    rep.statuses = RomResolve::resolve_all_from_cache(db, roots, emulator,
+        [&](size_t d, size_t total) {
+            return step(82.0 + 17.0 * (double)d / (double)std::max<size_t>(1, total),
+                        "Resolving sets… " + std::to_string(d) + " / " + std::to_string(total));
+        });
+    rep.cancelled = rep.cancelled || rep.statuses.cancelled;
+    say(std::to_string(rep.statuses.available) + " available, " + std::to_string(rep.statuses.incorrect)
+        + " incorrect, " + std::to_string(rep.statuses.missing) + " missing; "
+        + std::to_string(rep.statuses.changed) + " status(es) changed");
+    return rep;
 }

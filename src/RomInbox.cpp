@@ -164,9 +164,7 @@ private:
 // This is the only thing standing between a silent libzip/IO failure and a
 // corrupt set landing in the outbox, so a rebuild is not considered done until
 // this passes.
-bool verify_against_plan(const std::string& zip_path, const SetPlan& plan,
-                         RomResolve::SetStyle style, std::string& error) {
-    const bool split = style == RomResolve::SetStyle::Split;
+bool verify_against_plan(const std::string& zip_path, const SetPlan& plan, std::string& error) {
     std::vector<RomScanner::ZipEntry> produced;
     if (!RomScanner::read_zip_entries(zip_path, produced)) {
         error = "cannot reopen the rebuilt archive";
@@ -176,7 +174,6 @@ bool verify_against_plan(const std::string& zip_path, const SetPlan& plan,
     for (const auto& e : produced) by_name[e.name] = &e;
 
     for (const auto& p : plan.pieces) {
-        if (split && p.inherited) continue;   // deliberately left to the parent
         auto it = by_name.find(p.target_name);
         if (it == by_name.end()) {
             error = "missing entry after rebuild: " + p.target_name;
@@ -191,9 +188,7 @@ bool verify_against_plan(const std::string& zip_path, const SetPlan& plan,
             return false;
         }
     }
-    size_t expected = 0;
-    for (const auto& p : plan.pieces) if (!(split && p.inherited)) ++expected;
-    if (produced.size() != expected) {
+    if (produced.size() != plan.pieces.size()) {
         error = "unexpected entry count after rebuild";
         return false;
     }
@@ -230,13 +225,10 @@ struct Staging {
     Staging& operator=(const Staging&) = delete;
 };
 
-bool rebuild_set(const SetPlan& plan, const Relocations& relocated,
-                 RomResolve::SetStyle style, std::string& error) {
+bool rebuild_set(const SetPlan& plan, const Relocations& relocated, std::string& error) {
     const std::string tmp_path = plan.dest_path + ".tmp";
-    const bool split = style == RomResolve::SetStyle::Split;
-    // A piece the produced archive will carry. In split, inherited ROMs stay
-    // with the parent; and a piece nobody could supply has nothing to write.
-    auto wanted = [&](const PiecePlan& p) { return p.resolved && !(split && p.inherited); };
+    // A piece nobody could supply has nothing to write.
+    auto wanted = [&](const PiecePlan& p) { return p.resolved; };
 
     std::error_code ec;
     fs::remove(tmp_path, ec);
@@ -339,7 +331,7 @@ bool rebuild_set(const SetPlan& plan, const Relocations& relocated,
         return false;
     }
 
-    if (!verify_against_plan(tmp_path, plan, style, error)) {
+    if (!verify_against_plan(tmp_path, plan, error)) {
         fs::remove(tmp_path, ec);
         return false;
     }
@@ -383,14 +375,6 @@ bool move_file(const std::string& from, const std::string& to, std::string& erro
 
 // ── Public helpers ───────────────────────────────────────────────────────────
 
-std::string outbox_subdir_for(const Game& game) {
-    if (!game.dat_header.empty()) return sanitize_component(game.dat_header);
-    // Rows imported before dat_header existed: rebuild the header from the trimmed
-    // system name. This reproduces all 17 real FBNeo DAT names exactly.
-    if (game.system.empty() || game.system == "Unknown") return "Unknown";
-    return sanitize_component("FinalBurn Neo - " + game.system + " Games");
-}
-
 const char* action_label(Action a) {
     switch (a) {
         case Action::Move:             return "Complete";
@@ -413,7 +397,6 @@ Report analyze(const std::string& inbox_dir,
     rep.inbox_dir  = inbox_dir;
     rep.options    = options;
     const bool recursive = options.recursive;
-    const bool split     = options.style == RomResolve::SetStyle::Split;
 
     std::error_code ec;
     if (inbox_dir.empty() || !fs::is_directory(inbox_dir, ec)) {
@@ -424,10 +407,12 @@ Report analyze(const std::string& inbox_dir,
     // ── 1. Enumerate the inbox ───────────────────────────────────────────────
     report(cb, 2.0, _("Listing inbox…"));
     std::vector<std::string> zip_paths;
+    std::vector<std::string> chd_paths;   // disk images : matched by the SHA1 their header declares
     auto classify = [&](const fs::directory_entry& de) {
         if (!de.is_regular_file(ec)) return;
         std::string p = de.path().string();
         if (fs::path(p).filename().string().rfind(".bootcade", 0) == 0) return;  // our own manifests
+        if (lower(fs::path(p).extension().string()) == ".chd") { chd_paths.push_back(p); return; }
         // Any archive format libarchive can open is accepted; whether it can
         // actually be read is settled when we try, below. A file that is not
         // an archive at all is still accepted as a loose, single-ROM source // only the handful of extensions that are clearly never ROM data
@@ -459,11 +444,13 @@ Report analyze(const std::string& inbox_dir,
         }
     }
     std::sort(zip_paths.begin(), zip_paths.end());
+    std::sort(chd_paths.begin(), chd_paths.end());
 
     log(cb, "Inbox: " + std::to_string(zip_paths.size()) + " archive(s)" +
+            (chd_paths.empty() ? "" : ", " + std::to_string(chd_paths.size()) + " CHD(s)") +
             (rep.ignored.empty() ? "" : ", " + std::to_string(rep.ignored.size()) + " non-ROM file(s) ignored") + ".");
 
-    if (zip_paths.empty()) {
+    if (zip_paths.empty() && chd_paths.empty()) {
         report(cb, 100.0, _("Nothing to analyze."));
         return rep;
     }
@@ -545,17 +532,15 @@ Report analyze(const std::string& inbox_dir,
     } else {
         log(cb, "Library pool: not used (pieces come from the import folder only).");
     }
-    log(cb, std::string("Output style: ") + RomResolve::to_string(options.style) + ".");
+    log(cb, "Output : every set as its DAT, read with that DAT's merge mode, lays it out.");
 
     // ── 4. Resolve candidates ────────────────────────────────────────────────
-    std::unordered_map<std::string, Game> game_cache;  // "name\x1fsystem" → full set
-    auto fetch_game = [&](const std::string& name, const std::string& system) -> const Game& {
-        std::string key = name + '\x1f' + system;
-        auto it = game_cache.find(key);
-        if (it == game_cache.end())
-            it = game_cache.emplace(key, db->getGame(name, system)).first;
-        return it->second;
-    };
+    // What each DAT says its archives hold, read with its own merge mode.
+    RomResolve::LayoutBook book(db, options.emulator);
+    // The library as the audit sees it : where a set's archive already sits,
+    // correct, in its DAT's folder.
+    std::unique_ptr<RomResolve::CacheIndex> lib_index;
+    if (options.use_library) lib_index = std::make_unique<RomResolve::CacheIndex>(db, options.roms_paths);
 
     std::unordered_map<std::string, SetPlan> best;  // "name\x1fsystem" → best plan
 
@@ -568,7 +553,7 @@ Report analyze(const std::string& inbox_dir,
         auto it = crc_games.find(crc);
         if (it == crc_games.end()) {
             std::vector<std::pair<std::string, std::string>> v;
-            for (const auto& g : db->getGamesByRomCrc(crc)) v.emplace_back(g.name, g.system);
+            for (const auto& g : db->getGamesByRomCrc(crc, options.emulator)) v.emplace_back(g.name, g.system);
             it = crc_games.emplace(crc, std::move(v)).first;
         }
         return it->second;
@@ -612,7 +597,7 @@ Report analyze(const std::string& inbox_dir,
 
         // Axis 1 : the archive's own name.
         std::string stem = fs::path(arc.path).stem().string();
-        for (const auto& g : db->getAllGamesWithName(stem)) add_candidate(g.name, g.system, true);
+        for (const auto& g : db->getAllGamesWithName(stem, options.emulator)) add_candidate(g.name, g.system, true);
 
         // Axis 2 : the archive's content, ALWAYS, not merely as a fallback. An
         // archive is not only "the set it is named after": a ZIP called
@@ -654,80 +639,61 @@ Report analyze(const std::string& inbox_dir,
             continue;
         }
 
+        // Some DAT set holds one of this archive's CRCs : the content speaks, so a
+        // same-named set that takes nothing from the archive is only a filename
+        // coincidence (berserk.zip carrying the MSX berzerk ROM is not the NES
+        // berserk). Without a content match, the name is all there is to go on.
+        bool content_matched = false;
+        for (const auto& c : candidates) if (!c.by_name) { content_matched = true; break; }
+
         bool produced_any = false;
         bool saw_already_in_library = false; // a content-only match that turned out redundant
         std::string dbg_trace; // built only when this archive ends up unrecognized
 
         for (const auto& [cand_name, cand_system, by_name] : candidates) {
-            const Game& game = fetch_game(cand_name, cand_system);
-            if (game.roms.empty()) {
-                dbg_trace += " | candidate " + cand_name + "/" + cand_system + " by_name=" +
-                             (by_name ? "1" : "0") + " -> fetch_game returned EMPTY roms";
+            const Game* found = book.game(cand_name, cand_system);
+            std::string folder;
+            const DatLayout::Archive* layout = found ? book.archive_for(*found, &folder) : nullptr;
+            // A set its DAT expects no archive for (a split clone with no ROM
+            // of its own), or only CHDs, which Import never builds.
+            if (!layout || layout->entries.empty()) {
+                dbg_trace += " | candidate " + cand_name + "/" + cand_system + " -> no archive expected by its DAT";
                 continue;
             }
+            const Game* owner_set = book.game(layout->name, cand_system);
 
             SetPlan plan;
-            plan.game_name       = game.name;
-            plan.system          = game.system;
-            plan.dat_header      = outbox_subdir_for(game);
-            plan.description     = game.description;
+            plan.game_name       = layout->name;
+            plan.system          = cand_system;
+            plan.dat_header      = sanitize_component(folder);
+            plan.description     = owner_set ? owner_set->description : found->description;
             plan.trigger_archive = arc.path;
 
             bool all_resolved       = true;
             bool all_from_trigger   = true;
             std::unordered_set<std::string> used_from_trigger;
 
-            // Does the library already hold this set? Answered on content rather
-            // than on the stored status flag, which can be stale. It is not enough
-            // for the pieces to exist *somewhere* in the library: they must all sit
-            // in one archive, otherwise the user has scattered ROMs, not a set.
-            std::unordered_map<std::string, int> lib_container_hits;
-            int verifiable_roms = 0;
-
-            for (const auto& rom : game.roms) {
-                if (rom.crc.empty()) continue;  // nodump entry, unverifiable
-                unsigned long want_crc = parse_crc_hex(rom.crc);
-                uint64_t      want_size = (uint64_t)rom.size;
-                // In a split collection only the set's own ROMs say whether the
-                // library already holds it : the clone's zip is not supposed
-                // to carry the inherited ones.
-                const bool own_rom = !(split && rom.is_inherited());
-                if (own_rom) verifiable_roms++;
-
-                {
-                    // Right CRC is not enough here: a library archive that holds the
-                    // right data under the wrong entry name is exactly the case RomAudit
-                    // flags as "incorrect" (WrongName), so it must not count as already
-                    // correct here either : only a name+CRC match proves the set is fine
-                    // as it sits. A CRC-only match still resolves as a repair *source*
-                    // for `piece` below; this check only gates the "nothing to do" verdict.
-                    std::unordered_set<std::string> seen_containers;
-                    auto range = lib_pool.equal_range(want_crc);
-                    for (auto it = range.first; it != range.second && own_rom; ++it)
-                        if (it->second.entry == rom.name &&
-                            seen_containers.insert(it->second.container).second)
-                            lib_container_hits[it->second.container]++;
-                }
-
+            for (const auto& entry : layout->entries) {
                 PiecePlan piece;
-                piece.target_name = rom.name;
-                piece.crc         = want_crc;
-                piece.size        = want_size;
-                piece.inherited   = rom.is_inherited();
+                piece.target_name = entry.name;
+                piece.crc         = entry.crc;
+                piece.size        = entry.size;
+                piece.owner       = entry.owner;
 
-                auto size_ok = [&](uint64_t got) { return want_size == 0 || got == want_size; };
+                auto size_ok = [&](uint64_t got) { return entry.size == 0 || got == entry.size; };
 
                 // 1. right name, right content, already in the trigger archive
-                auto byname = arc_by_name.find(rom.name);
-                if (byname != arc_by_name.end() && byname->second->crc == want_crc &&
+                auto byname = arc_by_name.find(entry.name);
+                if (byname == arc_by_name.end()) byname = arc_by_name.find(DatLayout::entry_path(entry.name));
+                if (byname != arc_by_name.end() && byname->second->crc == entry.crc &&
                     size_ok(byname->second->size)) {
-                    piece.src = {arc.path, rom.name, true};
+                    piece.src = {arc.path, byname->second->name, true};
                     piece.resolved = true;
-                    used_from_trigger.insert(rom.name);
+                    used_from_trigger.insert(byname->second->name);
                 }
                 // 2. right content under another name in the trigger archive
                 if (!piece.resolved) {
-                    auto range = arc_by_crc.equal_range(want_crc);
+                    auto range = arc_by_crc.equal_range(entry.crc);
                     for (auto it = range.first; it != range.second; ++it) {
                         if (!size_ok(it->second->size)) continue;
                         piece.src = {arc.path, it->second->name, true};
@@ -737,10 +703,9 @@ Report analyze(const std::string& inbox_dir,
                         break;
                     }
                 }
-                // 3. elsewhere in the inbox. In split, an inherited ROM is never
-                // fetched from anywhere: the produced zip leaves it out.
-                if (!piece.resolved && own_rom) {
-                    auto range = inbox_pool.equal_range(want_crc);
+                // 3. elsewhere in the inbox
+                if (!piece.resolved) {
+                    auto range = inbox_pool.equal_range(entry.crc);
                     if (range.first != range.second) {
                         piece.src = range.first->second;
                         piece.resolved = true;
@@ -748,8 +713,8 @@ Report analyze(const std::string& inbox_dir,
                     }
                 }
                 // 4. the existing library, read-only
-                if (!piece.resolved && own_rom) {
-                    auto range = lib_pool.equal_range(want_crc);
+                if (!piece.resolved) {
+                    auto range = lib_pool.equal_range(entry.crc);
                     if (range.first != range.second) {
                         piece.src = range.first->second;
                         piece.resolved = true;
@@ -757,27 +722,34 @@ Report analyze(const std::string& inbox_dir,
                         plan.pieces_from_library++;
                     }
                 }
-
-                // In a split collection an inherited ROM is the parent's business:
-                // not finding it anywhere is not a gap in THIS set.
-                if (!piece.resolved && !(split && piece.inherited)) {
+                if (!piece.resolved) {
                     all_resolved = false;
-                    plan.missing.push_back({rom.name, want_crc, want_size});
+                    plan.missing.push_back({entry.name, entry.crc, entry.size});
                 }
                 plan.pieces.push_back(std::move(piece));
             }
 
-            if (plan.pieces.empty()) {
-                dbg_trace += " | candidate " + cand_name + "/" + cand_system + " -> plan.pieces EMPTY (every rom.crc was blank/nodump?)";
+            if (by_name && content_matched && used_from_trigger.empty()) {
+                dbg_trace += " | candidate " + cand_name + "/" + cand_system +
+                             " -> name only, the archive holds none of its ROMs";
                 continue;
             }
 
             for (const auto& e : arc.entries)
                 if (!used_from_trigger.count(e.name)) plan.extra_entries.push_back({e.name, e.crc, e.size});
 
+            // Does the library already hold this archive, exactly as its DAT
+            // lays it out : named after its set, in its DAT's folder, every
+            // entry under its name with its CRC? Answered on content rather
+            // than on a stored status, which can be stale.
             bool library_has_set = false;
-            for (const auto& [_c, hits] : lib_container_hits)
-                if (verifiable_roms > 0 && hits == verifiable_roms) { library_has_set = true; break; }
+            if (lib_index)
+                for (const RomResolve::Archive* cand : lib_index->in_folder(folder, layout->name)) {
+                    bool all = true;
+                    for (const auto& entry : layout->entries)
+                        if (RomResolve::probe_rom(cand, entry.name, entry.crc) != RomResolve::RomState::Present) { all = false; break; }
+                    if (all) { library_has_set = true; break; }
+                }
 
             if (library_has_set) {
                 plan.action = Action::AlreadyInLibrary;
@@ -787,7 +759,7 @@ Report analyze(const std::string& inbox_dir,
                        && RomArchive::is_zip(arc.path)) {
                 // A perfect set can only be relocated as-is when it already is a
                 // ZIP. A 7z or rar always has to be rewritten, because that is the
-                // only container FinalBurn Neo loads.
+                // only container the emulators load.
                 plan.action = Action::Move;
             } else {
                 plan.action = Action::Rebuild;
@@ -840,6 +812,72 @@ Report analyze(const std::string& inbox_dir,
     }
 
     for (auto& [_, plan] : best) rep.sets.push_back(std::move(plan));
+
+    // ── 5. CHDs : the disks the DATs list, by the SHA1 of their header ───────
+    // Every disk every DAT expects, where its layout puts it (the folder of
+    // its set's archive, the parent's in merged). One CHD can be expected in
+    // several places (two DATs, or a clone keeping its parent's disk in a
+    // non-merged DAT) : one plan each, the first taking the file and the
+    // next ones copying it (apply()).
+    if (!chd_paths.empty()) {
+        report(cb, 98.0, _("Matching CHDs…"));
+        struct DiskTarget { std::string folder, set, system, description; DatLayout::DiskEntry disk; };
+        std::unordered_map<std::string, std::vector<DiskTarget>> by_sha1;
+        std::unordered_set<std::string> seen_target;
+        for (const auto& g : book.games()) {
+            if (g.disks.empty()) continue;
+            std::string folder;
+            const DatLayout::Archive* arc = book.archive_for(g, &folder);
+            if (!arc) continue;
+            for (size_t di : book.layout_of(g.dat_source).disks_of(g.name)) {
+                const DatLayout::DiskEntry& d = arc->disks[di];
+                if (!seen_target.insert(folder + '\x1f' + arc->name + '\x1f' + d.name).second) continue;
+                const Game* owner = book.game(arc->name, g.system);
+                by_sha1[d.sha1].push_back({folder, arc->name, g.system, owner ? owner->description : g.description, d});
+            }
+        }
+        for (const auto& path : chd_paths) {
+            if (is_cancelled(cb)) { rep.cancelled = true; return rep; }
+            const std::string sha1 = RomResolve::chd_header_sha1(path);
+            if (sha1.empty()) {
+                log(cb, "  not a readable CHD (v3, v4 or v5 header): " + fs::path(path).filename().string());
+                rep.unsupported.push_back(path);
+                continue;
+            }
+            auto hit = by_sha1.find(sha1);
+            if (hit == by_sha1.end()) {
+                rep.unrecognized.push_back(path);
+                rep.unrecognized_crcs.push_back("SHA1 " + sha1);
+                continue;
+            }
+            for (const auto& t : hit->second) {
+                SetPlan plan;
+                plan.disk            = true;
+                plan.game_name       = t.set;
+                plan.system          = t.system;
+                plan.dat_header      = sanitize_component(t.folder);
+                plan.description     = t.description;
+                plan.trigger_archive = path;
+                plan.dest_path       = (fs::path(outbox_dir) / plan.dat_header / sanitize_component(t.set)
+                                        / (t.disk.name + ".chd")).string();
+                PiecePlan piece;
+                piece.target_name = t.disk.name + ".chd";
+                piece.sha1        = sha1;
+                piece.size        = (uint64_t)fs::file_size(path, ec);
+                piece.src         = {path, fs::path(path).filename().string(), true};
+                piece.resolved    = true;
+                plan.pieces.push_back(std::move(piece));
+                if (fs::path(path).stem().string() != t.disk.name) plan.renamed_entries = 1;
+                const bool in_library = options.use_library &&
+                    RomResolve::evaluate_layout_disks(t.set, {t.disk}, options.roms_paths, t.folder).status == "available";
+                plan.action   = in_library ? Action::AlreadyInLibrary : Action::Move;
+                plan.selected = !in_library;
+                log(cb, "  CHD " + fs::path(path).filename().string() + " → " + t.folder + "/" + t.set + "/"
+                        + t.disk.name + ".chd" + (in_library ? " (already in the library)" : ""));
+                rep.sets.push_back(std::move(plan));
+            }
+        }
+    }
     std::sort(rep.sets.begin(), rep.sets.end(), [](const SetPlan& a, const SetPlan& b) {
         if (a.system != b.system) return a.system < b.system;
         return a.game_name < b.game_name;
@@ -869,7 +907,6 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
     ApplyResult res;
     std::error_code ec;
     const Options& options = report_in.options;
-    const bool split = options.style == RomResolve::SetStyle::Split;
 
     std::vector<const SetPlan*> todo;
     for (const auto& s : report_in.sets) {
@@ -911,20 +948,15 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
             int from_import = 0;
             std::vector<std::string> library_sources;
             for (const auto& p : plan.pieces) {
-                if (!p.resolved || (split && p.inherited)) continue;
+                if (!p.resolved) continue;
                 if (p.src.from_inbox) { ++from_import; continue; }
                 std::string name = fs::path(p.src.container).filename().string();
                 if (std::find(library_sources.begin(), library_sources.end(), name) == library_sources.end())
                     library_sources.push_back(name);
             }
-            size_t written = 0, left_out = 0;
-            for (const auto& p : plan.pieces) {
-                if (split && p.inherited) ++left_out;
-                else if (p.resolved) ++written;
-            }
+            size_t written = 0;
+            for (const auto& p : plan.pieces) if (p.resolved) ++written;
             e.details.push_back("rebuilt from " + std::to_string(written) + " piece(s)");
-            if (left_out)
-                e.details.push_back(std::to_string(left_out) + " inherited ROM(s) left to the parent/BIOS (split)");
             if (from_import)
                 e.details.push_back(std::to_string(from_import) + " from the import folder");
             if (plan.pieces_from_library) {
@@ -1001,12 +1033,10 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
                 log(cb, "FAILED  " + plan.game_name + ": " + error);
             }
         } else {
-            if (rebuild_set(plan, relocated, options.style, error)) {
+            if (rebuild_set(plan, relocated, error)) {
                 res.rebuilt++;
                 describe(plan, RomManifest::action::Rebuilt);
-                // Every piece the plan resolved counts as used : in split, an
-                // inherited entry the source carried was deliberately left to
-                // the parent, which is a decision about it, not a leftover.
+                // Every piece the plan resolved counts as used.
                 for (const auto& p : plan.pieces)
                     if (p.resolved)
                         consumed_entries.insert(p.src.container + '\x1f' + p.src.entry);

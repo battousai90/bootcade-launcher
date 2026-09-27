@@ -1,11 +1,15 @@
 // src/RomQuarantineTab.cpp
 #include "RomQuarantineTab.h"
 
+#include "AppContext.h"
 #include "ConfirmationDialog.h"
 #include "i18n.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <set>
@@ -103,10 +107,17 @@ void RomQuarantineTab::build_header() {
                            "Restore them to Import, delete them, or keep them for later review."));
     auto* body = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 8);
     body->set_margin_top(10);
-    m_path_label.set_xalign(0.0f);
-    m_path_label.set_ellipsize(Pango::ELLIPSIZE_MIDDLE);
-    m_path_label.get_style_context()->add_class("set-mono");
-    body->pack_start(m_path_label, Gtk::PACK_SHRINK);
+    // Le dossier se choisit la ou on regarde son contenu, comme le dossier
+    // d'import dans l'onglet Import : meme ligne, meme bouton.
+    auto* path_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+    m_entry_folder.set_hexpand(true);
+    m_entry_folder.set_placeholder_text(_("No quarantine folder set yet"));
+    m_entry_folder.signal_activate().connect([this] { apply_quarantine_path(m_entry_folder.get_text().raw()); });
+    m_btn_browse = ui::button(_("Browse…"), "bc-folder.svg");
+    m_btn_browse->signal_clicked().connect(sigc::mem_fun(*this, &RomQuarantineTab::on_browse_folder));
+    path_line->pack_start(m_entry_folder, Gtk::PACK_EXPAND_WIDGET);
+    path_line->pack_start(*m_btn_browse, Gtk::PACK_SHRINK);
+    body->pack_start(*path_line, Gtk::PACK_SHRINK);
     auto* line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
     m_btn_open = ui::button(_("Open folder"), "bc-external.svg");
     m_btn_open->signal_clicked().connect(sigc::mem_fun(*this, &RomQuarantineTab::on_open_folder));
@@ -114,7 +125,7 @@ void RomQuarantineTab::build_header() {
     m_btn_refresh->signal_clicked().connect(sigc::mem_fun(*this, &RomQuarantineTab::refresh));
     line->pack_start(*m_btn_open, Gtk::PACK_SHRINK);
     line->pack_start(*m_btn_refresh, Gtk::PACK_SHRINK);
-    auto* hint = ui::sub_label(_("Nothing here is deleted on its own. The folder is set in Settings › Library › ROM Management."));
+    auto* hint = ui::sub_label(_("Nothing here is deleted on its own."));
     hint->set_valign(Gtk::ALIGN_CENTER);
     line->pack_start(*hint, Gtk::PACK_SHRINK);
     body->pack_start(*line, Gtk::PACK_SHRINK);
@@ -244,7 +255,9 @@ void RomQuarantineTab::refresh() {
     Paths p = m_paths();
     std::error_code ec;
     m_items.clear();
-    m_path_label.set_text(p.quarantine.empty() ? Glib::ustring(_("No quarantine folder configured.")) : Glib::ustring(p.quarantine));
+    // Pas de set_text inconditionnel : l'utilisateur peut etre en train de
+    // taper dans le champ pendant qu'un refresh arrive.
+    if (m_entry_folder.get_text().raw() != p.quarantine) m_entry_folder.set_text(p.quarantine);
     if (p.quarantine.empty() || !fs::is_directory(p.quarantine, ec)) {
         m_manifest = RomManifest::Manifest();
         populate();
@@ -433,6 +446,39 @@ void RomQuarantineTab::on_open_folder() {
     if (p.quarantine.empty() || !fs::is_directory(p.quarantine, ec)) { flash(_("No quarantine folder to open.")); return; }
     try { Gio::AppInfo::launch_default_for_uri(Glib::filename_to_uri(p.quarantine)); }
     catch (const Glib::Error& e) { flash(Glib::ustring::compose(_("Could not open the folder: %1"), e.what())); }
+}
+
+// config.json est aussi ecrit par le panneau de reglages : on relit le fichier
+// entier, on ne change que cette cle, et on le reecrit. Un fichier illisible
+// n'est pas reecrit du tout, plutot que remplace par un fichier presque vide.
+void RomQuarantineTab::save_quarantine_path(const std::string& folder) const {
+    nlohmann::json j;
+    const std::string path = AppContext::get_config_path();
+    { std::ifstream fi(path); if (fi) { try { fi >> j; } catch (...) { return; } } }
+    j["rom_manager"]["quarantine_path"] = folder;
+    std::ofstream fo(path);
+    if (fo) fo << j.dump(4);
+}
+
+void RomQuarantineTab::apply_quarantine_path(const std::string& folder) {
+    if (folder == m_paths().quarantine) return;
+    save_quarantine_path(folder);
+    m_entry_folder.set_text(folder);
+    m_sig_path_changed.emit(folder);
+    // Sans cela l'ecran continuerait de montrer le contenu de l'ancien dossier.
+    refresh();
+}
+
+void RomQuarantineTab::on_browse_folder() {
+    auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
+    Gtk::FileChooserDialog dlg(_("Select the quarantine folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    if (top) dlg.set_transient_for(*top);
+    dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+    dlg.add_button(_("Select"), Gtk::RESPONSE_OK);
+    const std::string current = m_entry_folder.get_text().raw();
+    if (!current.empty()) dlg.set_filename(current);
+    if (dlg.run() != Gtk::RESPONSE_OK) return;
+    apply_quarantine_path(dlg.get_filename());
 }
 
 void RomQuarantineTab::on_restore(bool to_origin) {

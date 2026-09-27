@@ -28,9 +28,14 @@ public:
      * n'ont pas le meme plan de boutons, et regler l'un ne doit pas deregler
      * l'autre. `game_profile` est le profil deja assigne, vide s'il n'y en a
      * pas : on ouvre alors sur le profil par defaut. A appeler avant show(). */
+    /* `mame` : le jeu tourne sous MAME. `fbneo_rom_name` est alors sa cle
+     * « mame:<machine> », et Save comme « Use default profile » n'ecrivent
+     * que l'assignation : MAME recoit le profil au lancement, dans un
+     * fichier controleur regenere a chaque fois. */
     void set_game_scope(const std::string& fbneo_rom_name,
                         const std::string& game_title,
-                        const std::string& game_profile);
+                        const std::string& game_profile,
+                        bool mame = false);
 
 private:
     // ── Profile state ─────────────────────────────────────────────────────
@@ -44,6 +49,7 @@ private:
     std::string                             m_game_rom;
     std::string                             m_game_title;
     Gtk::Button                             m_btn_use_default;
+    bool                                    m_game_mame{false};
     bool game_scoped() const { return !m_game_rom.empty(); }
     bool                                    m_profile_switching{false};
 
@@ -144,6 +150,16 @@ private:
                       Gtk::Widget& body, const std::string& subtitle = {});
     std::vector<JoystickInfo>  m_devices;
     Gtk::ComboBoxText*         m_device_combos[2]{};
+
+    /* Boutons 7 a 16 : une carte a part, et une ligne par bouton, montrees
+     * selon le nombre de boutons de la manette choisie. */
+    Gtk::Widget* m_extra_card[2]{};
+    Gtk::Widget* m_extra_rows[2][MAX_GAME_BUTTONS]{};
+    // Combien de boutons l'ecran propose pour ce joueur : ceux de sa manette
+    // (six au moins), plus tout bouton deja lie au-dela.
+    int  shown_buttons(int p) const;
+    bool action_shown(int p, GameAction a) const;
+    void update_button_rows(int p);
 
     // Binding labels / buttons: indexed [player * GAME_ACTION_COUNT + action]
     std::vector<Gtk::Label*>   m_binding_labels;

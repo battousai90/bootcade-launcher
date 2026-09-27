@@ -13,7 +13,13 @@
 
 class ROMScanDialog : public Gtk::Dialog {
 public:
-    ROMScanDialog(Gtk::Window& parent, std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roms_paths, bool scan_recursive = true, bool include_loose_files = true);
+    // `emulator` : whose library `roms_paths` is. FinalBurn Neo runs the
+    // historical per-file scan; any other emulator reads its archives into the
+    // cache and derives its sets' statuses from there (see
+    // RomScanner::scan_into_cache), without touching FinalBurn Neo's scan
+    // bookkeeping.
+    ROMScanDialog(Gtk::Window& parent, std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roms_paths, bool scan_recursive = true, bool include_loose_files = true,
+                  const std::string& emulator = "fbneo");
     virtual ~ROMScanDialog();
     
     void start_scan();
@@ -27,6 +33,7 @@ public:
         return m_current_message;
     }
     bool is_scan_finished() const { return m_scan_finished; }
+    const std::string& emulator() const { return m_emulator; }
 
     // Emitted on the GTK main thread when the worker thread finishes
     sigc::signal<void>& signal_scan_complete()      { return m_signal_scan_complete; }
@@ -44,6 +51,7 @@ private:
     
     // Threading
     void worker_thread();
+    void worker_cache_scan();   // every emulator but FinalBurn Neo
     void on_progress_update();
     void on_scan_finished();
     
@@ -51,6 +59,7 @@ private:
     std::vector<std::string> m_roms_paths;
     bool m_scan_recursive = true;
     bool m_include_loose_files = true;
+    std::string m_emulator = "fbneo";
     bool m_cancelled;
     int m_found_count;
     

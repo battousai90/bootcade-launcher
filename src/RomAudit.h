@@ -46,6 +46,11 @@ struct RomEntry {
     // audit that says "present" about a ROM the set's own zip does not hold
     // must be able to say who does.
     std::string   inherited_from;
+    // A CHD rather than a ROM (GameEntry::is_chd) : `name` is the disk file
+    // ("gds-0029a.chd"), identified by SHA1 instead of CRC, and `found_in` is
+    // the file that answered.
+    bool          is_disk = false;
+    std::string   sha1, found_sha1;
 };
 
 struct GameEntry {
@@ -71,6 +76,21 @@ struct GameEntry {
     // A BIOS or device set (isbios in the DAT): not a game, but what other
     // sets of its system depend on through romof.
     bool is_bios = false;
+    // A set of disk images (MAME's "CHDs (merged)" DAT) : `archive` is the
+    // set's folder, every entry of `roms` a CHD. Never repairable, never
+    // quarantined : Fix does not touch CHDs.
+    bool is_chd = false;
+    // A set with a zip AND CHDs (MAME's single-folder DAT : kinst) : `roms`
+    // lists the zip's ROMs, then the disks (RomEntry::is_disk), and `status`
+    // judges the two together. `zip_status` is the zip's own verdict : what
+    // Fix, which never touches CHDs, acts on. Empty for every other set.
+    bool        has_disks = false;
+    std::string zip_status;
+    // The archive is the set's own. False for a clone of a merged DAT, whose
+    // content lives in its parent's archive : its row speaks for its part
+    // only, and whole-archive actions (quarantine, extra files) belong to
+    // the parent's row.
+    bool archive_is_own = true;
 };
 
 // A BIOS set that is not available, and how many sets depend on it: in a
@@ -103,7 +123,7 @@ struct OrphanArchive {
 };
 
 struct Report {
-    RomResolve::SetStyle style = RomResolve::SetStyle::NonMerged;  // the rule applied
+    std::string emulator = "fbneo";  // whose sets were audited
     std::vector<GameEntry> games;   // problem sets (or all, per `problems_only`)
     std::vector<OrphanArchive> orphans; // archives no game in the DAT claims at all
     int  total = 0, available = 0, incorrect = 0, missing = 0;
@@ -115,11 +135,14 @@ struct Report {
 };
 
 // `dat_sources` narrows the audit to the games of those DAT files (the DAT
-// group's selection); empty means every game the database holds.
+// group's selection); empty means every game of `emulator` the database
+// holds. `emulator` is the group's : its sets, its ignored list, its style.
+// `roms_paths` are that emulator's ROM directories.
 Report audit(std::shared_ptr<DatabaseManager> db,
              const std::vector<std::string>& roms_paths,
              bool problems_only,
              const RomInbox::Callbacks& cb,
-             const std::set<std::string>& dat_sources = {});
+             const std::set<std::string>& dat_sources = {},
+             const std::string& emulator = "fbneo");
 
 } // namespace RomAudit

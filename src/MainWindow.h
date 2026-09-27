@@ -51,7 +51,9 @@ public:
 
     MainWindow(std::shared_ptr<DatabaseManager> database,
                std::function<void(double, const std::string&)> progress_callback = nullptr,
-               const std::vector<Game>& preloaded_games = {});
+               // Par valeur : le catalogue est cede, pas recopie. A 30 000 jeux
+               // la copie coutait deja cher, et le catalogue va doubler.
+               std::vector<Game> preloaded_games = {});
     virtual ~MainWindow();
 
 private:
@@ -117,6 +119,12 @@ private:
     void on_generate_dat_files();
     void update_status_bar_stats();
     void on_start_scan_clicked();
+    // ROM Management › Library › Scan ROMs : the library of the DAT group's
+    // emulator, whatever the main window is showing. Same confirmation as the
+    // header button.
+    void on_library_scan_requested(const std::string& emulator);
+    // The FinalBurn Neo per-file scan, after its confirmation.
+    void scan_fbneo_library();
     void on_scan_dialog_complete();
     void on_scan_go_background();
     void set_scan_status(const Glib::ustring& text, SettingsUi::State state);
@@ -135,15 +143,25 @@ private:
     // ROM scan methods
     void on_scan_progress();
     void on_scan_finished();
-    void start_scan_thread(const std::vector<std::string>& roms_paths);
+    // `emulator` : whose library `roms_paths` is (see ROMScanDialog). A scan
+    // asked for while another runs is queued and started once it is over.
+    void start_scan_thread(const std::vector<std::string>& roms_paths,
+                           const std::string& emulator = "fbneo");
+    std::vector<std::string> m_pending_scans;   // emulators waiting for their scan
     void on_update_dat_clicked();
+    // `emulator` : the one whose games are reloaded (see DATUpdateDialog) ;
+    // empty reloads every emulator.
+    void confirm_update_dat(const std::string& emulator);
     // The actual reload, with no confirmation dialog of its own : for callers
     // (like the post-FBNeo-download chain) that already got the user's OK a
     // moment ago and would otherwise show a second, easy-to-dismiss prompt
     // that silently drops the database refresh if cancelled.
-    void do_update_dat();
-    void run_update_dat_once();
+    void do_update_dat(const std::string& emulator = "");
+    void run_update_dat_once(const std::string& emulator);
     bool m_dat_update_running = false, m_dat_update_again = false;
+    // What the queued reload covers : two requests for different emulators
+    // queue a reload of both.
+    std::string m_dat_update_again_emulator;
     void update_fbneo_config(const std::vector<std::string>& roms_paths);
     void set_fbneo_system(const std::string& system);
     // In-game screenshot capture: FBNeo's own unmodified F6 hotkey already
@@ -162,7 +180,7 @@ private:
     void filter_games_async();
     void filter_games_simple();
     void apply_filters();
-    void append_game_rows(const std::vector<Game>& games);
+    void append_game_rows(const std::vector<const Game*>& games);
     const std::string& search_blob(size_t idx);
     std::vector<std::string> m_search_blobs;      // lower-cased haystack per cached game
     void load_filter_cache();
@@ -309,10 +327,57 @@ private:
     Gtk::Box m_toolbar_container{Gtk::ORIENTATION_VERTICAL};
     Gtk::Box m_toolbar_row1{Gtk::ORIENTATION_HORIZONTAL};
     Gtk::Box m_toolbar_row2{Gtk::ORIENTATION_HORIZONTAL};
-    Gtk::Button m_toolbar_play{"▶ Play"}; // Toolbar button to play selected game
+    Gtk::Button m_toolbar_play;   // libelle pose dans le constructeur, sinon non traduit
     Gtk::Button m_button_scan{"Scan ROMs"}; // Button to scan for ROMs
     Gtk::Button m_btn_random;               // le « de » : un jeu au hasard
     Gtk::Button m_button_update_dat{"Update DAT"}; // Button to update DAT database
+    // --- Portee par emulateur ------------------------------------------
+    //
+    // Un encart au-dessus de l'arbre des filtres montre le catalogue courant ;
+    // le clic ouvre une modale d'une carte par emulateur. L'encart vit hors de
+    // l'arbre exprès : un selecteur qui serait une ligne de l'arbre et dont le
+    // clic le reconstruit serait reentrant, ce que populate_filter_tree evite
+    // deja a grand-peine.
+    //
+    // m_active_emulator vide veut dire « tous » : c'est une portee, pas un
+    // filtre, et elle ne figure donc pas dans m_active_filters.
+    Gtk::Button  m_btn_emu_picker;
+    Gtk::Box     m_emu_picker_box{Gtk::ORIENTATION_HORIZONTAL, 10};
+    Gtk::Image   m_emu_picker_logo;
+    Gtk::Label   m_emu_picker_count;
+    std::string  m_active_emulator;          // "" = tous les catalogues
+
+    // Plusieurs catalogues peuplent la liste a la fois. Retenu plutot que
+    // recalcule : les vues le demandent une fois par ligne.
+    bool         m_multi_emulator = false;
+    // La colonne « Emulator » de la table, gardee pour pouvoir la cacher :
+    // la retrouver par son titre la perdrait a la premiere traduction.
+    Gtk::TreeViewColumn* m_emulator_column = nullptr;
+    // Vrai quand une ligne peut venir de l'un ou l'autre catalogue : c'est le
+    // seul cas ou dire d'ou elle vient apprend quelque chose. Devant un seul
+    // catalogue, la marque ne serait que du bruit repete a chaque ligne.
+    bool show_emulator_marks() const {
+        return m_active_emulator.empty() && m_multi_emulator;
+    }
+
+    // Demande son verdict a MAME sur la collection et le reporte dans le
+    // catalogue. Long : plusieurs minutes sur un disque externe.
+    // Les deux catalogues reunis, dans l'ordre ou l'interface les montre.
+    // A utiliser partout ou m_cached_games est reconstruit : la base ne rend
+    // que les jeux FBNeo, et recharger sans cette fusion faisait disparaitre
+    // toutes les machines MAME de la liste.
+    std::vector<Game> load_all_catalogs();
+    void run_mame_audit();
+    void build_emulator_picker();
+    void refresh_emulator_picker();
+    void on_emulator_picker_clicked();
+    void set_active_emulator(const std::string& id);
+    // Combien de jeux chaque emulateur apporte, catalogue courant en main.
+    std::map<std::string, int> emulator_counts() const;
+    bool emulator_in_scope(const Game& g) const {
+        return m_active_emulator.empty() || g.emulator == m_active_emulator;
+    }
+
     std::vector<Game> m_cached_games; // Cache for games (legacy, kept for compatibility)
     Gtk::Entry m_search_entry; // Search entry for filtering games
     // MAMEUI-style filter panel with TreeView
@@ -364,6 +429,9 @@ private:
     void select_startup_game();
     std::string m_last_selected_rom;      // strategie « dernier consulte »
     std::string m_last_selected_system;   // le nom seul ne designe pas un jeu
+    // Et l'emulateur avec : sans lui, le repli ci-dessus renvoyait une machine
+    // MAME vers FinalBurn Neo, qui ne la connait pas.
+    std::string m_last_selected_emulator;
 
     void update_dock_width();
     int  m_last_alloc_width = 0;
@@ -407,7 +475,7 @@ private:
     enum class SortMode { Default, Name, Year, YearAsc, RecentlyPlayed, Highscore };
     SortMode m_sort_mode = SortMode::Default;
     Gtk::ComboBoxText m_combo_sort;
-    void sort_games(std::vector<Game>& games);
+    void sort_games(std::vector<const Game*>& games);
 
     // ── Online scores ──────────────────────────────────────────────────
     // Chaque appel réseau tourne sur un fil détaché qui survit à ce qu'il ne
@@ -447,13 +515,14 @@ private:
     // One-time offer to re-read the DAT files after a schema migration left a
     // new column empty (see DatabaseManager::needsDatResync).
     void ask_dat_resync();
+    void ask_mame_dat_resync();
     void on_hiscore_supported_ready();
     void on_hiscore_refresh_done();
     Glib::Dispatcher m_hiscore_refresh_dispatcher;
     std::atomic<bool> m_hiscore_refreshing{false};
     std::mutex  m_hiscore_status_mutex;
     std::string m_hiscore_status;
-    bool game_ranks_online(const std::string& system, const std::string& game);
+    bool game_ranks_online(const std::string& emulator, const std::string& system, const std::string& game);
 
     // Leaderboard of whatever game the detail dock is showing. The player
     // clicks through a list faster than the network answers, so each request
@@ -519,9 +588,12 @@ private:
     // runs on the watcher thread, and touching a GTK widget from outside the
     // main thread is undefined behaviour. Both values are captured at launch,
     // which is also the moment the player's intent actually applies.
+    // `score_path` : the score file chosen at launch, read again after the
+    // session ; `hi_before` its content then.
     void submit_session_score(const std::string& system,
                               const std::string& game,
                               const std::string& fbneo_rom_name,
+                              const std::string& score_path,
                               const std::string& hi_before,
                               const std::string& player,
                               const std::string& country,
@@ -632,7 +704,9 @@ private:
     Gtk::Box            m_center_box{Gtk::ORIENTATION_VERTICAL, 0};
     Gtk::Box            m_center_foot{Gtk::ORIENTATION_HORIZONTAL, 8};
     Gtk::Label          m_center_count;
-    Gtk::Button         m_hdr_game, m_hdr_system, m_hdr_year;
+    // m_hdr_emu ne parait qu'en portee « tous » : ailleurs la colonne
+    // repeterait la meme valeur sur chaque ligne.
+    Gtk::Button         m_hdr_game, m_hdr_emu, m_hdr_system, m_hdr_year;
     Gtk::Label          m_hdr_status, m_hdr_hs;
     void build_mlist_header();
     void refresh_mlist_header();
@@ -695,7 +769,8 @@ private:
     void art_worker();                          // background: resolve + decode
     void on_art_ready();                         // main thread: swap pixbufs in
     void queue_art(Gtk::Box* holder, const std::string& name,
-                   const std::string& system, int w, int h);
+                   const std::string& system, const std::string& emulator,
+                   int w, int h);
     void clear_art_queue();                      // bump generation, drop pending
     void on_grid_selection_changed();
     void on_grid_child_activated(Gtk::FlowBoxChild* child);
@@ -847,7 +922,7 @@ private:
     Gtk::Box    m_activity_box{Gtk::ORIENTATION_VERTICAL, 4};
     Gtk::Label  m_activity_title;
     Gtk::Grid   m_activity_grid;
-    Gtk::Button m_button_play{"▶ Launch"};
+    Gtk::Button m_button_play;    // idem : « ▶ Launch », pose a la construction
     Gtk::Button m_button_download_art{"Download Art"};
     Gtk::Box    m_dock_pills{Gtk::ORIENTATION_HORIZONTAL, 6}; // status / zip / CRC pills
     Gtk::Button m_button_favorite{"★"};
@@ -903,7 +978,9 @@ private:
     
     // Filter performance optimization
     sigc::connection m_search_timeout_connection;
-    std::vector<Game> m_filtered_games;
+    // Pointe dans m_cached_games : a vider partout ou ce vecteur est
+    // reaffecte, sous peine de pointeurs pendants.
+    std::vector<const Game*> m_filtered_games;
     std::mutex m_filter_mutex;
     
     // Filter cache data

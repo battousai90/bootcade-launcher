@@ -37,6 +37,9 @@ public:
     sigc::signal<void, int>& signal_restored_to_import() { return m_sig_restored; }
     // A log line for the window's own log, when something is worth keeping.
     sigc::signal<void, std::string>& signal_log() { return m_sig_log; }
+    // The user picked another quarantine folder here : the same key lives in
+    // config.json, so whoever else displays it is told.
+    sigc::signal<void, std::string>& signal_quarantine_path_changed() { return m_sig_path_changed; }
 
 private:
     void build_header();
@@ -51,6 +54,10 @@ private:
     void on_context_menu(const Gtk::TreeModel::Path& path, Gtk::TreeViewColumn* column, GdkEventButton* event);
     void update_action_buttons();
     void on_open_folder();
+    void on_browse_folder();
+    // Take a folder the user chose : store it, tell the others, show it.
+    void apply_quarantine_path(const std::string& folder);
+    void save_quarantine_path(const std::string& folder) const;
     void on_restore(bool to_origin);
     void on_delete_selected();
     void on_empty();
@@ -61,7 +68,8 @@ private:
     PathsProvider m_paths;
 
     // ── Widgets ─────────────────────────────────────────────────────────────
-    Gtk::Label          m_path_label;
+    Gtk::Entry          m_entry_folder;
+    Gtk::Button*        m_btn_browse = nullptr;
     Gtk::Button*        m_btn_open = nullptr;
     Gtk::Button*        m_btn_refresh = nullptr;
     Gtk::Button*        m_btn_restore = nullptr;
@@ -112,4 +120,5 @@ private:
 
     sigc::signal<void, int>         m_sig_restored;
     sigc::signal<void, std::string> m_sig_log;
+    sigc::signal<void, std::string> m_sig_path_changed;
 };

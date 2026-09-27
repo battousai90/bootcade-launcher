@@ -7,27 +7,48 @@
 #include <vector>
 
 // ── Generic arcade actions ─────────────────────────────────────────────────
+// Seize boutons et non plus six : une manette actuelle en a onze ou douze, et
+// MAME numerote ses boutons jusqu'a P1_BUTTON16. Les six premiers gardent leur
+// cle d'enregistrement, un ancien profil se relit donc tel quel ; les boutons
+// que le profil ne lie pas n'existent simplement pas dans le fichier.
 enum class GameAction {
     UP = 0, DOWN, LEFT, RIGHT,
     BUTTON1, BUTTON2, BUTTON3, BUTTON4, BUTTON5, BUTTON6,
+    BUTTON7, BUTTON8, BUTTON9, BUTTON10, BUTTON11, BUTTON12,
+    BUTTON13, BUTTON14, BUTTON15, BUTTON16,
     START, COIN,
     COUNT
 };
 
 constexpr int GAME_ACTION_COUNT = static_cast<int>(GameAction::COUNT);
+constexpr int MAX_GAME_BUTTONS  = 16;
+// Ce que l'ecran montre quand on ne sait rien de la manette : la borne
+// classique a six boutons.
+constexpr int BASE_GAME_BUTTONS = 6;
+
+inline bool is_button_action(GameAction a) {
+    return a >= GameAction::BUTTON1 && a <= GameAction::BUTTON16;
+}
+// Numero du bouton, 1 a 16, ou 0 si l'action n'est pas un bouton.
+inline int button_number(GameAction a) {
+    return is_button_action(a) ? static_cast<int>(a) - static_cast<int>(GameAction::BUTTON1) + 1 : 0;
+}
+inline GameAction button_action(int number) {
+    return static_cast<GameAction>(static_cast<int>(GameAction::BUTTON1) + number - 1);
+}
 
 inline const char* game_action_name(GameAction a) {
+    static const char* const buttons[MAX_GAME_BUTTONS] = {
+        "Button 1", "Button 2", "Button 3", "Button 4", "Button 5", "Button 6",
+        "Button 7", "Button 8", "Button 9", "Button 10", "Button 11", "Button 12",
+        "Button 13", "Button 14", "Button 15", "Button 16",
+    };
+    if (is_button_action(a)) return buttons[button_number(a) - 1];
     switch (a) {
         case GameAction::UP:      return "Up";
         case GameAction::DOWN:    return "Down";
         case GameAction::LEFT:    return "Left";
         case GameAction::RIGHT:   return "Right";
-        case GameAction::BUTTON1: return "Button 1";
-        case GameAction::BUTTON2: return "Button 2";
-        case GameAction::BUTTON3: return "Button 3";
-        case GameAction::BUTTON4: return "Button 4";
-        case GameAction::BUTTON5: return "Button 5";
-        case GameAction::BUTTON6: return "Button 6";
         case GameAction::START:   return "Start";
         case GameAction::COIN:    return "Coin / Select";
         default:                  return "Unknown";
@@ -35,17 +56,17 @@ inline const char* game_action_name(GameAction a) {
 }
 
 inline const char* game_action_key(GameAction a) {
+    static const char* const buttons[MAX_GAME_BUTTONS] = {
+        "button1", "button2", "button3", "button4", "button5", "button6",
+        "button7", "button8", "button9", "button10", "button11", "button12",
+        "button13", "button14", "button15", "button16",
+    };
+    if (is_button_action(a)) return buttons[button_number(a) - 1];
     switch (a) {
         case GameAction::UP:      return "up";
         case GameAction::DOWN:    return "down";
         case GameAction::LEFT:    return "left";
         case GameAction::RIGHT:   return "right";
-        case GameAction::BUTTON1: return "button1";
-        case GameAction::BUTTON2: return "button2";
-        case GameAction::BUTTON3: return "button3";
-        case GameAction::BUTTON4: return "button4";
-        case GameAction::BUTTON5: return "button5";
-        case GameAction::BUTTON6: return "button6";
         case GameAction::START:   return "start";
         case GameAction::COIN:    return "coin";
         default:                  return "unknown";
@@ -348,7 +369,7 @@ inline void apply_preset(PlayerConfig& player, const ControllerPreset& preset) {
         player.bindings[action] = b;
     };
     for (int i = 0; i < 6; ++i)
-        set(static_cast<GameAction>((int)GameAction::BUTTON1 + i), preset.face[i]);
+        set(button_action(i + 1), preset.face[i]);
     set(GameAction::START, preset.start);
     set(GameAction::COIN,  preset.coin);
 

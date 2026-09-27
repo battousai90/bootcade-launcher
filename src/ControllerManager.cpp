@@ -130,18 +130,10 @@ bool ControllerManager::poll_raw(int fd, RawInput& out) {
 // ── JSON helpers ──────────────────────────────────────────────────────────
 
 static GameAction action_from_key(const std::string& k) {
-    if (k == "up")      return GameAction::UP;
-    if (k == "down")    return GameAction::DOWN;
-    if (k == "left")    return GameAction::LEFT;
-    if (k == "right")   return GameAction::RIGHT;
-    if (k == "button1") return GameAction::BUTTON1;
-    if (k == "button2") return GameAction::BUTTON2;
-    if (k == "button3") return GameAction::BUTTON3;
-    if (k == "button4") return GameAction::BUTTON4;
-    if (k == "button5") return GameAction::BUTTON5;
-    if (k == "button6") return GameAction::BUTTON6;
-    if (k == "start")   return GameAction::START;
-    if (k == "coin")    return GameAction::COIN;
+    for (int a = 0; a < GAME_ACTION_COUNT; ++a) {
+        const auto action = static_cast<GameAction>(a);
+        if (k == game_action_key(action)) return action;
+    }
     return GameAction::COUNT;
 }
 
@@ -354,12 +346,22 @@ std::string ControllerManager::get_fbneo_config_dir() {
     return std::string(home ? home : "") + "/.local/share/fbneo/config";
 }
 
-// Map GameAction index → FBNeo input name suffix (e.g. "up", "fire 1")
-static const char* FBNEO_ACTION_NAMES[GAME_ACTION_COUNT] = {
-    "up", "down", "left", "right",
-    "fire 1", "fire 2", "fire 3", "fire 4", "fire 5", "fire 6",
-    "start", "coin"
-};
+// Nom FBNeo d'une action, sans le prefixe du joueur ("up", "fire 3").
+// Les boutons au-dela du sixieme existent dans FBNeo ("p1 fire 7" chez
+// Mitchell, Data East) ; un jeu qui ne les a pas ignore simplement la ligne.
+static std::string fbneo_action_name(GameAction a)
+{
+    if (is_button_action(a)) return "fire " + std::to_string(button_number(a));
+    switch (a) {
+        case GameAction::UP:    return "up";
+        case GameAction::DOWN:  return "down";
+        case GameAction::LEFT:  return "left";
+        case GameAction::RIGHT: return "right";
+        case GameAction::START: return "start";
+        case GameAction::COIN:  return "coin";
+        default:                return "";
+    }
+}
 
 // FBNeo axis direction codes for UP/DOWN/LEFT/RIGHT (in GameAction order)
 // FBNeo hardcodes: 0x00=left, 0x01=right, 0x02=up, 0x03=down
@@ -476,7 +478,7 @@ void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
             if (!switch_code_for(it->second, a, base, sw)) continue;
 
             std::ostringstream oss;
-            oss << "input \"" << prefix << FBNEO_ACTION_NAMES[a]
+            oss << "input \"" << prefix << fbneo_action_name(action)
                 << "\" switch 0x"
                 << std::uppercase << std::hex << sw;
             f << oss.str() << "\n";
@@ -770,7 +772,7 @@ int game_action_of(const std::string& name, int player, int& fires)
     // Select n'est pas un bouton d'action : les defauts de FBNeo ne le
     // touchent pas, on fait pareil.
     if (rest == "Select") return -1;
-    if (fires >= 6) return -1;
+    if (fires >= MAX_GAME_BUTTONS) return -1;
     return static_cast<int>(GameAction::BUTTON1) + fires++;
 }
 

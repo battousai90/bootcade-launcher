@@ -2,6 +2,15 @@
 #include "MainWindow.h"
 #include "SplashScreen.h"
 #include "DatabaseManager.h"
+#include "MameCatalog.h"
+#include "DatSource.h"
+#include "RomAudit.h"
+#include "RomScanner.h"
+#include "DATUpdateDialog.h"
+#include "DatLayout.h"
+#include "RomInbox.h"
+#include <algorithm>
+#include <sstream>
 #include "AppContext.h"
 #include "i18n.h"
 #include <gtkmm.h>
@@ -128,11 +137,163 @@ int main(int argc, char *argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
+    /* Diagnostics du gestionnaire de ROMs, sur le modele de
+     * BOOTCADE_MAME_GENDAT : sans ouvrir la fenetre principale, puis quitter.
+     *
+     *  BOOTCADE_UPDATE_DAT=1       recharge la base depuis les groupes DAT
+     *                              actifs (la boite « Update DAT » elle-meme) ;
+     *                              =fbneo ou =mame : ce seul emulateur ;
+     *  BOOTCADE_ROM_SCAN=<emu>     scan de la bibliotheque d'un emulateur autre
+     *                              que FinalBurn Neo (RomScanner::scan_into_cache) ;
+     *  BOOTCADE_ROM_AUDIT=<groupe> audit de l'onglet Bibliotheque pour ce
+     *                              groupe ; BOOTCADE_ROM_AUDIT_SETS=1 ecrit en
+     *                              plus le verdict de chaque set.
+     *  BOOTCADE_DAT_RULES=1        pour chaque DAT charge : ses liens, le mode
+     *                              que son en-tete declare, celui retenu ;
+     *  BOOTCADE_DAT_LAYOUT=<dat>:<mode>[:<fichier>] ecrit ce que chaque
+     *                              archive du DAT charge <dat> doit contenir
+     *                              dans ce mode (vide : tel quel) ;
+     *  BOOTCADE_PLAYABLE=<emu>     recalcule depuis le cache le statut jouable
+     *                              de chaque set de cet emulateur ;
+     *  BOOTCADE_IMPORT=<emu>|<import>|<sortie>  analyse le dossier d'import
+     *                              et reconstruit ses sets dans <sortie>,
+     *                              comme Fix dans l'onglet Import.
+     * Ils peuvent se combiner, dans cet ordre.
+     */
+    {
+        const char* upd  = std::getenv("BOOTCADE_UPDATE_DAT");
+        const char* scan = std::getenv("BOOTCADE_ROM_SCAN");
+        const char* grp  = std::getenv("BOOTCADE_ROM_AUDIT");
+        const char* rules = std::getenv("BOOTCADE_DAT_RULES");
+        const char* layout = std::getenv("BOOTCADE_DAT_LAYOUT");
+        const char* playable = std::getenv("BOOTCADE_PLAYABLE");
+        const char* import = std::getenv("BOOTCADE_IMPORT");
+        const bool any = (upd && *upd) || (scan && *scan) || (grp && *grp) || (rules && *rules == '1')
+                      || (layout && *layout) || (playable && *playable) || (import && *import);
+        if (upd && *upd) {
+            Gtk::Window host;
+            const auto t0 = std::chrono::steady_clock::now();
+            const std::string scope = std::string(upd) == "1" ? std::string() : std::string(upd);
+            DATUpdateDialog dialog(host, database, "the active DAT groups",
+                                   DATUpdateDialog::files_for_update(scope), scope);
+            dialog.start_update();
+            dialog.run();
+            std::cout << "[UPDATEDAT] seconds=" << std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - t0).count() / 1000.0
+                      << " fbneo=" << database->getGameCount("fbneo")
+                      << " mame=" << database->getGameCount("mame") << std::endl;
+        }
+        if (rules && *rules == '1') {
+            const auto groups = DatSource::load_groups();
+            for (const auto& [file, st] : database->getDatFileStats()) {
+                const DatSource::DatRule* rule = DatSource::rule_of(groups, file);
+                const std::string mode = DatSource::effective_merge({st.linked, st.declared}, rule);
+                std::cout << "[DATRULE] " << file << " linked=" << st.linked
+                          << " declared=" << (st.declared.empty() ? "-" : st.declared)
+                          << " rule=" << (rule ? (rule->merge.empty() ? "-" : rule->merge) + (rule->override_dat ? "+override" : "") : "none")
+                          << " mode=" << (mode.empty() ? "as-is" : mode) << std::endl;
+            }
+        }
+        if (layout && *layout) {
+            std::string spec = layout, dat, mode, out_path;
+            auto cut = [](std::string& from) {
+                const size_t c = from.find(':');
+                std::string head = from.substr(0, c);
+                from = c == std::string::npos ? std::string() : from.substr(c + 1);
+                return head;
+            };
+            dat = cut(spec);
+            mode = cut(spec);
+            out_path = spec;
+            std::vector<Game> all = database->getAllGames("");
+            std::vector<const Game*> sets;
+            for (const auto& g : all) if (g.dat_source == dat) sets.push_back(&g);
+            const DatLayout::Layout lay(sets, mode);
+            std::ofstream fo(out_path.empty() ? "/dev/stdout" : out_path);
+            size_t entries = 0;
+            for (const auto& a : lay.archives()) {
+                fo << "A\t" << a.name << "\n";
+                for (const auto& e : a.entries) {
+                    char crc[9];
+                    std::snprintf(crc, sizeof crc, "%08lx", e.crc);
+                    fo << "E\t" << e.name << "\t" << crc << "\n";
+                }
+                for (const auto& d : a.disks) fo << "D\t" << d.name << "\t" << d.sha1 << "\n";
+                entries += a.entries.size();
+            }
+            std::cout << "[DATLAYOUT] " << dat << " mode=" << (mode.empty() ? "as-is" : mode) << " sets=" << sets.size()
+                      << " archives=" << lay.archives().size() << " entries=" << entries << std::endl;
+        }
+        if (playable && *playable) {
+            const auto r = RomResolve::resolve_all_from_cache(database, DatSource::roms_paths_for(playable), playable);
+            std::cout << "[PLAYABLE] " << playable << " evaluated=" << r.evaluated << " available=" << r.available
+                      << " incorrect=" << r.incorrect << " missing=" << r.missing << " changed=" << r.changed << std::endl;
+        }
+        if (import && *import) {
+            std::string spec = import;
+            const size_t a = spec.find('|'), b = spec.find('|', a + 1);
+            RomInbox::Options o;
+            o.emulator   = spec.substr(0, a);
+            o.roms_paths = DatSource::roms_paths_for(o.emulator);
+            o.processed  = RomInbox::Options::Processed::Keep;
+            o.quarantine_rejects = false;
+            const std::string inbox = spec.substr(a + 1, b - a - 1), outbox = spec.substr(b + 1);
+            RomInbox::Callbacks cb;
+            cb.log = [](const std::string& l) { if (l.rfind("[INBOX-DEBUG]", 0) != 0) std::cout << "[IMPORT] " << l << std::endl; };
+            const RomInbox::Report rep = RomInbox::analyze(inbox, outbox, database, o, cb);
+            for (const auto& set : rep.sets)
+                std::cout << "[IMPORT-SET] " << set.game_name << " " << RomInbox::action_label(set.action)
+                          << " pieces=" << set.pieces.size() << " missing=" << set.missing.size() << std::endl;
+            const RomInbox::ApplyResult res = RomInbox::apply(rep, cb);
+            std::cout << "[IMPORT] rebuilt=" << res.rebuilt << " moved=" << res.moved << " failed=" << res.failed << std::endl;
+            for (const auto& e : res.errors) std::cout << "[IMPORT-ERROR] " << e << std::endl;
+        }
+        if (scan && *scan) {
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto r = RomScanner::scan_into_cache(database, DatSource::roms_paths_for(scan), scan, true,
+                {}, [](const std::string& l, bool w) { std::cout << "[ROMSCAN]" << (w ? " WARN " : " ") << l << std::endl; });
+            std::cout << "[ROMSCAN] seconds=" << std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - t0).count() / 1000.0
+                      << " archives=" << r.archives << " reread=" << r.reread
+                      << " available=" << r.statuses.available << " incorrect=" << r.statuses.incorrect
+                      << " missing=" << r.statuses.missing << " changed=" << r.statuses.changed << std::endl;
+        }
+        if (grp && *grp) {
+            for (const auto& g : DatSource::load_groups()) {
+                if (g.id != grp) continue;
+                const auto rep = RomAudit::audit(database, DatSource::roms_paths_for(g.emulator),
+                                                 /*problems_only=*/false, {},
+                                                 DatSource::selected_in_folder(g), g.emulator);
+                std::cout << "[ROMAUDIT] group=" << g.id << " total=" << rep.total
+                          << " available=" << rep.available << " incorrect=" << rep.incorrect
+                          << " missing=" << rep.missing << " ignored=" << rep.ignored
+                          << " repairable=" << rep.repairable << " orphans=" << rep.orphans.size()
+                          << " missing_bios=" << rep.missing_bios.size() << std::endl;
+                if (const char* v = std::getenv("BOOTCADE_ROM_AUDIT_SETS"); v && *v == '1') {
+                    for (const auto& e : rep.games) {
+                        std::cout << "[ROMAUDIT-SET] " << e.name << " [" << e.system << "] " << e.status
+                                  << " absent=" << e.absent << " wrong=" << e.wrong
+                                  << " corrupt=" << e.corrupt << " extra=" << e.extra_entries.size()
+                                  << " archive=" << e.archive << std::endl;
+                        if (v[1] == 'v')
+                            for (const auto& r : e.roms)
+                                if (r.state != RomAudit::RomState::Present || !r.inherited_from.empty())
+                                    std::cout << "[ROMAUDIT-ROM]   " << r.name << " state=" << (int)r.state
+                                              << " from=" << r.inherited_from << " found_as=" << r.found_as << std::endl;
+                    }
+                    for (const auto& o : rep.orphans) std::cout << "[ROMAUDIT-ORPHAN] " << o.path << std::endl;
+                    for (const auto& b : rep.missing_bios) std::cout << "[ROMAUDIT-BIOS] " << b.name << " " << b.status << " dependents=" << b.dependents << std::endl;
+                }
+            }
+        }
+        if (any) return 0;
+    }
+
     // === Load Games from Database ===
     splash.set_progress(0.4, "Loading game database...");
     std::vector<Game> preloaded_games;
     try {
-        preloaded_games = database->getAllGames();
+        preloaded_games = database->getAllGamesLight();
         
         if (preloaded_games.empty()) {
             std::cout << "[INFO] Database is empty - will show empty interface" << std::endl;
@@ -145,6 +306,90 @@ int main(int argc, char *argv[]) {
         std::cerr << "[ERROR] Failed to load games: " << e.what() << std::endl;
         splash.set_progress(0.7, "Failed to load games - continuing...");
     }
+
+    // === Catalogue MAME ===
+    //
+    // Interroge l'emulateur installe plutot que de recopier ses donnees : la
+    // table n'est regeneree que si MAME a change de version, et le catalogue
+    // FBNeo n'est pas touche. Sans MAME sur la machine, on passe simplement
+    // notre chemin.
+    try {
+        const std::string mame = MameCatalog::find_executable();
+        if (!mame.empty()) {
+            splash.set_progress(0.72, "Reading the MAME catalog...");
+            const int n = MameCatalog::sync(database, mame,
+                [&splash](int done) {
+                    splash.set_progress(0.72, "Reading the MAME catalog... " +
+                                              std::to_string(done));
+                });
+            if (n > 0) {
+                // Les machines mecaniques ne sont chargees que si l'utilisateur
+                // les a demandees : sinon elles pesent un tiers du catalogue MAME
+                // pour des jeux qu'on ne peut pas vraiment jouer ici.
+                bool show_mech = false;
+                try {
+                    std::ifstream cfgf(AppContext::get_config_path());
+                    if (cfgf) {
+                        nlohmann::json cj; cfgf >> cj;
+                        show_mech = cj.value("mame_show_mechanical", false);
+                    }
+                } catch (...) { /* defaut : masquees */ }
+                std::vector<Game> mame_games = MameCatalog::load(database, show_mech);
+                std::cout << "[INFO] MAME: " << mame_games.size()
+                          << " playable machines (" << n << " in catalog)" << std::endl;
+                preloaded_games.insert(preloaded_games.end(),
+                                       std::make_move_iterator(mame_games.begin()),
+                                       std::make_move_iterator(mame_games.end()));
+
+                // Chaque source arrive triee de son cote : les mettre bout a
+                // bout donnerait toute la bibliotheque FinalBurn Neo, puis
+                // toute celle de MAME. L'ordre alphabetique est celui qu'on
+                // avait avant d'avoir deux catalogues, et celui qu'on attend.
+                std::stable_sort(preloaded_games.begin(), preloaded_games.end(),
+                                 [](const Game& a, const Game& b) {
+                                     return a.description < b.description;
+                                 });
+            }
+            // Diagnostic, sur le modele de BOOTCADE_WATCHDOG : demander le
+            // verdict de MAME sur la collection sans passer par l'interface.
+            // BOOTCADE_MAME_ROMPATH surcharge les dossiers de mame.ini, qui
+            // peuvent parfaitement designer des chemins disparus.
+            // Diagnostic : produire les DAT sans passer par l'interface.
+            if (const char* gd = std::getenv("BOOTCADE_MAME_GENDAT")) {
+                if (*gd) {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    const int files = MameCatalog::generate_dats(mame, gd,
+                        [](int done) { if (done % 16384 == 0)
+                                           std::cout << "[GENDAT] " << done << std::endl;
+                                       return true; });
+                    std::cout << "[GENDAT] files=" << files << " seconds="
+                              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - t0).count() / 1000.0
+                              << std::endl;
+                }
+            }
+
+            if (const char* want = std::getenv("BOOTCADE_MAME_AUDIT")) {
+                if (*want && *want != '0') {
+                    std::vector<std::string> paths;
+                    if (const char* rp = std::getenv("BOOTCADE_MAME_ROMPATH")) {
+                        std::string all(rp), one;
+                        std::istringstream ss(all);
+                        while (std::getline(ss, one, ';')) if (!one.empty()) paths.push_back(one);
+                    } else {
+                        paths = MameCatalog::rompaths_from_mame_ini();
+                    }
+                    const auto r = MameCatalog::audit(database, mame, paths);
+                    std::cout << "[AUDIT] good=" << r.good << " playable=" << r.playable
+                              << " bad=" << r.bad << " missing=" << r.missing << std::endl;
+                }
+            }
+        } else {
+            std::cout << "[INFO] MAME not found; its catalog is skipped" << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[WARN] MAME catalog unavailable: " << e.what() << std::endl;
+    }
     
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     
@@ -154,7 +399,7 @@ int main(int argc, char *argv[]) {
     // Créer la fenêtre principale avec callback de progression et jeux préchargés
     MainWindow window(database, [&splash](double progress, const std::string& message) {
         splash.set_progress(progress, message);
-    }, preloaded_games);
+    }, std::move(preloaded_games));
     
     // Finalisation
     splash.set_progress(1.0, "Ready!");

@@ -1,0 +1,12 @@
+[Desktop Entry]
+# Outil de developpement (voir tools/bootcade_learn.cpp) : a installer sur le
+# seul poste de l'administrateur, jamais dans un paquet.
+#   cp tools/bootcade-learn.desktop ~/.local/share/applications/
+#   (Exec= : chemin du binaire construit avec -DBOOTCADE_DEV_TOOLS=ON)
+#   xdg-mime default bootcade-learn.desktop x-scheme-handler/bootcade-learn
+Type=Application
+Name=Bootcade Learn (dev)
+Exec=@BIN@ %u
+NoDisplay=true
+Terminal=false
+MimeType=x-scheme-handler/bootcade-learn;

@@ -372,7 +372,7 @@ ControllerDialog::ControllerDialog(const std::map<std::string, ControllerConfig>
     m_btn_use_default.set_no_show_all(true);
     m_btn_use_default.signal_clicked().connect([this] {
         ControllerManager::set_game_profile(m_config_path, m_game_rom, "");
-        if (m_profiles.count(m_global_active_profile)) {
+        if (!m_game_mame && m_profiles.count(m_global_active_profile)) {
             const auto& cfg = m_profiles.at(m_global_active_profile);
             ControllerManager::write_game_config(cfg, m_game_rom);
             ControllerManager::apply_analog_bindings(m_game_rom, cfg);
@@ -771,6 +771,69 @@ void ControllerDialog::build_player_tab(int p) {
     auto* cards = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 16);
     cards->set_homogeneous(true);
 
+    // Une ligne de liaison : pictogramme et nom a gauche, la valeur a droite.
+    auto make_row = [this, p](int a) -> std::pair<Gtk::Widget*, Gtk::Widget*> {
+        GameAction action = static_cast<GameAction>(a);
+
+        /* Les quatre directions portent leur fleche dans une tuile, les
+         * boutons leur numero dans une pastille coloree, Start et
+         * Coin leur pictogramme nu. Les trois cas passent par un
+         * conteneur de MEME taille : les colonnes tombent donc en face
+         * d'une carte a l'autre. */
+        const bool is_dir = a >= (int)GameAction::UP
+                         && a <= (int)GameAction::RIGHT;
+
+        Gtk::Widget* cell = nullptr;
+        if (is_button_action(action)) {
+            cell = number_badge(button_number(action));
+        } else if (is_dir) {
+            static const char* kArrow[] = {"bc-up.svg", "bc-down.svg",
+                                           "bc-left.svg", "bc-right.svg"};
+            cell = glyph_cell(kArrow[a - (int)GameAction::UP], true);
+        } else if (action == GameAction::START) {
+            cell = glyph_cell("bc-start.svg", false);
+        } else if (action == GameAction::COIN) {
+            cell = glyph_cell("bc-coin.svg", false);
+        }
+
+        auto* name_row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 11);
+        name_row->set_size_request(-1, kRowHeight);
+        if (cell) name_row->pack_start(*cell, Gtk::PACK_SHRINK);
+        auto* name_lbl = Gtk::make_managed<Gtk::Label>(_(game_action_name(action)));
+        name_lbl->set_halign(Gtk::ALIGN_START);
+        name_lbl->set_valign(Gtk::ALIGN_CENTER);
+        name_lbl->set_hexpand(true);
+        name_row->pack_start(*name_lbl, Gtk::PACK_EXPAND_WIDGET);
+
+        /* La valeur EST le bouton : un clic pour lier, Suppr pour
+         * effacer, comme dans toute table de raccourcis. */
+        auto* bind_lbl = Gtk::make_managed<Gtk::Label>("");
+        bind_lbl->set_halign(Gtk::ALIGN_START);
+        bind_lbl->set_ellipsize(Pango::ELLIPSIZE_END);
+        m_binding_labels[p * GAME_ACTION_COUNT + a] = bind_lbl;
+
+        auto* btn = Gtk::make_managed<Gtk::Button>();
+        btn->add(*bind_lbl);
+        btn->set_size_request(kFieldWidth, kRowHeight);
+        btn->set_valign(Gtk::ALIGN_CENTER);
+        btn->set_tooltip_text(_("Click to bind, Delete to clear"));
+        btn->get_style_context()->add_class("bind-cell");
+        btn->signal_clicked().connect(
+            sigc::bind(sigc::bind(sigc::mem_fun(*this, &ControllerDialog::start_binding), action), p));
+        btn->add_events(Gdk::KEY_PRESS_MASK);
+        btn->signal_key_press_event().connect([this, p, action, bind_lbl](GdkEventKey* ev) {
+            if (ev->keyval != GDK_KEY_Delete && ev->keyval != GDK_KEY_BackSpace)
+                return false;
+            m_config.players[p].bindings.erase(action);
+            bind_lbl->set_text(_("Not set"));
+            return true;
+        }, false);
+        m_bind_buttons[p * GAME_ACTION_COUNT + a] = btn;
+
+        name_row->set_hexpand(true);
+        return {name_row, btn};
+    };
+
     for (const auto& g : groups) {
         auto* grid = Gtk::make_managed<Gtk::Grid>();
         grid->set_column_spacing(14);
@@ -778,68 +841,9 @@ void ControllerDialog::build_player_tab(int p) {
 
         int row = 0;
         for (int a = g.first; a <= g.last; ++a, ++row) {
-            GameAction action = static_cast<GameAction>(a);
-
-            /* Les quatre directions portent leur fleche dans une tuile, les
-             * six boutons leur numero dans une pastille coloree, Start et
-             * Coin leur pictogramme nu. Les trois cas passent par un
-             * conteneur de MEME taille : les colonnes tombent donc en face
-             * d'une carte a l'autre. */
-            const bool is_btn = a >= (int)GameAction::BUTTON1
-                             && a <= (int)GameAction::BUTTON6;
-            const bool is_dir = a >= (int)GameAction::UP
-                             && a <= (int)GameAction::RIGHT;
-
-            Gtk::Widget* cell = nullptr;
-            if (is_btn) {
-                cell = number_badge(a - (int)GameAction::BUTTON1 + 1);
-            } else if (is_dir) {
-                static const char* kArrow[] = {"bc-up.svg", "bc-down.svg",
-                                               "bc-left.svg", "bc-right.svg"};
-                cell = glyph_cell(kArrow[a - (int)GameAction::UP], true);
-            } else if (action == GameAction::START) {
-                cell = glyph_cell("bc-start.svg", false);
-            } else if (action == GameAction::COIN) {
-                cell = glyph_cell("bc-coin.svg", false);
-            }
-
-            auto* name_row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 11);
-            name_row->set_size_request(-1, kRowHeight);
-            if (cell) name_row->pack_start(*cell, Gtk::PACK_SHRINK);
-            auto* name_lbl = Gtk::make_managed<Gtk::Label>(_(game_action_name(action)));
-            name_lbl->set_halign(Gtk::ALIGN_START);
-            name_lbl->set_valign(Gtk::ALIGN_CENTER);
-            name_lbl->set_hexpand(true);
-            name_row->pack_start(*name_lbl, Gtk::PACK_EXPAND_WIDGET);
-
-            /* La valeur EST le bouton : un clic pour lier, Suppr pour
-             * effacer, comme dans toute table de raccourcis. */
-            auto* bind_lbl = Gtk::make_managed<Gtk::Label>("");
-            bind_lbl->set_halign(Gtk::ALIGN_START);
-            bind_lbl->set_ellipsize(Pango::ELLIPSIZE_END);
-            m_binding_labels[p * GAME_ACTION_COUNT + a] = bind_lbl;
-
-            auto* btn = Gtk::make_managed<Gtk::Button>();
-            btn->add(*bind_lbl);
-            btn->set_size_request(kFieldWidth, kRowHeight);
-            btn->set_valign(Gtk::ALIGN_CENTER);
-            btn->set_tooltip_text(_("Click to bind, Delete to clear"));
-            btn->get_style_context()->add_class("bind-cell");
-            btn->signal_clicked().connect(
-                sigc::bind(sigc::bind(sigc::mem_fun(*this, &ControllerDialog::start_binding), action), p));
-            btn->add_events(Gdk::KEY_PRESS_MASK);
-            btn->signal_key_press_event().connect([this, p, action, bind_lbl](GdkEventKey* ev) {
-                if (ev->keyval != GDK_KEY_Delete && ev->keyval != GDK_KEY_BackSpace)
-                    return false;
-                m_config.players[p].bindings.erase(action);
-                bind_lbl->set_text(_("Not set"));
-                return true;
-            }, false);
-            m_bind_buttons[p * GAME_ACTION_COUNT + a] = btn;
-
-            name_row->set_hexpand(true);
-            grid->attach(*name_row, 0, row, 1, 1);
-            grid->attach(*btn,      1, row, 1, 1);
+            auto cells = make_row(a);
+            grid->attach(*cells.first,  0, row, 1, 1);
+            grid->attach(*cells.second, 1, row, 1, 1);
         }
         auto* c = card(_(g.title), g.icon, *grid);
         c->get_style_context()->add_class("cc-subcard");
@@ -851,10 +855,40 @@ void ControllerDialog::build_player_tab(int p) {
         cards->pack_start(*c, Gtk::PACK_EXPAND_WIDGET);
     }
 
+    /* Les boutons au-dela du sixieme, sous les trois cartes.
+     *
+     * Une manette actuelle en a onze ou douze. Les ajouter a la carte des
+     * boutons l'allongeait jusqu'a seize lignes et desalignait la rangee ;
+     * ils vont donc dans une carte a part, sur trois colonnes, qui n'apparait
+     * que si la manette choisie les possede (voir update_button_rows). La
+     * disposition d'une manette a six boutons ne change pas. */
+    auto* extra_grid = Gtk::make_managed<Gtk::Grid>();
+    extra_grid->set_column_spacing(30);
+    extra_grid->set_row_spacing(10);
+    extra_grid->set_column_homogeneous(true);
+    for (int n = BASE_GAME_BUTTONS + 1; n <= MAX_GAME_BUTTONS; ++n) {
+        auto cells = make_row((int)button_action(n));
+        auto* pair = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 14);
+        pair->pack_start(*cells.first,  Gtk::PACK_EXPAND_WIDGET);
+        pair->pack_start(*cells.second, Gtk::PACK_SHRINK);
+        pair->set_no_show_all(true);
+        const int k = n - BASE_GAME_BUTTONS - 1;
+        extra_grid->attach(*pair, k % 3, k / 3, 1, 1);
+        m_extra_rows[p][n - 1] = pair;
+    }
+    auto* extra = card(_("More buttons"), "bc-buttons.svg", *extra_grid);
+    extra->get_style_context()->add_class("cc-subcard");
+    extra->set_no_show_all(true);
+    m_extra_card[p] = extra;
+
+    auto* arcade_body = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 16);
+    arcade_body->pack_start(*cards, Gtk::PACK_SHRINK);
+    arcade_body->pack_start(*extra, Gtk::PACK_SHRINK);
+
     /* La carte englobante de la maquette : elle dit en une phrase comment on
      * change une liaison, ce qu'aucune des trois sous-cartes ne peut dire
      * sans se repeter trois fois. */
-    auto* arcade = card(_("Arcade controls"), "bc-arcade.svg", *cards,
+    auto* arcade = card(_("Arcade controls"), "bc-arcade.svg", *arcade_body,
                         _("Click on a control to change it. Press a button, "
                           "axis or hat on your controller."));
     arcade->set_hexpand(true);
@@ -1157,7 +1191,41 @@ void ControllerDialog::refresh_from_config() {
 
 // ── Refresh binding labels from m_config ─────────────────────────────────
 
+int ControllerDialog::shown_buttons(int p) const {
+    int n = BASE_GAME_BUTTONS;
+    for (const auto& d : m_devices)
+        if (d.path == m_config.players[p].device_path) { n = std::max(n, d.num_buttons); break; }
+    // Un bouton deja lie reste visible, meme sur une manette qui en a moins :
+    // sinon on ne pourrait plus ni le voir ni l'effacer.
+    for (const auto& [action, binding] : m_config.players[p].bindings)
+        if (is_button_action(action)) n = std::max(n, button_number(action));
+    return std::min(n, MAX_GAME_BUTTONS);
+}
+
+bool ControllerDialog::action_shown(int p, GameAction a) const {
+    return !is_button_action(a) || button_number(a) <= shown_buttons(p);
+}
+
+void ControllerDialog::update_button_rows(int p) {
+    if (m_closing || !m_extra_card[p]) return;
+    const int shown = shown_buttons(p);
+    /* show_all ne fait RIEN sur un widget marque no_show_all : on leve la
+     * marque le temps de l'appel. Elle reste posee le reste du temps, pour
+     * que le show_all_children de la fenetre ne rappelle pas ce qu'on cache. */
+    auto set_shown = [](Gtk::Widget* w, bool on) {
+        if (!w) return;
+        if (!on) { w->hide(); return; }
+        w->set_no_show_all(false);
+        w->show_all();
+        w->set_no_show_all(true);
+    };
+    for (int n = BASE_GAME_BUTTONS + 1; n <= MAX_GAME_BUTTONS; ++n)
+        set_shown(m_extra_rows[p][n - 1], n <= shown);
+    set_shown(m_extra_card[p], shown > BASE_GAME_BUTTONS);
+}
+
 void ControllerDialog::refresh_bindings(int p) {
+    update_button_rows(p);
     for (int a = 0; a < GAME_ACTION_COUNT; ++a) {
         Gtk::Label* lbl = m_binding_labels[p * GAME_ACTION_COUNT + a];
         if (!lbl) continue;
@@ -1180,6 +1248,7 @@ void ControllerDialog::on_device_changed(int p) {
         if (d.path == path) { m_config.players[p].device_name = d.name; break; }
     if (path.empty()) m_config.players[p].device_name = "";
     update_device_panel(p);
+    update_button_rows(p);
 }
 
 
@@ -1279,6 +1348,13 @@ void ControllerDialog::on_save_clicked() {
                                ? m_global_active_profile : m_active_profile_name;
         ControllerManager::save_profiles(m_profiles, keep, m_config_path);
         ControllerManager::set_game_profile(m_config_path, m_game_rom, m_active_profile_name);
+        // MAME n'a pas de fichier par jeu a reecrire ici : le profil part au
+        // lancement, dans le fichier controleur.
+        if (m_game_mame) {
+            std::cout << "[ControllerDialog] " << m_game_rom << " uses profile \""
+                      << m_active_profile_name << "\" (applied at launch)\n";
+            return;
+        }
         const int n = ControllerManager::write_game_config(m_config, m_game_rom);
         ControllerManager::apply_analog_bindings(m_game_rom, m_config);
         std::cout << "[ControllerDialog] " << m_game_rom << " uses profile \""
@@ -1298,7 +1374,9 @@ void ControllerDialog::on_save_clicked() {
 
 void ControllerDialog::set_game_scope(const std::string& fbneo_rom_name,
                                       const std::string& game_title,
-                                      const std::string& game_profile) {
+                                      const std::string& game_profile,
+                                      bool mame) {
+    m_game_mame  = mame;
     m_game_rom   = fbneo_rom_name;
     m_game_title = game_title;
     m_header_title.set_markup("<b>" + Glib::Markup::escape_text(game_title) + "</b>");
@@ -1908,9 +1986,12 @@ void ControllerDialog::open_test_dialog(int p) {
         sub->get_style_context()->add_class("cc-sub");
         col->pack_start(*sub, Gtk::PACK_SHRINK);
 
-        int mapped = 0;
-        for (int a = 0; a < GAME_ACTION_COUNT; ++a)
+        int mapped = 0, offered = 0;
+        for (int a = 0; a < GAME_ACTION_COUNT; ++a) {
+            if (!action_shown(p, static_cast<GameAction>(a))) continue;
+            ++offered;
             if (m_config.players[p].bindings.count(static_cast<GameAction>(a))) ++mapped;
+        }
 
         auto tile = [this](const char* ico, const std::string& t, const std::string& v) {
             auto* b = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 11);
@@ -1948,7 +2029,7 @@ void ControllerDialog::open_test_dialog(int p) {
                           Gtk::PACK_EXPAND_WIDGET);
         tiles->pack_start(*tile("bc-identify.svg", _("Mapped inputs"),
                                 std::to_string(mapped) + " / " +
-                                std::to_string(GAME_ACTION_COUNT)),
+                                std::to_string(offered)),
                           Gtk::PACK_EXPAND_WIDGET);
         col->pack_start(*tiles, Gtk::PACK_SHRINK);
 
@@ -2167,6 +2248,8 @@ void ControllerDialog::run_auto_configure(int p) {
     int bound = 0, skipped = 0;
     for (int a = 0; a < GAME_ACTION_COUNT; ++a) {
         const GameAction action = static_cast<GameAction>(a);
+        // Pas de bouton 12 a demander sur une manette qui en a huit.
+        if (!action_shown(p, action)) continue;
         start_binding(p, action);
         // La capture ne rend rien : on regarde si elle a effectivement pose
         // une liaison. Absente, c'est que le joueur a ferme la fenetre, ce
@@ -2236,7 +2319,11 @@ Gtk::Widget* ControllerDialog::number_badge(int n) {
     disc->set_size_request(kBadgeSize, kBadgeSize);
     disc->pack_start(*lbl, Gtk::PACK_EXPAND_WIDGET);
     disc->get_style_context()->add_class("cc-num");
-    disc->get_style_context()->add_class("cc-num-" + std::to_string(n));
+    // Six couleurs pour les six boutons de la borne ; au-dela, une pastille
+    // neutre plutot que des couleurs qui se repeteraient.
+    disc->get_style_context()->add_class(n <= BASE_GAME_BUTTONS
+                                         ? "cc-num-" + std::to_string(n)
+                                         : std::string("cc-num-extra"));
     disc->set_halign(Gtk::ALIGN_CENTER);
     disc->set_valign(Gtk::ALIGN_CENTER);
 

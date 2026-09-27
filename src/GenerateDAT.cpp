@@ -4,6 +4,9 @@
 #include "SettingsUi.h"
 #include "IconManager.h"
 #include "AppContext.h"
+#include "MameCatalog.h"
+#include <atomic>
+#include <thread>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -154,6 +157,117 @@ void GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executab
     } else {
         SettingsUi::notice(parent, _("DAT generation failed"),
                            _("Failed to generate DAT files.\n\nMake sure the FBNeo executable is valid and accessible."),
+                           "bc-error.svg");
+    }
+}
+
+void GenerateDAT::execute_mame(Gtk::Window& parent, const std::string& mame_executable,
+                               const std::string& dat_path, Gtk::Entry* dat_entry) {
+    if (mame_executable.empty()) {
+        SettingsUi::notice(parent, _("MAME executable missing"),
+                           _("MAME was not found on this system. Install it, then try again."),
+                           "bc-error.svg");
+        return;
+    }
+    // MAME n'ecrit pas de DAT et n'a donc pas de dossier a lui ou retomber :
+    // c'est le dossier du groupe qui decide, et il doit etre choisi.
+    if (dat_path.empty()) {
+        SettingsUi::notice(parent, _("No DAT folder"),
+                           _("Choose the folder where the DAT files should be written first."),
+                           "bc-error.svg");
+        return;
+    }
+    try {
+        std::filesystem::create_directories(dat_path);
+    } catch (const std::exception& e) {
+        SettingsUi::notice(parent, _("Directory creation failed"),
+                           _("Failed to create directory: ") + dat_path + "\n\n" + std::string(e.what()),
+                           "bc-error.svg");
+        return;
+    }
+
+    // Meme fenetre, meme langage visuel que la generation depuis FBNeo : le
+    // geste est le meme pour l'utilisateur, seul le producteur change.
+    auto progress_dialog = Gtk::Dialog();
+    progress_dialog.set_transient_for(parent);
+    progress_dialog.set_modal(true);
+    progress_dialog.set_resizable(false);
+    progress_dialog.set_default_size(520, -1);
+    progress_dialog.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
+    SettingsUi::window_header(progress_dialog, "bc-generate-dat.svg", _("Generating DAT Files"),
+                              _("Reading the machine list from MAME..."));
+
+    auto content_area = progress_dialog.get_content_area();
+    auto main_box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 14);
+    main_box->set_margin_start(22);
+    main_box->set_margin_end(22);
+    main_box->set_margin_top(20);
+    main_box->set_margin_bottom(20);
+
+    auto progress_bar = Gtk::make_managed<Gtk::ProgressBar>();
+    progress_bar->set_show_text(true);
+    progress_bar->set_text(_("Starting MAME..."));
+    progress_bar->pulse();
+    main_box->pack_start(*progress_bar, Gtk::PACK_SHRINK);
+
+    auto* cancel_button = SettingsUi::button(_("Cancel"), "bc-close.svg");
+    cancel_button->set_halign(Gtk::ALIGN_END);
+    main_box->pack_start(*cancel_button, Gtk::PACK_SHRINK);
+
+    content_area->set_spacing(0);
+    content_area->pack_start(*main_box, Gtk::PACK_EXPAND_WIDGET);
+    progress_dialog.show_all();
+
+    // La conversion lit 320 Mo de -listxml : sur le fil principal, la barre
+    // ne bougerait plus et le bureau proposerait de tuer l'application. Elle
+    // tourne donc a cote, et les deux Dispatcher sont le seul chemin de
+    // retour vers l'interface.
+    std::atomic<bool> cancelled{false};
+    std::atomic<bool> finished{false};
+    std::atomic<int>  machines{0};
+    int result = -1;
+
+    Glib::Dispatcher on_tick;
+    Glib::Dispatcher on_finished;
+    on_tick.connect([progress_bar, &machines, &cancelled] {
+        if (cancelled.load()) return;   // le libelle « Annulation » ne doit plus bouger
+        progress_bar->set_text(Glib::ustring::compose(_("%1 machines read..."), machines.load()));
+    });
+    on_finished.connect([&progress_dialog] { progress_dialog.response(Gtk::RESPONSE_OK); });
+
+    cancel_button->signal_clicked().connect([cancel_button, progress_bar, &cancelled] {
+        cancelled = true;
+        cancel_button->set_sensitive(false);
+        progress_bar->set_text(_("Cancelling..."));
+    });
+
+    std::thread worker([&] {
+        result = MameCatalog::generate_dats(mame_executable, dat_path, [&](int count) {
+            machines = count;
+            on_tick.emit();
+            return !cancelled.load();
+        });
+        finished = true;
+        on_finished.emit();
+    });
+
+    auto pulse = Glib::signal_timeout().connect([progress_bar] { progress_bar->pulse(); return true; }, 120);
+    // La croix de la fenetre ne doit pas laisser le fil derriere elle : on
+    // revient dans la boucle tant que la conversion n'a pas rendu la main.
+    while (!finished.load()) progress_dialog.run();
+    pulse.disconnect();
+    worker.join();
+    progress_dialog.hide();
+
+    if (result > 0) {
+        show_success_dialog(parent, dat_path, dat_entry);
+    } else if (cancelled.load()) {
+        SettingsUi::notice(parent, _("DAT generation cancelled"),
+                           _("The DAT files were not written."),
+                           "bc-info.svg");
+    } else {
+        SettingsUi::notice(parent, _("DAT generation failed"),
+                           _("Failed to generate DAT files from MAME.\n\nMake sure the MAME executable is valid and accessible."),
                            "bc-error.svg");
     }
 }

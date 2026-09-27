@@ -81,3 +81,11 @@ PLAN/
 
 # Outillage local d un autre assistant, pas pour le depot
 .codex/
+
+# MAME ecrit sa configuration et ses captures dans son repertoire de travail,
+# qui est celui du launcher : sans ca, lancer un jeu salit le depot.
+cfg/
+snap/
+nvram/
+sta/
+diff/

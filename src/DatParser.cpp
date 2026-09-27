@@ -2,13 +2,59 @@
 #include "Game.h"
 #include "DatParser.h"
 #include "DatabaseManager.h"
+#include "DatSource.h"
+#include "MameCatalog.h"
 #include <pugixml.hpp>
+#include <fstream>
+#include <stdlib.h>
 #include <iostream>
 #include <filesystem>
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <chrono>
 
+namespace {
+
+// Un set s'appelle <game> dans les DAT Logiqx de FinalBurn Neo, <machine>
+// dans ceux de MAME (les notres comme ceux de Pleasuredome). Meme contenu.
+bool is_set_node(const pugi::xml_node& n) {
+    const char* tag = n.name();
+    return std::strcmp(tag, "game") == 0 || std::strcmp(tag, "machine") == 0;
+}
+
+// Les CHD d'un set : le DAT « CHDs (merged) » de MAME n'a que cela. Un disque
+// jamais dumpe, ou sans SHA1, n'a rien a verifier.
+void read_disks(const pugi::xml_node& game_node, Game& game) {
+    for (auto disk_node : game_node.children("disk")) {
+        if (std::strcmp(disk_node.attribute("status").value(), "nodump") == 0) continue;
+        Disk d;
+        d.name = disk_node.attribute("name").value();
+        d.sha1 = disk_node.attribute("sha1").value();
+        d.merge = disk_node.attribute("merge").value();
+        if (d.name.empty() || d.sha1.empty()) continue;
+        std::transform(d.sha1.begin(), d.sha1.end(), d.sha1.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
+        game.disks.push_back(std::move(d));
+    }
+}
+
+// Les devices dont une machine MAME a besoin : un zip chacun, a cote du sien.
+void read_devices(const pugi::xml_node& game_node, Game& game) {
+    for (auto dev : game_node.children("device_ref")) {
+        std::string name = dev.attribute("name").value();
+        if (name.empty() || name == game.name) continue;
+        if (std::find(game.devices.begin(), game.devices.end(), name) == game.devices.end())
+            game.devices.push_back(std::move(name));
+    }
+}
+
+} // namespace
+
 std::vector<Game> DatParser::parse(const std::string& filepath) {
+    // The emulator a DAT describes is its group's.
+    std::string emulator = DatSource::emulator_of_path(filepath);
+    if (emulator.empty()) emulator = "fbneo";
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_file(filepath.c_str());
 
@@ -24,7 +70,8 @@ std::vector<Game> DatParser::parse(const std::string& filepath) {
         return {};
     }
 
-    for (auto game_node : games_node.children("game")) {
+    for (auto game_node : games_node.children()) {
+        if (!is_set_node(game_node)) continue;
         Game game;
         game.name = game_node.attribute("name").value();
         game.description = game_node.child("description").text().get();
@@ -77,16 +124,20 @@ std::vector<Game> DatParser::parse(const std::string& filepath) {
             rom.merge = rom_node.attribute("merge").value();
             game.roms.push_back(rom);
         }
+        read_disks(game_node, game);
+        read_devices(game_node, game);
 
         // Extract system name from header
         auto header = games_node.child("header");
         if (header) {
             std::string headerName = header.child("name").text().get();
             game.system = extractSystemFromHeader(headerName);
+            game.dat_header = headerName;
         } else {
             game.system = "Unknown";
         }
 
+        game.emulator = emulator;
         game.status = "missing";  // tous les jeux commencent comme missing
         games.push_back(game);
     }
@@ -103,7 +154,7 @@ std::vector<Game> DatParser::parseAllDats(const std::string& directory) {
     }
     
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".dat") {
+        if (entry.is_regular_file() && datKind(entry.path().string()) != DatKind::None) {
             std::cout << "Chargement du fichier DAT : " << entry.path().filename() << std::endl;
             auto games = parse(entry.path().string());
             allGames.insert(allGames.end(), games.begin(), games.end());
@@ -114,7 +165,86 @@ std::vector<Game> DatParser::parseAllDats(const std::string& directory) {
     return allGames;
 }
 
-int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<DatabaseManager> db) {
+int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<DatabaseManager> db,
+                               std::string* note) {
+    const std::string filename = std::filesystem::path(filepath).filename().string();
+    int games_count = -1;
+    std::string declared_merge;   // -listxml declares none
+    // Which emulator the DAT describes : its group's. A file no group holds
+    // falls back on the format : a -listxml is MAME's own, anything else
+    // FinalBurn Neo, the one catalogue there was before groups had one.
+    std::string emulator = DatSource::emulator_of_path(filepath);
+    if (emulator.empty()) emulator = datKind(filepath) == DatKind::MameListxml ? "mame" : "fbneo";
+
+    if (datKind(filepath) == DatKind::MameListxml) {
+        // Un fichier -listxml brut (celui de progettosnaps, ou la sortie de
+        // l'executable enregistree) : pas un DAT Logiqx, mais il decrit les
+        // memes sets, liens compris (cloneof, romof, merge=, device_ref). Il
+        // est lu tel quel, sans DAT intermediaire, sous le nom de CE fichier.
+        std::vector<Game> sets;
+        std::string version;
+        if (MameCatalog::read_listxml_file(filepath, sets, &version) < 0) return -1;
+        for (auto& g : sets) {
+            g.system     = extractSystemFromHeader(MameCatalog::kHeader);
+            g.dat_header = MameCatalog::kHeader;
+            g.dat_source = filename;
+            g.status     = "missing";
+            g.emulator   = emulator;
+        }
+        games_count = insertGames(sets, db);
+        if (games_count < 0) return -1;
+        if (note) *note = "MAME -listxml " + version + ": " + std::to_string(games_count) + " sets";
+    } else {
+        games_count = importDatafile(filepath, db, filename, note, &declared_merge, emulator);
+        if (games_count < 0) return -1;
+    }
+
+    // Register the DAT file in the database
+    auto ftime = std::filesystem::last_write_time(std::filesystem::path(filepath));
+    time_t last_modified = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
+    size_t file_size = std::filesystem::file_size(filepath);
+    db->registerDatFile(filename, filepath, last_modified, file_size, games_count, declared_merge);
+
+    std::cout << "Imported " << games_count << " games from " << filepath << std::endl;
+    return games_count;
+}
+
+int DatParser::insertGames(const std::vector<Game>& games, std::shared_ptr<DatabaseManager> db) {
+    if (!db->beginTransaction()) {
+        std::cerr << "Erreur : impossible de démarrer la transaction" << std::endl;
+        return -1;
+    }
+    for (const auto& g : games) {
+        if (!db->insertGame(g)) {
+            std::cerr << "Erreur insertion jeu: " << g.name << std::endl;
+            db->rollbackTransaction();
+            return -1;
+        }
+    }
+    if (!db->commitTransaction()) {
+        std::cerr << "Erreur : impossible de valider la transaction" << std::endl;
+        return -1;
+    }
+    return (int)games.size();
+}
+
+std::string DatParser::declaredMerge(const pugi::xml_node& header) {
+    // clrmamepro : <clrmamepro forcemerging="none|split|full"/>.
+    const std::string force = header.child("clrmamepro").attribute("forcemerging").value();
+    if (force == "none")  return "non-merged";
+    if (force == "split") return "split";
+    if (force == "full")  return "merged";
+    // RomCenter : <romcenter rommode="merged|split|unmerged"/>.
+    const std::string mode = header.child("romcenter").attribute("rommode").value();
+    if (mode == "unmerged") return "non-merged";
+    if (mode == "split")    return "split";
+    if (mode == "merged")   return "merged";
+    return "";
+}
+
+int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<DatabaseManager> db,
+                              const std::string& dat_source, std::string* note, std::string* declared_merge,
+                              const std::string& emulator) {
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_file(filepath.c_str());
 
@@ -138,10 +268,22 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
     if (header) {
         dat_header = header.child("name").text().get();
         system = extractSystemFromHeader(dat_header);
+        if (declared_merge) *declared_merge = declaredMerge(header);
     }
+    // L'emulateur fait partie de l'identite d'un set : sans lui, les 28 203
+    // machines de MAME ecraseraient leurs homonymes FinalBurn Neo, qui vivent
+    // dans le meme system 'Arcade' (mslug existe des deux cotes). C'est celui
+    // du groupe du DAT, donne par l'appelant.
+    const std::string& filename = dat_source;
 
-    // Get filename for dat_source
-    std::string filename = std::filesystem::path(filepath).filename().string();
+    // Les listes de logiciels de MAME (cartouches, disquettes : « MAME
+    // Software List … ») decrivent des medias, pas des machines : le
+    // gestionnaire de ROMs ne sait pas encore ou les ranger ni comment les
+    // auditer. Rien n'en est importe, et on le dit.
+    if (isSoftwareListHeader(dat_header) || games_node.child("software")) {
+        if (note) *note = "software list DAT: not handled by the ROM Manager yet, nothing imported";
+        return 0;
+    }
 
     // Begin transaction for batch insert - MASSIVE performance boost
     if (!db->beginTransaction()) {
@@ -152,7 +294,8 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
     int games_count = 0;
     bool error_occurred = false;
 
-    for (auto game_node : games_node.children("game")) {
+    for (auto game_node : games_node.children()) {
+        if (!is_set_node(game_node)) continue;
         Game game;
         game.name = game_node.attribute("name").value();
         game.description = game_node.child("description").text().get();
@@ -201,10 +344,13 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
             rom.merge = rom_node.attribute("merge").value();
             game.roms.push_back(rom);
         }
+        read_disks(game_node, game);
+        read_devices(game_node, game);
 
         game.status = "missing";  // Default status
         game.dat_source = filename;  // Set the source DAT file
         game.dat_header = dat_header;
+        game.emulator = emulator;
 
         if (!db->insertGame(game)) {
             std::cerr << "Erreur insertion jeu: " << game.name << std::endl;
@@ -225,15 +371,51 @@ int DatParser::parseToDatabase(const std::string& filepath, std::shared_ptr<Data
         std::cerr << "Erreur : impossible de valider la transaction" << std::endl;
         return -1;
     }
-
-    // Register the DAT file in the database
-    auto ftime = std::filesystem::last_write_time(std::filesystem::path(filepath));
-    time_t last_modified = std::chrono::duration_cast<std::chrono::seconds>(ftime.time_since_epoch()).count();
-    size_t file_size = std::filesystem::file_size(filepath);
-    db->registerDatFile(filename, filepath, last_modified, file_size, games_count);
-
-    std::cout << "Imported " << games_count << " games from " << filepath << std::endl;
     return games_count;
+}
+
+bool DatParser::isSoftwareListHeader(const std::string& headerName) {
+    std::string h = headerName;
+    std::transform(h.begin(), h.end(), h.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    return h.find("software list") != std::string::npos;
+}
+
+DatParser::DatKind DatParser::datKind(const std::string& filepath) {
+    std::string ext = std::filesystem::path(filepath).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    if (ext != ".dat" && ext != ".xml") return DatKind::None;
+
+    // La racine suffit, et elle est au debut : apres le prologue et la DTD
+    // (160 lignes pour -listxml). « <!DOCTYPE mame » ou « <!ELEMENT mame »
+    // ne contiennent pas « <mame », on peut donc chercher la balise telle
+    // quelle.
+    std::ifstream in(filepath, std::ios::binary);
+    std::string head(64 * 1024, '\0');
+    if (in) {
+        in.read(&head[0], (std::streamsize)head.size());
+        head.resize((size_t)in.gcount());
+    } else {
+        head.clear();
+    }
+    auto tag_at = [&](const char* tag) {
+        const size_t len = std::strlen(tag);
+        for (size_t p = head.find(tag); p != std::string::npos; p = head.find(tag, p + 1)) {
+            const size_t q = p + len;
+            if (q < head.size() && (head[q] == ' ' || head[q] == '>' || head[q] == '\t' ||
+                                    head[q] == '\r' || head[q] == '\n'))
+                return p;
+        }
+        return std::string::npos;
+    };
+    const size_t mame = tag_at("<mame"), datafile = tag_at("<datafile");
+    if (mame != std::string::npos && (datafile == std::string::npos || mame < datafile))
+        return DatKind::MameListxml;
+    if (datafile != std::string::npos) return DatKind::Datafile;
+    // Un .dat a toujours ete charge sans examen : il le reste, et c'est le
+    // parseur qui dira s'il ne contient pas de <datafile>. Un .xml, lui,
+    // n'est un DAT que si sa racine le dit : un dossier peut en contenir
+    // d'autres.
+    return ext == ".dat" ? DatKind::Datafile : DatKind::None;
 }
 
 bool DatParser::parseAllDatsToDatabase(const std::string& directory, std::shared_ptr<DatabaseManager> db) {
@@ -250,7 +432,7 @@ bool DatParser::parseAllDatsToDatabase(const std::string& directory, std::shared
 
     int total_games = 0;
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".dat") {
+        if (entry.is_regular_file() && datKind(entry.path().string()) != DatKind::None) {
             std::cout << "Chargement du fichier DAT : " << entry.path().filename() << std::endl;
             int games_loaded = parseToDatabase(entry.path().string(), db);
             if (games_loaded >= 0) {
@@ -279,7 +461,7 @@ bool DatParser::synchronizeDatsToDatabase(const std::string& directory, std::sha
     std::vector<std::string> outdated_files;
     
     for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".dat") {
+        if (entry.is_regular_file() && datKind(entry.path().string()) != DatKind::None) {
             std::string filename = entry.path().filename().string();
             existing_dat_files.push_back(filename);
             
@@ -339,5 +521,20 @@ std::string DatParser::extractSystemFromHeader(const std::string& headerName) {
         }
         return systemPart;
     }
+    // « MAME ROMs (split) » → « ROMs (split) » : ce qui suit la marque decrit
+    // la collection, et c'est ce qui distingue le neogeo du DAT split (ses
+    // seules ROMs) de celui du DAT bios-devices (tout ce qu'il lui faut). Un
+    // numero de version eventuel (« MAME 0.289 ROMs (split) ») n'en fait pas
+    // partie : il changerait l'identite de chaque set a chaque version.
+    // « MAME » seul : le DAT ecrit depuis -listxml (MameCatalog::kHeader).
+    if (headerName == "MAME") return "MAME";
+    if (headerName.rfind("MAME ", 0) == 0) {
+        std::string rest = headerName.substr(5);
+        if (!rest.empty() && std::isdigit((unsigned char)rest[0])) {
+            const size_t sp = rest.find(' ');
+            rest = sp == std::string::npos ? std::string() : rest.substr(sp + 1);
+        }
+        if (!rest.empty()) return rest;
+    }
     return "Unknown";
-};
+}

@@ -4,6 +4,8 @@
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
 #include "RomCleanup.h"
+#include "RomDownload.h"
+#include "BootcadeAuth.h"
 #include "RomManifest.h"
 #include "i18n.h"
 
@@ -93,15 +95,46 @@ const char* status_label_of(const std::string& key) {
     return N_("Missing");
 }
 
-// What Fix can do with a set, if anything.
-bool can_send_to_import(const RomAudit::GameEntry& g) {
-    return g.repairable && !g.ignored && g.archive_found && !g.archive.empty();
+// What Fix can do with a set, if anything. Nothing for a CHD set : its
+// "archive" is a folder of disk images, which Fix never moves.
+// The archive Fix copies into Import for a repairable set : its own when it
+// has one, otherwise the archive holding a good copy of one of its own ROMs,
+// which Import recognises by content (a set left under its former name, say).
+// A BIOS piece only as a last resort : a BIOS dump sits in hundreds of sets.
+std::string import_source_of(const RomAudit::GameEntry& g) {
+    if (g.is_chd || !g.repairable || g.ignored) return {};
+    if (g.archive_found && !g.archive.empty()) return g.archive;
+    std::string fallback;
+    for (const auto& r : g.roms) {
+        if (r.state != RomAudit::RomState::Absent && r.state != RomAudit::RomState::Corrupt) continue;
+        if (r.found_in.empty()) continue;
+        if (!r.inherited) return r.found_in;
+        if (fallback.empty()) fallback = r.found_in;
+    }
+    return fallback;
 }
+bool can_send_to_import(const RomAudit::GameEntry& g) {
+    return !import_source_of(g).empty();
+}
+// A set with CHDs besides its zip is judged by its zip alone here : a wrong
+// or absent CHD must never send a sound zip to quarantine.
 bool can_quarantine_whole(const RomAudit::GameEntry& g) {
-    return g.status == "incorrect" && !g.repairable && !g.ignored && g.archive_found && !g.archive.empty();
+    const std::string& zip = g.has_disks ? g.zip_status : g.status;
+    return !g.is_chd && g.archive_is_own && zip == "incorrect" && !g.repairable && !g.ignored && g.archive_found && !g.archive.empty();
+}
+bool disks_not_right(const RomAudit::GameEntry& g) {
+    for (const auto& r : g.roms) if (r.is_disk && r.state != RomAudit::RomState::Present) return true;
+    return false;
 }
 bool has_extra_files(const RomAudit::GameEntry& g) {
-    return !g.extra_entries.empty() && g.archive_found && !g.archive.empty();
+    return !g.is_chd && g.archive_is_own && !g.extra_entries.empty() && g.archive_found && !g.archive.empty();
+}
+
+// A ROM's identity in the tables : its CRC, or a CHD's SHA1.
+std::string hash_of(const RomAudit::RomEntry& r) { return r.is_disk ? r.sha1 : crc_hex(r.crc); }
+std::string found_hash_of(const RomAudit::RomEntry& r) {
+    if (r.state == RomAudit::RomState::Absent) return "-";
+    return r.is_disk ? r.found_sha1 : crc_hex(r.found_crc);
 }
 
 const char* state_label(RomAudit::RomState s) {
@@ -352,7 +385,7 @@ void RomLibraryTab::build_footer() {
     // takes it over once there is something to fix.
     m_btn_scan = ui::button(_("Scan ROMs"), "bc-sync.svg");
     m_btn_scan->set_tooltip_text(_("Rescan every configured ROM directory for new or changed files."));
-    m_btn_scan->signal_clicked().connect([this] { if (!m_busy) m_sig_rescan.emit(); });
+    m_btn_scan->signal_clicked().connect([this] { if (!m_busy) m_sig_rescan.emit(current_emulator()); });
     m_btn_audit = ui::button(_("Audit library"), "bc-chart.svg", ui::Tone::Accent);
     m_btn_audit->set_tooltip_text(_("Compare the last scan with the DAT group."));
     m_btn_audit->signal_clicked().connect(sigc::mem_fun(*this, &RomLibraryTab::on_audit_clicked));
@@ -361,6 +394,13 @@ void RomLibraryTab::build_footer() {
                                   "to be rebuilt, unrepairable sets, orphans and extra files are moved to quarantine. "
                                   "Acts on the checked rows, or on every row shown when none is checked."));
     m_btn_fix->signal_clicked().connect([this] { on_fix_clicked(); });
+    m_btn_download = ui::button(_("Download from Bootcade"), "bc-download.svg");
+    m_btn_download->set_tooltip_text(_("Download the missing or wrong FinalBurn Neo sets from the Bootcade server, with "
+                                       "your account and its daily quota. They go to Import, which checks and files them. "
+                                       "Acts on the checked rows, or on every row shown when none is checked."));
+    m_btn_download->set_no_show_all(true);
+    m_btn_download->signal_clicked().connect([this] { on_download_clicked(); });
+    m_footer.pack_end(*m_btn_download, Gtk::PACK_SHRINK);
     m_footer.pack_end(*m_btn_fix, Gtk::PACK_SHRINK);
     m_footer.pack_end(*m_btn_audit, Gtk::PACK_SHRINK);
     m_footer.pack_end(*m_btn_scan, Gtk::PACK_SHRINK);
@@ -397,6 +437,13 @@ const DatSource::Group* RomLibraryTab::current_group() const {
     return m_groups.empty() ? nullptr : &m_groups.front();
 }
 
+// The group's emulator decides whose ROM directories are scanned and
+// audited, and whose sets they are compared with.
+std::string RomLibraryTab::current_emulator() const {
+    const auto* g = current_group();
+    return g ? g->emulator : std::string("fbneo");
+}
+
 void RomLibraryTab::reload_groups() {
     m_groups_loading = true;
     std::string chosen = m_dat_group.get_active_id().raw();
@@ -428,6 +475,9 @@ void RomLibraryTab::on_audit_clicked() {
     m_job_paths = m_paths();
     m_job_dat_sources.clear();
     if (const auto* g = current_group()) m_job_dat_sources = DatSource::selected_in_folder(*g);
+    m_job_emulator = current_emulator();
+    // The combo, not config.json : the group shown is the one audited.
+    m_job_paths.roms_paths = DatSource::roms_paths_for(m_job_emulator);
     m_cancelled = false;
     m_job = Job::Audit;
     set_busy(true);
@@ -439,7 +489,8 @@ void RomLibraryTab::worker_audit() {
     RomInbox::Callbacks cb = make_callbacks();
     // Everything, not only problems : the table filters, and "Correct" is a
     // pill like the others.
-    RomAudit::Report rep = RomAudit::audit(m_db, m_job_paths.roms_paths, /*problems_only=*/false, cb, m_job_dat_sources);
+    RomAudit::Report rep = RomAudit::audit(m_db, m_job_paths.roms_paths, /*problems_only=*/false, cb,
+                                           m_job_dat_sources, m_job_emulator);
     {
         std::lock_guard<std::mutex> lk(m_shared_mutex);
         m_audit = std::move(rep);
@@ -469,8 +520,9 @@ void RomLibraryTab::populate() {
         auto row = *(m_store->append());
         systems.insert(g.system);
 
-        std::string expected = g.name + ".zip";
-        std::string yours = g.archive_found ? fs::path(g.archive).filename().string() : "-";
+        // A CHD set is a folder named after the set, not a zip.
+        std::string expected = g.is_chd ? g.name + "/" : g.has_disks ? g.name + ".zip + " + g.name + "/" : g.name + ".zip";
+        std::string yours = g.archive_found ? fs::path(g.archive).filename().string() + (g.is_chd ? "/" : "") : "-";
 
         const bool can_quarantine = can_quarantine_whole(g);
         const bool has_extras = has_extra_files(g);
@@ -480,11 +532,13 @@ void RomLibraryTab::populate() {
         if (g.corrupt) bits.push_back(Glib::ustring::compose(_("%1 corrupt"),  g.corrupt).raw());
         if (g.wrong)   bits.push_back(Glib::ustring::compose(_("%1 misnamed"), g.wrong).raw());
         if (has_extras) bits.push_back(Glib::ustring::compose(_("%1 extra file(s) not needed by the DAT"), (int)g.extra_entries.size()).raw());
-        if (!g.archive_found && g.status != "available") bits.push_back(_("no archive found"));
+        if (g.is_chd && g.status != "available") bits.push_back(_("Fix not available for CHDs"));
         else if (g.repairable) bits.push_back(_("repairable from the library"));
+        else if (!g.archive_found && (g.has_disks ? g.zip_status : g.status) != "available") bits.push_back(_("no archive found"));
         int inherited = 0;
         for (const auto& r : g.roms) if (!r.inherited_from.empty()) ++inherited;
         if (inherited) bits.push_back(Glib::ustring::compose(_("%1 from parent/BIOS"), inherited).raw());
+        if (g.has_disks && disks_not_right(g)) bits.push_back(_("Fix not available for CHDs"));
         if (g.ignored) bits.insert(bits.begin(), _("ignored"));
         if (g.is_bios) bits.insert(bits.begin(), _("BIOS"));
 
@@ -507,7 +561,7 @@ void RomLibraryTab::populate() {
 
         std::string blob = lower(g.name + ' ' + g.description + ' ' + expected + ' ' + yours + ' ' + g.cloneof + ' ' + g.system);
         for (const auto& r : g.roms) {
-            blob += ' ' + lower(r.name) + ' ' + crc_hex(r.crc);
+            blob += ' ' + lower(r.name) + ' ' + hash_of(r);
             if (!r.found_as.empty()) blob += ' ' + lower(r.found_as);
         }
         row[m_cols.search_blob] = blob;
@@ -528,8 +582,10 @@ void RomLibraryTab::populate() {
         row[m_cols.parent]     = "";
         row[m_cols.expected]   = "";
         row[m_cols.yours]      = base;
-        row[m_cols.details]    = Glib::ustring::compose(
+        Glib::ustring details = Glib::ustring::compose(
             _("Not in DAT : %1 file(s), %2 with a copy elsewhere in the library"), (int)o.entries.size(), elsewhere);
+        if (m_audit.emulator != "fbneo") details += Glib::ustring(" · ") + _("Fix all leaves it alone : tick it to quarantine it");
+        row[m_cols.details]    = details;
         row[m_cols.kind]       = KIND_ORPHAN;
         row[m_cols.index]      = (unsigned int)i;
         row[m_cols.repairable] = false;
@@ -583,8 +639,8 @@ void RomLibraryTab::update_summary() {
         m_status.set_text(_("The scan cache is empty : run a ROM scan first."));
     } else {
         m_status.set_text(Glib::ustring::compose(
-            _("%1 set(s) with a problem, of which %2 can be repaired from the library itself (%3 misnamed). Collection style: %4."),
-            m_audit.incorrect + m_audit.missing, misnamed + fixable, misnamed, RomResolve::to_string(m_audit.style)));
+            _("%1 set(s) with a problem, of which %2 can be repaired from the library itself (%3 misnamed). Each DAT is read with its own merge mode."),
+            m_audit.incorrect + m_audit.missing, misnamed + fixable, misnamed));
     }
 
     if (m_audit.missing_bios.empty()) {
@@ -684,11 +740,13 @@ void RomLibraryTab::show_set_detail(const Gtk::TreeModel::Row& row) {
         rr[cols.state]        = _(state_label(r.state));
         rr[cols.expected]     = r.name;
         rr[cols.found_as]     = r.found_as;
-        rr[cols.crc_expected] = crc_hex(r.crc);
-        rr[cols.crc_found]    = (r.state == RomAudit::RomState::Absent) ? Glib::ustring("-") : Glib::ustring(crc_hex(r.found_crc));
-        rr[cols.size]         = human_size(r.size);
+        rr[cols.crc_expected] = hash_of(r);
+        rr[cols.crc_found]    = found_hash_of(r);
+        rr[cols.size]         = r.is_disk ? std::string() : human_size(r.size);
         std::string where;
-        if (!r.inherited_from.empty())
+        if (r.is_disk)
+            where = r.found_in.empty() ? std::string() : fs::path(r.found_in).parent_path().filename().string() + "/";
+        else if (!r.inherited_from.empty())
             where = Glib::ustring::compose(_("from %1 (%2)"), r.inherited_from, fs::path(r.found_in).filename().string()).raw();
         else if (!r.found_in.empty())
             where = Glib::ustring::compose(_("good copy in %1"), fs::path(r.found_in).filename().string()).raw();
@@ -726,7 +784,9 @@ void RomLibraryTab::show_set_detail(const Gtk::TreeModel::Row& row) {
     }
     { ui::ColumnOptions o; o.mono = true; o.expand = true; t->add_text_column(_("Expected name"), cols.expected, o); }
     { ui::ColumnOptions o; o.mono = true; o.expand = true; t->add_text_column(_("Found as"), cols.found_as, o); }
-    { ui::ColumnOptions o; o.mono = true; t->add_text_column(_("CRC expected"), cols.crc_expected, o); t->add_text_column(_("CRC found"), cols.crc_found, o); }
+    { ui::ColumnOptions o; o.mono = true;
+      t->add_text_column(g.is_chd ? _("SHA1 expected") : g.has_disks ? _("CRC / SHA1 expected") : _("CRC expected"), cols.crc_expected, o);
+      t->add_text_column(g.is_chd ? _("SHA1 found") : g.has_disks ? _("CRC / SHA1 found") : _("CRC found"), cols.crc_found, o); }
     { ui::ColumnOptions o; o.xalign = 1.0f; t->add_text_column(_("Size"), cols.size, o); }
     { ui::ColumnOptions o; o.expand = true; t->add_text_column(_("Found in"), cols.found_in, o); }
     m_detail->set_content(t);
@@ -789,8 +849,15 @@ std::vector<Gtk::TreeModel::Row> RomLibraryTab::checked_rows() const {
 std::vector<Gtk::TreeModel::Row> RomLibraryTab::fix_candidates() const {
     std::vector<Gtk::TreeModel::Row> rows = checked_rows();
     if (!rows.empty() || !m_models.filter) return rows;
+    // A MAME library keeps zips no set of the DAT claims on purpose : the
+    // ~350 devices that have no ROM of their own, which RomVault's MAME XML
+    // still gives a zip. Moving them all out because they happen to be shown
+    // would be a surprise : for MAME an orphan is fixed only when ticked (or
+    // through its own menu). FinalBurn Neo keeps the rule it always had.
+    const bool orphans_on_request = m_audit.emulator != "fbneo";
     for (const auto& frow : m_models.filter->children()) {
         Gtk::TreeModel::Row row = *m_models.filter->convert_iter_to_child_iter(frow);
+        if (orphans_on_request && (int)row[m_cols.kind] == KIND_ORPHAN) continue;
         if (row[m_cols.actionable] && !row[m_cols.ignored]) rows.push_back(row);
     }
     return rows;
@@ -802,6 +869,116 @@ void RomLibraryTab::update_action_buttons() {
     m_btn_fix->set_label(n ? Glib::ustring::compose(checked ? _("Fix selected (%1)") : _("Fix all (%1)"), n)
                            : Glib::ustring(_("Fix")));
     m_btn_fix->set_sensitive(!m_busy && n > 0);
+
+    // FinalBurn Neo only : MAME has no online feature yet.
+    const int d = (int)download_candidates().size();
+    const bool fbneo = m_audit_ever_run && m_audit.emulator == "fbneo";
+    m_btn_download->set_visible(fbneo);
+    m_btn_download->set_label(d ? Glib::ustring::compose(_("Download from Bootcade (%1)"), d)
+                                : Glib::ustring(_("Download from Bootcade")));
+    m_btn_download->set_sensitive(!m_busy && d > 0);
+}
+
+bool RomLibraryTab::can_download(const RomAudit::GameEntry& g) const {
+    // Missing or wrong, and not rebuildable from the library : Fix does that
+    // without spending the quota. Never a CHD, never an ignored set.
+    return m_audit.emulator == "fbneo" && !g.is_chd && !g.ignored && g.archive_is_own
+        && !g.repairable && !g.dat_header.empty()
+        && (g.status == "missing" || g.status == "incorrect");
+}
+
+std::vector<Gtk::TreeModel::Row> RomLibraryTab::download_candidates() const {
+    std::vector<Gtk::TreeModel::Row> out;
+    auto keep = [&](const Gtk::TreeModel::Row& row) {
+        if ((int)row[m_cols.kind] == KIND_SET && can_download(m_audit.games[(unsigned int)row[m_cols.index]]))
+            out.push_back(row);
+    };
+    const auto checked = checked_rows();
+    if (!checked.empty()) { for (const auto& row : checked) keep(row); return out; }
+    if (!m_models.filter) return out;
+    for (const auto& frow : m_models.filter->children())
+        keep(*m_models.filter->convert_iter_to_child_iter(frow));
+    return out;
+}
+
+void RomLibraryTab::on_download_clicked(std::vector<Gtk::TreeModel::Row> rows) {
+    if (m_busy) return;
+    if (rows.empty()) rows = download_candidates();
+    m_dl = DownloadJob{};
+    for (const auto& row : rows) {
+        const auto& g = m_audit.games[(unsigned int)row[m_cols.index]];
+        if (can_download(g)) m_dl.items.push_back({g.dat_header, g.name});
+    }
+    if (m_dl.items.empty()) { flash(_("Nothing to download : no missing or wrong FinalBurn Neo set is shown.")); return; }
+
+    auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
+    // Signed out : say so at once, rather than ask to confirm what cannot happen.
+    if (BootcadeAuth::username().empty()) {
+        if (top) ui::notice(*top, _("Download from Bootcade"), RomDownload::explain("not_signed_in"));
+        return;
+    }
+    Paths p = m_paths();
+    std::error_code ec;
+    if (p.inbox.empty()) { if (top) ui::notice(*top, _("No import folder"), _("Set an import folder (Import tab) first.")); return; }
+    fs::create_directories(p.inbox, ec);
+    if (ec || !fs::is_directory(p.inbox, ec)) { if (top) ui::notice(*top, _("Import folder"), _("Could not create the import folder.")); return; }
+    if (top) {
+        const Glib::ustring text = Glib::ustring::compose(
+            _("%1 set(s) will be downloaded from the Bootcade server into the import folder, which checks them and "
+              "files them into your library.\n\nYour account's daily quota applies : downloads stop when it is used up, "
+              "and the rest can be downloaded later."), (int)m_dl.items.size());
+        ConfirmationDialog confirm(*top, _("Download from Bootcade?"), text, "bc-download.svg");
+        if (!confirm.show_and_confirm()) return;
+    }
+    m_job_paths = p;
+    m_cancelled = false;
+    m_job = Job::Download;
+    set_busy(true);
+    m_status.set_text(_("Checking your account…"));
+    m_worker = std::thread(&RomLibraryTab::worker_download, this);
+}
+
+void RomLibraryTab::worker_download() {
+    // Whatever the way out (refusal, quota, cancel), the page is told once.
+    [this] {
+    // The quota first : a refusal is explained once, before anything moves.
+    RomDownload::Quota q = RomDownload::fetch_quota();
+    if (!q.answered) { m_dl.stopped = std::string(_("The Bootcade server did not answer : ")) + q.error; return; }
+    if (!q.can_download) { m_dl.stopped = RomDownload::explain(q.reason); return; }
+    push_log(Glib::ustring::compose(_("Bootcade account : %1 download(s) left today."), q.remaining).raw());
+
+    int left = q.remaining;
+    const int n = (int)m_dl.items.size();
+    for (int i = 0; i < n && !m_cancelled; ++i) {
+        const auto& item = m_dl.items[i];
+        if (left <= 0) {
+            m_dl.stopped = Glib::ustring::compose(_("Daily quota used up : %1 set(s) left to download later."), n - i).raw();
+            break;
+        }
+        const std::string label = Glib::ustring::compose(_("Downloading %1 (%2/%3)…"), item.name, i + 1, n).raw();
+        push_progress((double)i / n, label);
+        auto res = RomDownload::download(item.dat_header, item.name, m_job_paths.inbox, m_cancelled,
+                                         [&](double f) { push_progress((i + f) / n, label); });
+        if (res.ok) {
+            m_dl.got.push_back(res.path);
+            --left;
+            push_log(Glib::ustring::compose(_("Downloaded %1."), item.name).raw());
+            continue;
+        }
+        if (m_cancelled) break;
+        m_dl.failed.push_back(item.name + " : " + res.reason);
+        push_log(item.name + " : " + res.reason);
+        // Refused : ask the account why. Quota used up or access lost stops
+        // everything ; anything else is this set's problem only.
+        if (res.http_status == 401 || res.http_status == 403) {
+            RomDownload::Quota again = RomDownload::fetch_quota();
+            if (!again.can_download) { m_dl.stopped = RomDownload::explain(again.reason); break; }
+            left = again.remaining;
+        }
+    }
+    push_progress(1.0, "");
+    }();
+    m_finished_dispatcher();
 }
 
 void RomLibraryTab::copy_to_clipboard(const Glib::ustring& text, const Glib::ustring& what) {
@@ -824,9 +1001,16 @@ std::string RomLibraryTab::all_details_of(const Gtk::TreeModel::Row& row) const 
         << "system: " << g.system << "\n"
         << "status: " << g.status << (g.ignored ? " (ignored)" : "") << "\n";
     if (!g.cloneof.empty()) out << "parent: " << g.cloneof << "\n";
-    out << "expected: " << g.name << ".zip\n"
+    out << "expected: " << g.name << (g.is_chd ? "/" : ".zip") << "\n"
         << "your file: " << (g.archive_found ? g.archive : "-") << "\n";
     for (const auto& r : g.roms) {
+        if (r.is_disk) {
+            out << "  " << _(state_label(r.state)) << "\t" << r.name << "\tsha1=" << r.sha1;
+            if (r.state == RomAudit::RomState::Corrupt) out << "\tfound sha1=" << r.found_sha1;
+            if (!r.found_in.empty()) out << "\tfile " << r.found_in;
+            out << "\n";
+            continue;
+        }
         out << "  " << _(state_label(r.state)) << "\t" << r.name << "\tcrc=" << crc_hex(r.crc)
             << "\tsize=" << r.size;
         if (!r.found_as.empty()) out << "\tfound as " << r.found_as;
@@ -852,7 +1036,8 @@ void RomLibraryTab::toggle_ignore(const Gtk::TreeModel::Row& row) {
     if ((int)row[m_cols.kind] != KIND_SET) return;
     auto& g = m_audit.games[(unsigned int)row[m_cols.index]];
     bool now_ignored = !g.ignored;
-    bool ok = now_ignored ? m_db->ignoreSet(g.name, g.system) : m_db->unignoreSet(g.name, g.system);
+    bool ok = now_ignored ? m_db->ignoreSet(g.name, g.system, "", m_audit.emulator)
+                          : m_db->unignoreSet(g.name, g.system, m_audit.emulator);
     if (!ok) { flash(_("Could not update the ignore list.")); return; }
     g.ignored = now_ignored;
 
@@ -919,12 +1104,16 @@ void RomLibraryTab::on_context_menu(const Gtk::TreeModel::Path& path, Gtk::TreeV
         const auto& g = m_audit.games[(unsigned int)row[m_cols.index]];
         add(g.ignored ? _("Stop ignoring this set") : _("Ignore this set (do not report again)"),
             [this, row] { toggle_ignore(row); });
+        if (can_download(g))
+            add(_("Download from Bootcade"), [this, row] { on_download_clicked({row}); });
         if (can_send_to_import(g))
             add(_("Fix : send to Import to be rebuilt"), [this, row] { on_fix_clicked({row}); });
         else if (can_quarantine_whole(g))
             add(_("Fix : move to quarantine"), [this, row] { on_fix_clicked({row}); });
         else if (has_extra_files(g) && !g.ignored)
             add(_("Fix : extract the extra files to quarantine"), [this, row] { on_fix_clicked({row}); });
+        else if ((g.is_chd && g.status != "available") || (g.has_disks && disks_not_right(g)))
+            add(_("Fix not available for CHDs"), [] {}, false);
     } else {
         sep();
         add(_("Fix : move to quarantine"), [this, row] { on_fix_clicked({row}); });
@@ -956,10 +1145,20 @@ void RomLibraryTab::on_fix_clicked(std::vector<Gtk::TreeModel::Row> rows) {
         }
         const auto& g = m_audit.games[(unsigned int)row[m_cols.index]];
         std::string header = g.dat_header.empty() ? g.system : g.dat_header;
-        if (can_send_to_import(g))          m_fix.repairable.push_back(g.archive);
+        if (can_send_to_import(g)) {
+            std::string src = import_source_of(g);
+            if (std::find(m_fix.repairable.begin(), m_fix.repairable.end(), src) == m_fix.repairable.end())
+                m_fix.repairable.push_back(src);
+        }
         else if (can_quarantine_whole(g))   m_fix.whole.push_back({g.archive, header, g.system});
         else if (has_extra_files(g) && !g.ignored) m_fix.extras.push_back({g.archive, g.system, header, g.extra_entries});
     }
+    // An orphan that is also the good copy a repairable set is rebuilt from
+    // stays put this time : moving it out first would leave nothing to copy.
+    // Once the rebuilt set is in the library, the next audit offers it again.
+    m_fix.orphans.erase(std::remove_if(m_fix.orphans.begin(), m_fix.orphans.end(), [&](const auto& o) {
+        return std::find(m_fix.repairable.begin(), m_fix.repairable.end(), o.archive) != m_fix.repairable.end();
+    }), m_fix.orphans.end());
     if (m_fix.whole.empty() && m_fix.orphans.empty() && m_fix.extras.empty() && m_fix.repairable.empty()) {
         flash(_("Nothing to fix : the audit found no repairable set, unrepairable set, orphan or extra file."));
         return;
@@ -1137,7 +1336,7 @@ void RomLibraryTab::on_export(int format) {
         out << "# " << m_audit.total << " sets: " << m_audit.available << " correct, "
             << m_audit.incorrect << " incorrect, " << m_audit.missing << " missing, "
             << m_audit.repairable << " repairable from the library, "
-            << m_audit.ignored << " ignored; style " << RomResolve::to_string(m_audit.style) << "\n";
+            << m_audit.ignored << " ignored\n";
         for (const char* want : {"incorrect", "missing"}) {
             out << "\n\n=== " << want << " ===\n";
             for (const auto& g : m_audit.games) {
@@ -1147,7 +1346,8 @@ void RomLibraryTab::on_export(int format) {
                 if (g.archive_found) out << "    archive: " << g.archive << "\n";
                 for (const auto& r : g.roms) {
                     if (r.state == RomAudit::RomState::Present) continue;
-                    out << "    " << _(state_label(r.state)) << "\t" << r.name << "\tcrc=" << crc_hex(r.crc) << "\tsize=" << r.size;
+                    if (r.is_disk) out << "    " << _(state_label(r.state)) << "\t" << r.name << "\tsha1=" << r.sha1;
+                    else out << "    " << _(state_label(r.state)) << "\t" << r.name << "\tcrc=" << crc_hex(r.crc) << "\tsize=" << r.size;
                     if (!r.found_as.empty()) out << "\tfound as " << r.found_as;
                     if (!r.found_in.empty()) out << "\tcopy in " << r.found_in;
                     out << "\n";
@@ -1170,9 +1370,9 @@ void RomLibraryTab::on_export(int format) {
             }
             for (const auto& r : g.roms) {
                 out << csv(status) << ',' << csv(g.name) << ',' << csv(g.description) << ',' << csv(g.system) << ','
-                    << csv(g.cloneof) << ',' << csv(g.name + ".zip") << ',' << csv(yours) << ','
-                    << csv(r.name) << ',' << _(state_label(r.state)) << ',' << crc_hex(r.crc) << ','
-                    << (r.state == RomAudit::RomState::Absent ? "" : crc_hex(r.found_crc)) << ',' << r.size << ','
+                    << csv(g.cloneof) << ',' << csv(g.name + (g.is_chd ? "/" : ".zip")) << ',' << csv(yours) << ','
+                    << csv(r.name) << ',' << _(state_label(r.state)) << ',' << hash_of(r) << ','
+                    << (r.state == RomAudit::RomState::Absent ? "" : found_hash_of(r)) << ',' << r.size << ','
                     << csv(r.found_as) << ',' << csv(r.found_in) << ',' << csv(r.inherited_from) << "\n";
             }
         }
@@ -1191,9 +1391,15 @@ void RomLibraryTab::on_export(int format) {
             out << "\t<game name=\"" << xml(g.name) << "\"";
             if (!g.cloneof.empty()) out << " cloneof=\"" << xml(g.cloneof) << "\" romof=\"" << xml(g.cloneof) << "\"";
             out << ">\n\t\t<description>" << xml(g.description) << "</description>\n";
-            for (const auto& r : g.roms)
+            for (const auto& r : g.roms) {
+                if (r.is_disk) {
+                    // The DAT names a disk without its extension.
+                    out << "\t\t<disk name=\"" << xml(fs::path(r.name).stem().string()) << "\" sha1=\"" << r.sha1 << "\"/>\n";
+                    continue;
+                }
                 out << "\t\t<rom name=\"" << xml(r.name) << "\" size=\"" << r.size << "\" crc=\"" << crc_hex(r.crc) << "\""
                     << (r.state == RomAudit::RomState::Present ? " status=\"verified\"" : "") << "/>\n";
+            }
             out << "\t</game>\n";
         }
         out << "</datafile>\n";
@@ -1259,6 +1465,22 @@ void RomLibraryTab::on_worker_finished() {
         update_last_audit_label();
         populate();
         AppContext::trim_heap();   // the audit's temporaries are gone : give the pages back
+    } else if (m_job == Job::Download) {
+        Glib::ustring status = m_dl.got.empty() && !m_dl.stopped.empty() ? Glib::ustring()
+            : Glib::ustring::compose(_("Download : %1 set(s) received, sent to Import."), (int)m_dl.got.size());
+        if (!m_dl.failed.empty()) status += Glib::ustring::compose(_(" %1 could not be downloaded."), (int)m_dl.failed.size());
+        if (m_cancelled) status += _(" Cancelled.");
+        if (!m_dl.stopped.empty()) status += (status.empty() ? "" : " ") + m_dl.stopped;
+        m_job = Job::None;
+        set_busy(false);
+        flash(status);
+        m_sig_log.emit(status.raw());
+        if (!m_dl.got.empty()) m_sig_send_to_import.emit(m_dl.got);
+        else if (!m_dl.stopped.empty() && m_dl.failed.empty()) {
+            if (auto* top = dynamic_cast<Gtk::Window*>(get_toplevel()))
+                ui::notice(*top, _("Download from Bootcade"), m_dl.stopped);
+        }
+        return;
     } else if (m_job == Job::Fix) {
         Glib::ustring status = Glib::ustring::compose(
             _("Fix : %1 archive(s) moved to quarantine, %2 cleaned of extra files, %3 repairable set(s) sent to Import."),
@@ -1271,7 +1493,7 @@ void RomLibraryTab::on_worker_finished() {
         // The library changed under the audit : the owner rescans, then calls
         // refresh_after_scan(). Import takes over the copied sets ; when a
         // scan is pending the owner holds that until the scan is done.
-        if (m_fix.moved || m_fix.cleaned) m_sig_scan.emit();
+        if (m_fix.moved || m_fix.cleaned) m_sig_scan.emit(m_audit.emulator);
         if (!m_fix.sent.empty()) m_sig_send_to_import.emit(m_fix.sent);
         return;
     }
@@ -1286,6 +1508,7 @@ void RomLibraryTab::set_busy(bool busy) {
     m_btn_export->set_sensitive(!busy);
     m_btn_select_all->set_sensitive(!busy);
     m_btn_select_none->set_sensitive(!busy);
+    if (m_btn_download) m_btn_download->set_sensitive(!busy);
     if (busy) { m_progress.set_fraction(0.0); m_progress.show(); m_btn_cancel->show(); }
     else      { m_progress.hide(); m_btn_cancel->hide(); }
     update_action_buttons();

@@ -44,13 +44,58 @@ constexpr int kManifestSchema = 1;
 // The Bootcade file server : what a fresh install points at.
 constexpr const char* kDefaultManifestUrl = "https://files.gcourtot.duckdns.org/dat/dat-manifest.json";
 
+// ── How one DAT is read ─────────────────────────────────────────────────────
+//
+// A DAT is the contract : each of its sets says what one archive (or one
+// folder of CHDs) of the folder the DAT describes holds. A DAT whose sets
+// are linked (cloneof / romof, merge= on a ROM or a disk, device_ref) needs
+// one more thing to say that : its merge mode, as in RomVault's DAT rules.
+//   split      : a set holds its own ROMs ; merge= ones stay with the
+//                parent or the BIOS, devices in their own sets ;
+//   non-merged : every set holds everything it runs on, parent's, BIOS's
+//                and devices' ROMs included ;
+//   merged     : a parent's archive holds its clones too ; clones have none.
+// The mode the DAT's header declares (clrmamepro forcemerging, romcenter
+// rommode) applies unless the user overrides it ; a linked DAT declaring
+// nothing is split, as in RomVault. A DAT without links is read as it is :
+// no mode at all. Nothing depends on where a DAT comes from or on its name.
+constexpr const char* kMergeSplit     = "split";
+constexpr const char* kMergeNonMerged = "non-merged";
+constexpr const char* kMergeMerged    = "merged";
+
+// The user's rule for one DAT file, kept in the group that selects it.
+struct DatRule {
+    std::string merge;              // "" = the DAT's own mode, else split
+    bool        override_dat = false;  // use `merge` even when the DAT declares one
+    std::string folder;             // where its sets go ; "" = named after the DAT's header
+};
+
+// What a DAT is, as far as reading it goes : whether its sets are linked,
+// and the mode its header declares ("" when none).
+struct DatTraits {
+    bool        linked = false;
+    std::string declared;
+};
+
+// The merge mode a DAT is read with : "" for a DAT without links.
+std::string effective_merge(const DatTraits& traits, const DatRule* rule);
+
 struct Group {
     std::string id;                 // "fbneo", "fbneo-gba", … : stable, never shown
     std::string name;               // "FinalBurn Neo", "FBNeo - GBA"
     std::string folder;             // where the source's .dat files live
     Kind        source = Kind::Http;
+    // Quel emulateur ce groupe decrit. Kind::Emulator ne suffit plus a le
+    // dire : FinalBurn Neo et MAME produisent tous deux leurs DAT, et le
+    // gestionnaire doit savoir lequel appeler et lequel auditer. Defaut
+    // 'fbneo' : les groupes deja ecrits dans config.json ne portent pas ce
+    // champ et decrivent tous FinalBurn Neo.
+    std::string emulator = "fbneo";  // "fbneo" | "mame"
     std::string url;                // manifest URL, Kind::Http
-    std::string set_style = "non-merged";   // how the library this group describes is laid out
+    // Before merge modes were per DAT, the group had one. Read only to give
+    // each of the group's DATs that mode once (load_groups) ; never written.
+    std::string set_style = "non-merged";
+    std::map<std::string, DatRule> rules;   // DAT file name → its rule
     bool        active = true;      // an inactive group loads nothing and is not offered for audit
     // The selection. all_files: every DAT file the source provides, today
     // and tomorrow. Otherwise `files` names them one by one.
@@ -78,6 +123,17 @@ std::string        make_id(const std::string& name, const std::vector<Group>& ta
 // The DAT files present in a folder (*.dat, sorted by name).
 std::vector<std::string> list_folder(const std::string& folder);
 
+// The group a DAT file belongs to : the first active group selecting it
+// whose folder holds it (the one files_to_load takes it from), null when
+// none does. The group says which emulator the DAT describes : not the DAT's
+// header, nor its name.
+const Group* group_of(const std::vector<Group>& groups, const std::string& file);
+// The rule of a DAT file : that of its group. Null when it has none.
+const DatRule* rule_of(const std::vector<Group>& groups, const std::string& file);
+// The emulator of the group whose folder holds the DAT at `path` ; empty
+// when no group holds it.
+std::string emulator_of_path(const std::string& path);
+
 // Every DAT file the database must be built from : the union of what active
 // groups select, one path per file name. Two groups pointing at different
 // folders for the same file name would collide in the database (one row per
@@ -86,6 +142,64 @@ std::vector<std::string> files_to_load(const std::vector<Group>& groups,
                                        std::vector<std::string>* conflicts = nullptr);
 // The file names one group selects among what its folder holds.
 std::set<std::string> selected_in_folder(const Group& g);
+
+// ── Which emulator the ROM manager works for ────────────────────────────────
+//
+// The Library audits against one group (rom_manager.library_group, else the
+// first active group) and that group's emulator decides everything the
+// manager does with files : which ROM directories it reads, which sets a
+// file can be recognised as, where a rebuilt set belongs. Import and Outbox
+// follow the same choice, so the whole window speaks for one emulator.
+//
+// The library group, or a default-constructed group (emulator "fbneo") when
+// there is none : exactly what every job did before groups had an emulator.
+Group library_group();
+// The group that describes `emulator` : the library group when it is one of
+// that emulator's, else the first active one, else the first one. Null when
+// no group describes that emulator at all.
+const Group* group_for(const std::vector<Group>& groups, const std::string& emulator);
+// The ROM directories of one emulator's library, as Settings stores them
+// (emulators.<id>.roms_paths). Files written before that key existed : the
+// flat roms_paths / roms_path for FinalBurn Neo, mame_rompaths for MAME,
+// the same fallbacks SettingsPanel::load_from_file applies.
+std::vector<std::string> roms_paths_for(const std::string& emulator);
+
+// ── Download from a site (Local folder) ─────────────────────────────────────
+//
+// The sites that publish MAME DATs, fetched from the author's own address :
+// Bootcade never mirrors them, and every file keeps its source on screen.
+// A pack per MAME version (progettosnaps), a zip per DAT and version
+// (Pleasuredome), plain files always at the same address (AntoPISA).
+struct Site {
+    const char* emulator;   // whose DATs these are : "mame"
+    const char* label;      // what the menu shows
+    const char* source;     // who publishes it : "Pleasuredome"
+    const char* homepage;   // their page
+    const char* url;        // the file ; its version is only a starting point
+};
+const std::vector<Site>& sites();
+
+// The newest address of the same file, when the address names a MAME
+// version and the site lists its versions (progettosnaps, Pleasuredome) ;
+// `url` itself otherwise, or on any network trouble (`error` says why).
+std::string latest_url(const std::string& url, std::string& error);
+
+// Downloads `url` into `folder`. An archive (.zip, .7z) is unpacked and its
+// .dat / .xml files written there ; anything else is written under the file
+// name the address carries. Every file goes through a hidden temporary name,
+// so an interrupted transfer never leaves half a DAT. `written` receives the
+// file names.
+bool fetch_direct(const std::string& url, const std::string& folder,
+                  std::vector<std::string>& written, std::string& error,
+                  const std::function<void(double pct, const std::string& message)>& progress = nullptr,
+                  const std::function<bool()>& cancelled = nullptr);
+
+// Where each DAT of a folder came from, kept next to them in
+// ".bootcade-sources.json" : the credit follows the files, whatever group
+// uses them. source_of() is "" for a file with no recorded source.
+void record_source(const std::string& folder, const std::vector<std::string>& files,
+                   const Site& site, const std::string& url);
+std::string source_of(const std::string& folder, const std::string& file);
 
 // ── HTTP contract ───────────────────────────────────────────────────────────
 

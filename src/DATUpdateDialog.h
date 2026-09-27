@@ -16,12 +16,24 @@ class DATUpdateDialog : public Gtk::Dialog {
 public:
     // `files` : the DAT files to build the database from (DatSource::files_to_load :
     // the union of what active groups select). `dat_path` is only shown.
+    // `emulator` : the one whose games are rebuilt ("fbneo", "mame") ; the
+    // other one's games and statuses are left as they are. Empty rebuilds
+    // every emulator. `files` must then be that emulator's DATs only
+    // (files_for_update).
     DATUpdateDialog(Gtk::Window& parent, std::shared_ptr<DatabaseManager> db, const std::string& dat_path,
-                    std::vector<std::string> files);
+                    std::vector<std::string> files, std::string emulator = "");
+
+    // The DAT files an update of `emulator` loads : those of the active groups
+    // describing it (every active group when empty).
+    static std::vector<std::string> files_for_update(const std::string& emulator,
+                                                     std::vector<std::string>* conflicts = nullptr);
     virtual ~DATUpdateDialog();
 
     void start_update();
     bool was_cancelled() const { return m_cancelled.load(); }
+    // The games were wiped and (partly) reloaded : whoever shows them must
+    // read them again, even when the update was stopped half-way.
+    bool database_changed() const { return m_database_changed.load(); }
 
 private:
     using Level = SettingsUi::LogPanel::Level;
@@ -39,8 +51,10 @@ private:
     std::shared_ptr<DatabaseManager> m_db;
     std::string m_dat_path;
     std::vector<std::string> m_files;
+    std::string m_emulator;   // empty = every emulator
     std::atomic<bool> m_cancelled{false};
     std::atomic<bool> m_failed{false};
+    std::atomic<bool> m_database_changed{false};
 
     // UI Components
     Gtk::Box m_main_box{Gtk::ORIENTATION_VERTICAL, 0};

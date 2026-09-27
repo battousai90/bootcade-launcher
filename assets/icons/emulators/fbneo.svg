@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 60" width="70" height="60">
+  <!-- Lettrage evoquant FinalBurn Neo : monogramme FB, F bleu et B rouge,
+       surmontant NEO en orange. Teintes de la marque : #0a6cbc, #a80c0c,
+       #e8841c.
+
+       Les capitales sont tracees, pas composees : a epaisseur (T=9) et hauteur
+       (H=34) imposees, le F cesse de paraitre plus petit que le B, ce qu'aucun
+       reglage de police ne permettait.
+
+       Un essai plus fidele a la vraie marque — barre du F en biseau, B passant
+       derriere, NEO chevauchant — a ete abandonne : il tenait en grand, mais
+       se brouillait completement a la taille reelle d'affichage, 46 pixels de
+       haut. Ici la lisibilite prime sur la ressemblance.
+
+       Ce n'est volontairement pas un fac-simile : l'equipe FBNeo ne publie
+       aucun logo dans son depot. -->
+
+  <!-- F : hampe, barre haute, barre mediane. -->
+  <path transform="translate(8.5,4.75)" fill="#0a6cbc" shape-rendering="crispEdges"
+        d="M0,0 H24 V10.25 H9 V17.25 H21 V26.25 H9 V35.25 H0 Z"/>
+
+  <!-- B : masse pleine creusee de deux fenetres (fill-rule evenodd). Le retrait
+       a mi-hauteur evite le rectangle parfait, qui ne se lirait plus comme un B
+       une fois reduit. -->
+  <path transform="translate(35.5,6)" fill="#a80c0c" fill-rule="evenodd" shape-rendering="crispEdges"
+        d="M0,0 H22 L26,5 V13 L22,17 L26,21 V29 L22,34 H0 Z
+           M9,7 H17 V13 H9 Z
+           M9,21 H17 V27 H9 Z"/>
+
+  <text x="35" y="57" font-family="DejaVu Sans, Verdana, Helvetica, sans-serif"
+        font-weight="bold" font-size="24" text-anchor="middle" letter-spacing="3"
+        fill="#e8841c">NEO</text>
+</svg>

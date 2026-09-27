@@ -2,8 +2,42 @@
 #pragma once
 #include <algorithm>
 #include <cctype>
+#include <map>
 #include <string>
 #include <vector>
+
+/* Un seul vocabulaire de genres pour les deux catalogues.
+ *
+ * FinalBurn Neo et MAME classent leurs jeux chacun de son cote, et sans se
+ * concerter : le premier ecrit « Racing », « Platformer », « Fighting /
+ * Versus » ; le second « Driving », « Platform », « Fighter ». Ce sont les
+ * memes jeux sous deux noms, et laisser les deux dans la colonne des filtres
+ * obligeait a cliquer deux fois pour voir tous les jeux de course.
+ *
+ * La table ci-dessous est un jugement humain, relu entree par entree : elle ne
+ * couvre QUE les equivalences evidentes. Tout ce qui decrit du materiel plutot
+ * qu'un genre — « Computer », « Slot Machine », « Handheld », « Tabletop » —
+ * reste tel quel : MAME emule des machines, pas seulement des bornes, et
+ * forcer ces categories dans le vocabulaire de FBNeo n'aurait aucun sens.
+ *
+ * « Ball & Paddle » et « Climbing » sont gardes comme categories, et ce sont
+ * les « Breakout » de FinalBurn Neo qui les rejoignent : la categorie de MAME
+ * est la plus large des deux (elle couvre aussi les Pong).
+ */
+inline const std::string& canonical_genre(const std::string& g) {
+    static const std::map<std::string, std::string> kMap = {
+        // MAME vers FinalBurn Neo.
+        {"Driving",       "Racing"},
+        {"Platform",      "Platformer"},
+        {"Fighter",       "Fighting / Versus"},
+        {"Misc.",         "Misc"},
+        {"Simulation",    "Simulator"},
+        // FinalBurn Neo vers MAME, la ou c'est MAME qui nomme le mieux.
+        {"Breakout",      "Ball & Paddle"},
+    };
+    const auto it = kMap.find(g);
+    return it == kMap.end() ? g : it->second;
+}
 
 /* Un champ multiple venu du DAT : « Platformer, Action ».
  *
@@ -22,7 +56,8 @@ inline std::vector<std::string> split_dat_values(const std::string& value) {
             start, comma == std::string::npos ? std::string::npos : comma - start);
         size_t a = piece.find_first_not_of(" \t");
         size_t b = piece.find_last_not_of(" \t");
-        if (a != std::string::npos) out.push_back(piece.substr(a, b - a + 1));
+        if (a != std::string::npos)
+            out.push_back(canonical_genre(piece.substr(a, b - a + 1)));
         if (comma == std::string::npos) break;
         start = comma + 1;
     }
@@ -52,13 +87,62 @@ struct Rom {
     bool is_inherited() const { return !merge.empty(); }
 };
 
+// Un disque dur, CD ou GD-ROM d'une machine MAME : un fichier CHD, range a
+// cote des zips dans un dossier au nom du set (<racine>/<set>/<nom>.chd).
+// Un CHD pese des centaines de Mo : on ne le relit jamais, on compare le SHA1
+// que son en-tete declare a celui du DAT.
+struct Disk {
+    std::string name;   // sans l'extension .chd, comme le DAT l'ecrit
+    std::string sha1;   // en minuscules
+    std::string merge;  // attribut merge= : le meme disque, chez le parent
+};
+
+// Une machine MAME, reduite a ce que l'interface affiche. Les ROMs n'y sont
+// pas : elles se redemandent a MAME set par set quand un ecran en a besoin.
+struct MameMachine {
+    std::string name;
+    std::string description;
+    std::string year;
+    std::string manufacturer;
+    std::string cloneof;
+    std::string romof;
+    std::string sourcefile;
+    std::string driver_status;   // good | imperfect | preliminary
+    bool is_bios       = false;
+    bool is_device     = false;  // pas un jeu : une piece reutilisee par d'autres
+    bool is_mechanical = false;  // flipper, machine a sous : non jouable ici
+    bool runnable      = true;
+
+    // Ce que `mame -listxml` donne deja et que le catalogue jetait. Sans eux
+    // les filtres « Players » et « Orientation » ne montraient que du
+    // FinalBurn Neo : faute de valeur, aucune machine MAME n'y entrait.
+    int         players = 0;
+    std::string orientation;     // « horizontal » / « vertical », vocabulaire des DAT
+    std::string width;
+    std::string height;
+};
+
 struct Game {
+    // Quel emulateur fournit ce jeu : "fbneo" ou "mame". Persiste en base :
+    // il fait partie de la cle de la table games, parce que `mslug` est un set
+    // FinalBurn Neo ET un set MAME, tous deux en system 'Arcade'. La source
+    // FBNeo le laisse a sa valeur par defaut, le catalogue MAME le renseigne.
+    std::string emulator = "fbneo";
+
     std::string name;
     std::string description;
     std::string year;
     std::string manufacturer;
     std::string system;  // System type extracted from DAT header
     std::vector<Rom> roms;
+    // Les CHD du set : seul le DAT « CHDs (merged) » de MAME en porte. Un set
+    // qui n'a que des disques n'a aucune ROM, et inversement.
+    std::vector<Disk> disks;
+    // Les devices MAME dont la machine a besoin pour demarrer (<device_ref>) :
+    // une puce son, un CPU de protection... chacun range dans son propre zip,
+    // comme un set a part. Seuls ceux qui ont des ROMs a verifier sont gardes.
+    // Vide pour FinalBurn Neo.
+    std::vector<std::string> devices;
     std::string status = "missing";  // "available", "missing", "incorrect", "incomplete"
     
     // Video information
