@@ -74,6 +74,26 @@ public:
         });
     }
 
+    // Le hiscore.dat que sert le service, entrees apprises comprises : sans
+    // lui, un jeu tout juste ajoute depuis la page n'ecrirait toujours rien.
+    // -> contenu, vide en cas d'echec.
+    std::string hiscore_dat() {
+        CURL* curl = curl_easy_init();
+        if (!curl) return {};
+        std::string body;
+        const std::string url = base_ + "/api/hiscore-dat";
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, sink);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+        CURLcode res = curl_easy_perform(curl);
+        long status = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+        curl_easy_cleanup(curl);
+        return res == CURLE_OK && status == 200 ? body : std::string();
+    }
+
     bool upload(const std::vector<fs::path>& shots, const fs::path& hi, const fs::path& fsave) {
         return post("upload", [&](curl_mime* mime) {
             for (const auto& s : shots) add_file(mime, "shot", s);
@@ -202,6 +222,25 @@ int main(int argc, char* argv[]) {
     if (!rom_present(link.game)) {
         service.event("rom_missing", link.game);
         return 1;
+    }
+
+    // Le hiscore.dat du poste, remplace seulement par un fichier complet :
+    // une reponse tronquee laisserait l'emulateur sans aucune entree.
+    {
+        const std::string dat = service.hiscore_dat();
+        const fs::path target = fbneo_data_dir() + "/support/hiscores/hiscore.dat";
+        if (dat.size() > 10000 && dat.find(':') != std::string::npos) {
+            std::error_code ec;
+            fs::create_directories(target.parent_path(), ec);
+            const fs::path tmp = target.string() + ".learn-tmp";
+            std::ofstream(tmp, std::ios::binary) << dat;
+            fs::rename(tmp, target, ec);
+            const bool listed = std::regex_search(dat, std::regex("(^|\\n)" + link.game + ":"));
+            service.event("dat_synced", std::string("entrée ") + (listed ? "présente" : "absente")
+                                        + " pour " + link.game);
+        } else {
+            service.event("dat_synced", "impossible de le récupérer, celui du poste est gardé");
+        }
     }
 
     // Memes options d'affichage que Bootcade ; rien d'autre.
