@@ -285,6 +285,20 @@ install(FILES assets/logo.svg
         RENAME ${APP_ID}.svg)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Outils de developpement, jamais livres aux joueurs : OFF par defaut, donc
+# absents du Flatpak, des paquets et des releases, et sans regle install().
+#   bootcade-learn : recoit le lien bootcade-learn:// du bouton « Apprendre »
+#   de l'admin des scores, lance le jeu et envoie captures F6 et fichier de
+#   scores (tools/bootcade_learn.cpp, tools/bootcade-learn.desktop).
+# ─────────────────────────────────────────────────────────────────────────────
+option(BOOTCADE_DEV_TOOLS "Build developer-only tools (never shipped)" OFF)
+if(BOOTCADE_DEV_TOOLS)
+    add_executable(bootcade-learn tools/bootcade_learn.cpp src/AppContext.cpp)
+    target_include_directories(bootcade-learn PRIVATE src ${CURL_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS})
+    target_link_libraries(bootcade-learn ${CURL_LIBRARIES} ${SQLITE3_LIBRARIES})
+endif()
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CPack : produces the .deb and the .tar.gz. The AppImage and the Flatpak are
 # built by scripts/package.sh, which consumes this same install tree.
 # ─────────────────────────────────────────────────────────────────────────────
