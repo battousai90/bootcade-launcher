@@ -210,7 +210,8 @@ private:
     RomAudit::Report m_audit;
     // Sets the Bootcade server does not hold ("<dat_header>/<name>"), asked
     // at the end of the audit : never offered for download.
-    std::set<std::string> m_not_on_server;
+    // "<dat_header>/<name>" -> true when the server holds an older version.
+    std::map<std::string, bool> m_not_on_server;
     bool m_audit_ever_run = false;
     Paths m_job_paths;   // snapshot for the worker
 

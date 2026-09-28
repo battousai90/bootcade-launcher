@@ -1669,5 +1669,6 @@
   "the server is busy, try again later": "el servidor está ocupado, inténtalo más tarde",
   "right content under another file name": "contenido correcto con otro nombre de archivo",
   "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 set(s) con otro nombre de archivo → movidos a Importar, que los guarda con el nombre correcto\n",
-  "Asking the Bootcade server…": "Consultando el servidor de Bootcade…"
+  "Asking the Bootcade server…": "Consultando el servidor de Bootcade…",
+  "outdated on the Bootcade server": "versión obsoleta en el servidor de Bootcade"
 }

@@ -502,15 +502,17 @@ void RomLibraryTab::worker_audit() {
     // Which of the sets it would offer the Bootcade server actually holds :
     // one HEAD each, free of quota. Only for a short list : a library that
     // lacks thousands of sets is asked at download time, set by set.
-    std::set<std::string> not_on_server;
+    std::map<std::string, bool> not_on_server;
     if (rep.emulator == "fbneo" && BootcadeAuth::signed_in() && !rep.cancelled) {
         std::vector<const RomAudit::GameEntry*> asked;
         for (const auto& g : rep.games) if (downloadable(rep, g)) asked.push_back(&g);
         if (!asked.empty() && asked.size() <= 200) {
+            RomDownload::ServerView server;
             for (size_t i = 0; i < asked.size() && !m_cancelled; ++i) {
                 if (cb.progress) cb.progress(100.0 * (double)i / (double)asked.size(), _("Asking the Bootcade server…"));
-                if (RomDownload::presence(asked[i]->dat_header, asked[i]->name) == RomDownload::Presence::Absent)
-                    not_on_server.insert(asked[i]->dat_header + "/" + asked[i]->name);
+                const auto offer = server.check(asked[i]->dat_header, asked[i]->name);
+                if (offer == RomDownload::Offer::Absent || offer == RomDownload::Offer::Outdated)
+                    not_on_server[asked[i]->dat_header + "/" + asked[i]->name] = offer == RomDownload::Offer::Outdated;
             }
         }
     }
@@ -560,7 +562,8 @@ void RomLibraryTab::populate() {
         else if (g.misnamed_archive) bits.push_back(_("right content under another file name"));
         else if (g.repairable) bits.push_back(_("repairable from the library"));
         else if (!g.archive_found && (g.has_disks ? g.zip_status : g.status) != "available") bits.push_back(_("no archive found"));
-        if (m_not_on_server.count(g.dat_header + "/" + g.name)) bits.push_back(_("not available on the Bootcade server"));
+        if (auto s = m_not_on_server.find(g.dat_header + "/" + g.name); s != m_not_on_server.end())
+            bits.push_back(s->second ? _("outdated on the Bootcade server") : _("not available on the Bootcade server"));
         int inherited = 0;
         for (const auto& r : g.roms) if (!r.inherited_from.empty()) ++inherited;
         if (inherited) bits.push_back(Glib::ustring::compose(_("%1 from parent/BIOS"), inherited).raw());
@@ -977,11 +980,22 @@ void RomLibraryTab::worker_download() {
 
     int left = q.remaining;
     const int n = (int)m_dl.items.size();
+    RomDownload::ServerView server;
     for (int i = 0; i < n && !m_cancelled; ++i) {
         const auto& item = m_dl.items[i];
         if (left <= 0) {
             m_dl.stopped = Glib::ustring::compose(_("Daily quota used up : %1 set(s) left to download later."), n - i).raw();
             break;
+        }
+        // The version the DAT asks for, or nothing : an older copy would
+        // spend the quota on a set Import then turns down.
+        const auto offer = server.check(item.dat_header, item.name);
+        if (offer == RomDownload::Offer::Absent || offer == RomDownload::Offer::Outdated) {
+            const std::string why = offer == RomDownload::Offer::Outdated ? _("outdated on the Bootcade server")
+                                                                           : _("not available on the Bootcade server");
+            m_dl.failed.push_back(item.name + " : " + why);
+            push_log(item.name + " : " + why);
+            continue;
         }
         const std::string label = Glib::ustring::compose(_("Downloading %1 (%2/%3)…"), item.name, i + 1, n).raw();
         push_progress((double)i / n, label);
