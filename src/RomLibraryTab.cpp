@@ -584,6 +584,7 @@ void RomLibraryTab::populate() {
         row[m_cols.ignored]    = g.ignored;
         row[m_cols.has_extras] = has_extras;
         row[m_cols.actionable] = can_quarantine || has_extras || can_send_to_import(g);
+        row[m_cols.checkable]  = row[m_cols.actionable] || can_download(g);
 
         std::string blob = lower(g.name + ' ' + g.description + ' ' + expected + ' ' + yours + ' ' + g.cloneof + ' ' + g.system);
         for (const auto& r : g.roms) {
@@ -618,6 +619,7 @@ void RomLibraryTab::populate() {
         row[m_cols.ignored]    = false;
         row[m_cols.has_extras] = false;
         row[m_cols.actionable] = true;
+        row[m_cols.checkable]  = true;
         std::string blob = lower(base + ' ' + folder);
         for (const auto& e : o.entries) blob += ' ' + lower(e.name) + ' ' + crc_hex(e.crc);
         row[m_cols.search_blob] = blob;
@@ -848,7 +850,7 @@ void RomLibraryTab::show_orphan_detail(const Gtk::TreeModel::Row& row) {
 
 void RomLibraryTab::on_row_toggled(const Glib::ustring& path) {
     Gtk::TreeModel::Row row = source_row(Gtk::TreeModel::Path(path));
-    if (!row[m_cols.actionable]) return;
+    if (!row[m_cols.checkable]) return;
     row[m_cols.include] = !row[m_cols.include];
     update_action_buttons();
 }
@@ -858,7 +860,7 @@ void RomLibraryTab::set_all_checked(bool on) {
     // one is looking at.
     for (const auto& frow : m_models.filter->children()) {
         Gtk::TreeModel::Row row = *m_models.filter->convert_iter_to_child_iter(frow);
-        if (row[m_cols.actionable]) row[m_cols.include] = on;
+        if (row[m_cols.checkable]) row[m_cols.include] = on;
     }
     update_action_buttons();
 }
@@ -873,8 +875,12 @@ std::vector<Gtk::TreeModel::Row> RomLibraryTab::checked_rows() const {
 // The rows Fix acts on : the checked ones, or when none is checked every
 // actionable row the table currently shows. What one sees is what gets fixed.
 std::vector<Gtk::TreeModel::Row> RomLibraryTab::fix_candidates() const {
-    std::vector<Gtk::TreeModel::Row> rows = checked_rows();
-    if (!rows.empty() || !m_models.filter) return rows;
+    // Ticked rows, those Fix can act on : a ticked set that can only be
+    // downloaded is Download's, not Fix's.
+    const std::vector<Gtk::TreeModel::Row> checked = checked_rows();
+    std::vector<Gtk::TreeModel::Row> rows;
+    for (const auto& row : checked) if (row[m_cols.actionable]) rows.push_back(row);
+    if (!checked.empty() || !m_models.filter) return rows;
     // A MAME library keeps zips no set of the DAT claims on purpose : the
     // ~350 devices that have no ROM of their own, which RomVault's MAME XML
     // still gives a zip. Moving them all out because they happen to be shown
@@ -891,7 +897,7 @@ std::vector<Gtk::TreeModel::Row> RomLibraryTab::fix_candidates() const {
 
 void RomLibraryTab::update_action_buttons() {
     const int checked = (int)checked_rows().size();
-    const int n = checked ? checked : (int)fix_candidates().size();
+    const int n = (int)fix_candidates().size();
     m_btn_fix->set_label(n ? Glib::ustring::compose(checked ? _("Fix selected (%1)") : _("Fix all (%1)"), n)
                            : Glib::ustring(_("Fix")));
     m_btn_fix->set_sensitive(!m_busy && n > 0);
@@ -1078,6 +1084,7 @@ void RomLibraryTab::toggle_ignore(const Gtk::TreeModel::Row& row) {
     row[m_cols.status]  = now_ignored ? Glib::ustring(_("Ignored")) : Glib::ustring(_(status_label_of(status_key_of(g))));
     row[m_cols.include] = false;
     row[m_cols.actionable] = can_quarantine_whole(g) || has_extra_files(g) || can_send_to_import(g);
+    row[m_cols.checkable]  = row[m_cols.actionable] || can_download(g);
     Glib::ustring details = row[m_cols.details];
     const Glib::ustring tag = Glib::ustring(_("ignored")) + ", ";
     if (now_ignored) row[m_cols.details] = tag + details;

@@ -184,11 +184,15 @@ private:
         Gtk::TreeModelColumn<bool>          repairable;
         Gtk::TreeModelColumn<bool>          ignored;
         Gtk::TreeModelColumn<bool>          has_extras;
-        Gtk::TreeModelColumn<bool>          actionable;  // can be checked
+        Gtk::TreeModelColumn<bool>          actionable;  // Fix can act on it
+        // Can be ticked : Fix can act on it, or it can be downloaded. A set
+        // that is only missing has nothing for Fix, and its box refused the
+        // tick that Download from Bootcade reads.
+        Gtk::TreeModelColumn<bool>          checkable;
         Columns() {
             add(include); add(status); add(status_key); add(game); add(system); add(parent);
             add(expected); add(yours); add(details); add(search_blob); add(kind); add(index);
-            add(repairable); add(ignored); add(has_extras); add(actionable);
+            add(repairable); add(ignored); add(has_extras); add(actionable); add(checkable);
         }
     };
     Columns m_cols;
