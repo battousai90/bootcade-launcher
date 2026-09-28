@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="1.5.1" date="2026-09-28">
+      <description>
+        <p>Title: Smarter ROM Manager and streamlined downloads</p>
+      </description>
+    </release>
     <release version="1.5.0" date="2026-09-27">
       <description>
         <p>Bootcade 1.5.0: MAME as a second emulator, and ROM downloads in the ROM Manager</p>
