@@ -100,6 +100,17 @@ struct SubmitResult {
     std::string reason;             // why it was queued, or why it was refused
     std::string error;              // transport-level failure
 
+    /* Le verdict en un mot, que le launcher traduit : `detail` est une phrase
+     * anglaise du serveur, qui ne sert que pour un code inconnu. L'afficher
+     * tel quel donnait des bandeaux a moitie traduits. */
+    std::string code;               // accepted, not_in_table, unreadable...
+    std::string detail;             // phrase anglaise de secours
+    int         rows = 0;           // params.rows : taille de la table du jeu
+    long long   to_beat = 0;        // params.to_beat : le plus bas de la table
+    bool        has_to_beat = false;
+    long long   submission = 0;     // numero de la partie, garde 14 jours
+    bool        report = false;     // proposer « Signaler un probleme »
+
     /* Le service peut-il encore accepter ce score plus tard ?
      *
      * Vrai par defaut, et c'est deliberé : un score legitime ne doit JAMAIS
@@ -126,6 +137,48 @@ SubmitResult submit(const std::string& system,
                     const Playtime&    playtime,
                     const std::string& hi_before,
                     const std::string& hi_after);
+
+// ── Signalements ──────────────────────────────────────────────────────────
+// Le joueur signale une partie qui n'a pas compte comme il l'attendait. Le
+// numero de partie rendu par /api/submit la relie a ce que le serveur a vu ;
+// sans lui, le jeu suffit.
+struct ReportForm {
+    long long   submission = 0;
+    std::string system, game;       // si pas de numero de partie
+    bool        has_score = false;
+    long long   score = 0;          // score vu a l'ecran
+    std::string message;            // 1 000 caracteres au plus
+    std::string screenshot_path;    // PNG, JPEG ou WebP, 3 Mo au plus
+};
+struct ReportReply {
+    bool        answered = false;
+    long        http_status = 0;
+    bool        ok = false;         // 201 : enregistre
+    std::string code;               // empty_report, too_many_reports...
+    std::string detail;
+    std::string error;
+};
+ReportReply send_report(const ReportForm& form);
+
+// Les signalements du joueur, le plus recent d'abord.
+struct PlayerReport {
+    long long   id = 0;
+    std::string system, game;
+    std::string status;             // open, answered, published, closed
+    bool        has_claimed = false;
+    long long   score_claimed = 0;
+    bool        has_published = false;
+    long long   published = 0;
+    std::string reply;
+    std::string replied_at;         // ISO-8601 UTC, vide sans reponse
+    std::string created_at;
+};
+Fetched<std::vector<PlayerReport>> fetch_my_reports();
+
+// La reponse la plus recente deja montree au joueur, pour n'annoncer au
+// demarrage que les nouvelles.
+std::string reports_seen_at();
+void        set_reports_seen_at(const std::string& iso);
 
 // ── Offline store ─────────────────────────────────────────────────────────
 // Kept in the launcher's own config directory rather than in games.db: that
