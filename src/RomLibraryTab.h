@@ -93,8 +93,7 @@ private:
     std::string all_details_of(const Gtk::TreeModel::Row& row) const;
     void search_on_web(const Gtk::TreeModel::Row& row);
     void toggle_ignore(const Gtk::TreeModel::Row& row);
-    // Fix : on the given rows, or when empty on the checked rows, or when
-    // nothing is checked on every actionable row shown.
+    // Fix : on the given rows, or when empty on the ticked rows shown.
     void on_fix_clicked(std::vector<Gtk::TreeModel::Row> rows = {});
     void worker_fix();
     std::vector<Gtk::TreeModel::Row> fix_candidates() const;
@@ -103,13 +102,14 @@ private:
     // per account) : FinalBurn Neo sets that are missing or wrong and cannot
     // be rebuilt from the library. Into the import folder, which verifies
     // and files them as for any other ROM. On the given rows, else the
-    // checked ones, else every row shown.
+    // ticked rows shown.
     bool can_download(const RomAudit::GameEntry& g) const;
     std::vector<Gtk::TreeModel::Row> download_candidates() const;
     void on_download_clicked(std::vector<Gtk::TreeModel::Row> rows = {});
     void worker_download();
     void update_action_buttons();
     std::vector<Gtk::TreeModel::Row> checked_rows() const;
+    bool ticked_by_default(const Gtk::TreeModel::Row& row) const;
 
     // ── Worker plumbing ─────────────────────────────────────────────────────
     enum class Job { None, Audit, Fix, Download };

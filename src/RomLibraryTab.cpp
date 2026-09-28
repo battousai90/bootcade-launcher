@@ -399,12 +399,12 @@ void RomLibraryTab::build_footer() {
     m_btn_fix = ui::button(_("Fix"), "bc-check.svg", ui::Tone::Accent);
     m_btn_fix->set_tooltip_text(_("Deal with every problem the audit found : misnamed and fixable sets are sent to Import "
                                   "to be rebuilt, unrepairable sets, orphans and extra files are moved to quarantine. "
-                                  "Acts on the checked rows, or on every row shown when none is checked."));
+                                  "Acts on the ticked rows shown : everything it can act on is ticked after an audit."));
     m_btn_fix->signal_clicked().connect([this] { on_fix_clicked(); });
     m_btn_download = ui::button(_("Download from Bootcade"), "bc-download.svg");
     m_btn_download->set_tooltip_text(_("Download the missing or wrong FinalBurn Neo sets from the Bootcade server, with "
                                        "your account and its daily quota. They go to Import, which checks and files them. "
-                                       "Acts on the checked rows, or on every row shown when none is checked."));
+                                       "Acts on the ticked rows shown : everything it can act on is ticked after an audit."));
     m_btn_download->set_no_show_all(true);
     m_btn_download->signal_clicked().connect([this] { on_download_clicked(); });
     m_footer.pack_end(*m_btn_download, Gtk::PACK_SHRINK);
@@ -572,7 +572,6 @@ void RomLibraryTab::populate() {
         if (g.is_bios) bits.insert(bits.begin(), _("BIOS"));
 
         const std::string key = status_key_of(g);
-        row[m_cols.include]    = false;
         row[m_cols.status]     = g.ignored ? Glib::ustring(_("Ignored")) : Glib::ustring(_(status_label_of(key)));
         row[m_cols.status_key] = key;
         row[m_cols.game]       = g.description.empty() ? g.name : g.name + "  (" + g.description + ")";
@@ -588,6 +587,7 @@ void RomLibraryTab::populate() {
         row[m_cols.has_extras] = has_extras;
         row[m_cols.actionable] = can_quarantine || has_extras || can_send_to_import(g);
         row[m_cols.checkable]  = row[m_cols.actionable] || can_download(g);
+        row[m_cols.include]    = ticked_by_default(row);
 
         std::string blob = lower(g.name + ' ' + g.description + ' ' + expected + ' ' + yours + ' ' + g.cloneof + ' ' + g.system);
         for (const auto& r : g.roms) {
@@ -604,7 +604,6 @@ void RomLibraryTab::populate() {
         int elsewhere = 0;
         for (const auto& e : o.entries) if (e.copy_elsewhere) ++elsewhere;
         auto row = *(m_store->append());
-        row[m_cols.include]    = false;
         row[m_cols.status]     = _("Orphan");
         row[m_cols.status_key] = "orphan";
         row[m_cols.game]       = base;
@@ -614,7 +613,7 @@ void RomLibraryTab::populate() {
         row[m_cols.yours]      = base;
         Glib::ustring details = Glib::ustring::compose(
             _("Not in DAT : %1 file(s), %2 with a copy elsewhere in the library"), (int)o.entries.size(), elsewhere);
-        if (m_audit.emulator != "fbneo") details += Glib::ustring(" · ") + _("Fix all leaves it alone : tick it to quarantine it");
+        if (m_audit.emulator != "fbneo") details += Glib::ustring(" · ") + _("Left unticked : tick it to quarantine it");
         row[m_cols.details]    = details;
         row[m_cols.kind]       = KIND_ORPHAN;
         row[m_cols.index]      = (unsigned int)i;
@@ -623,6 +622,7 @@ void RomLibraryTab::populate() {
         row[m_cols.has_extras] = false;
         row[m_cols.actionable] = true;
         row[m_cols.checkable]  = true;
+        row[m_cols.include]    = ticked_by_default(row);
         std::string blob = lower(base + ' ' + folder);
         for (const auto& e : o.entries) blob += ' ' + lower(e.name) + ' ' + crc_hex(e.crc);
         row[m_cols.search_blob] = blob;
@@ -868,40 +868,38 @@ void RomLibraryTab::set_all_checked(bool on) {
     update_action_buttons();
 }
 
+// The ticked rows the table shows : what one sees ticked is what gets acted on.
 std::vector<Gtk::TreeModel::Row> RomLibraryTab::checked_rows() const {
     std::vector<Gtk::TreeModel::Row> out;
-    for (const auto& row : m_store->children())
+    if (!m_models.filter) return out;
+    for (const auto& frow : m_models.filter->children()) {
+        Gtk::TreeModel::Row row = *m_models.filter->convert_iter_to_child_iter(frow);
         if (row[m_cols.include]) out.push_back(row);
+    }
     return out;
 }
 
-// The rows Fix acts on : the checked ones, or when none is checked every
-// actionable row the table currently shows. What one sees is what gets fixed.
-std::vector<Gtk::TreeModel::Row> RomLibraryTab::fix_candidates() const {
-    // Ticked rows, those Fix can act on : a ticked set that can only be
-    // downloaded is Download's, not Fix's.
-    const std::vector<Gtk::TreeModel::Row> checked = checked_rows();
-    std::vector<Gtk::TreeModel::Row> rows;
-    for (const auto& row : checked) if (row[m_cols.actionable]) rows.push_back(row);
-    if (!checked.empty() || !m_models.filter) return rows;
+// Ticked once the audit is in : everything a button can act on, so the
+// counts on the buttons are rows one can see and untick.
+bool RomLibraryTab::ticked_by_default(const Gtk::TreeModel::Row& row) const {
+    if (!row[m_cols.checkable] || row[m_cols.ignored]) return false;
     // A MAME library keeps zips no set of the DAT claims on purpose : the
     // ~350 devices that have no ROM of their own, which RomVault's MAME XML
-    // still gives a zip. Moving them all out because they happen to be shown
-    // would be a surprise : for MAME an orphan is fixed only when ticked (or
-    // through its own menu). FinalBurn Neo keeps the rule it always had.
-    const bool orphans_on_request = m_audit.emulator != "fbneo";
-    for (const auto& frow : m_models.filter->children()) {
-        Gtk::TreeModel::Row row = *m_models.filter->convert_iter_to_child_iter(frow);
-        if (orphans_on_request && (int)row[m_cols.kind] == KIND_ORPHAN) continue;
-        if (row[m_cols.actionable] && !row[m_cols.ignored]) rows.push_back(row);
-    }
+    // still gives a zip. For MAME an orphan is fixed only when ticked by hand.
+    return !((int)row[m_cols.kind] == KIND_ORPHAN && m_audit.emulator != "fbneo");
+}
+
+// The rows Fix acts on : a ticked set that can only be downloaded is
+// Download's, not Fix's.
+std::vector<Gtk::TreeModel::Row> RomLibraryTab::fix_candidates() const {
+    std::vector<Gtk::TreeModel::Row> rows;
+    for (const auto& row : checked_rows()) if (row[m_cols.actionable]) rows.push_back(row);
     return rows;
 }
 
 void RomLibraryTab::update_action_buttons() {
-    const int checked = (int)checked_rows().size();
     const int n = (int)fix_candidates().size();
-    m_btn_fix->set_label(n ? Glib::ustring::compose(checked ? _("Fix selected (%1)") : _("Fix all (%1)"), n)
+    m_btn_fix->set_label(n ? Glib::ustring::compose(_("Fix selected (%1)"), n)
                            : Glib::ustring(_("Fix")));
     m_btn_fix->set_sensitive(!m_busy && n > 0);
 
@@ -924,11 +922,7 @@ std::vector<Gtk::TreeModel::Row> RomLibraryTab::download_candidates() const {
         if ((int)row[m_cols.kind] == KIND_SET && can_download(m_audit.games[(unsigned int)row[m_cols.index]]))
             out.push_back(row);
     };
-    const auto checked = checked_rows();
-    if (!checked.empty()) { for (const auto& row : checked) keep(row); return out; }
-    if (!m_models.filter) return out;
-    for (const auto& frow : m_models.filter->children())
-        keep(*m_models.filter->convert_iter_to_child_iter(frow));
+    for (const auto& row : checked_rows()) keep(row);
     return out;
 }
 
@@ -1096,9 +1090,9 @@ void RomLibraryTab::toggle_ignore(const Gtk::TreeModel::Row& row) {
 
     row[m_cols.ignored] = now_ignored;
     row[m_cols.status]  = now_ignored ? Glib::ustring(_("Ignored")) : Glib::ustring(_(status_label_of(status_key_of(g))));
-    row[m_cols.include] = false;
     row[m_cols.actionable] = can_quarantine_whole(g) || has_extra_files(g) || can_send_to_import(g);
     row[m_cols.checkable]  = row[m_cols.actionable] || can_download(g);
+    row[m_cols.include]    = ticked_by_default(row);
     Glib::ustring details = row[m_cols.details];
     const Glib::ustring tag = Glib::ustring(_("ignored")) + ", ";
     if (now_ignored) row[m_cols.details] = tag + details;
