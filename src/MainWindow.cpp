@@ -15,6 +15,7 @@
 #include "GenerateDAT.h"
 #include "FbneoUpdateCheck.h"
 #include "ScreenshotAssignDialog.h"
+#include "HiscoreReportDialog.h"
 #include "SystemPrefix.h"
 #include "Game.h"
 #include "ModelColumns.h"
@@ -931,7 +932,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_scrolled_games.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
 
     // === Details ===
-    m_label_title.set_markup("<b>Select a game to play</b>");  // This is safe static text
+    m_label_title.set_markup("<b>" + Glib::Markup::escape_text(_("Select a game to play")) + "</b>");
     m_button_play.set_sensitive(false);
     m_button_play.set_size_request(120, 32); // Force minimum size
     m_button_download_art.set_sensitive(false);
@@ -1834,7 +1835,29 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // ferait reapparaitre le bouton que le message precedent avait cache.
     m_hiscore_signin_button->set_no_show_all(true);
     m_hiscore_signin_button->hide();
+    // Signaler : la partie n'a pas compte comme le joueur l'attendait, et
+    // seul lui a vu l'ecran. Propose quand le serveur le dit, pas autrement.
+    m_hiscore_report_button = m_hiscore_infobar.add_button(_("Report a problem"), kHiscoreReport);
+    m_hiscore_report_button->set_no_show_all(true);
+    m_hiscore_report_button->hide();
+    m_hiscore_replies_button = m_hiscore_infobar.add_button(_("See the answer"), kHiscoreReplies);
+    m_hiscore_replies_button->get_style_context()->add_class("suggested-action");
+    m_hiscore_replies_button->set_no_show_all(true);
+    m_hiscore_replies_button->hide();
     m_hiscore_infobar.signal_response().connect([this](int id) {
+        if (id == kHiscoreReport) {
+            // Copie : la fenetre est modale, et un autre message peut arriver
+            // dans le bandeau pendant qu'elle est ouverte.
+            const HiscoreNotice notice = m_hiscore_shown;
+            m_hiscore_infobar.hide();
+            open_report_dialog(notice);
+            return;
+        }
+        if (id == kHiscoreReplies) {
+            m_hiscore_infobar.hide();
+            open_my_reports();
+            return;
+        }
         if (id == kHiscoreSignIn) {
             LoginDialog dlg(*this);
             dlg.run();
@@ -2951,7 +2974,7 @@ void MainWindow::on_play_clicked() {
             std::lock_guard<std::mutex> live(alive->mutex);
             if (!alive->alive) return;
             // FBNeo writes the .hi on exit, so this must come after the wait.
-            submit_session_score(game_system, rom_name, fbneo_rom_name, score_path, hi_before, hiscore_player, hiscore_country, hiscore_enabled, share_playtime);
+            submit_session_score(game_system, rom_name, fbneo_rom_name, score_path, hi_before, hiscore_player, hiscore_country, hiscore_enabled, share_playtime, launch_time);
             // FBNeo has just written config/games/<rom>.ini on exit : this is
             // the only moment a complete file exists to repair.
             ControllerManager::fix_player2_input_conflicts(fbneo_rom_name);
@@ -5065,6 +5088,8 @@ void MainWindow::refresh_hiscore_nudge() {
     style->remove_class("bc-info");
     style->add_class("bc-warn");
     m_hiscore_signin_button->show();
+    m_hiscore_report_button->hide();
+    m_hiscore_replies_button->hide();
     m_hiscore_infobar.show();
     m_hiscore_nudge_shown = true;
 }
@@ -5259,6 +5284,37 @@ void MainWindow::refresh_hiscore_data_async(bool announce) {
                     flushed.reason.empty() ? Glib::ustring(_("no reason given"))
                                            : Glib::ustring(flushed.reason)).raw());
             m_hiscore_result_dispatcher.emit();
+        }
+
+        /* Nos reponses a ses signalements.
+         *
+         * C'est ce qui montre au joueur qu'on l'a lu. Seules les reponses
+         * arrivees depuis la derniere fois qu'il les a vues sont annoncees ;
+         * la fenetre « Mes signalements » les marque lues. */
+        if (!BootcadeAuth::access_token().empty()) {
+            const auto reports = HiscoreClient::fetch_my_reports();
+            if (reports.ok) {
+                const std::string seen = HiscoreClient::reports_seen_at();
+                std::vector<const HiscoreClient::PlayerReport*> fresh;
+                for (const auto& rp : reports.value)
+                    if (!rp.replied_at.empty() && rp.replied_at > seen) fresh.push_back(&rp);
+                if (!fresh.empty()) {
+                    std::string title = fresh.front()->game;
+                    if (fresh.size() == 1) {
+                        const Game g = m_database->getGame(fresh.front()->game, fresh.front()->system);
+                        if (!g.description.empty()) title = g.description;
+                    }
+                    std::lock_guard<std::mutex> live(alive->mutex);
+                    if (!alive->alive) return;
+                    HiscoreNotice notice{fresh.size() == 1
+                        ? Glib::ustring::compose(_("We answered your report on %1."), title).raw()
+                        : Glib::ustring::compose(_("We answered %1 of your reports."), (int)fresh.size()).raw()};
+                    notice.offer_replies = true;
+                    std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
+                    m_hiscore_results.push_back(std::move(notice));
+                    m_hiscore_result_dispatcher.emit();
+                }
+            }
         }
 
         auto supported = HiscoreClient::fetch_supported();
@@ -5646,7 +5702,8 @@ void MainWindow::submit_session_score(const std::string& system,
                                       const std::string& player,
                                       const std::string& country,
                                       bool hiscore_enabled,
-                                      bool share_playtime) {
+                                      bool share_playtime,
+                                      std::time_t launch_time) {
     // Each condition is one the player controls. None is an error worth
     // reporting: a game with no leaderboard, an unconfigured service or an
     // unticked box are all perfectly ordinary states.
@@ -5792,7 +5849,9 @@ void MainWindow::submit_session_score(const std::string& system,
             // encore oui : c'est ce message, et lui seul, qui sait que la
             // session est a refaire.
             offer_signin = true;
-        } else
+        } else if (r.code == "auth_unavailable")
+            why = _("The account service is unavailable : your score will be sent later.");
+        else
             why = _("The server could not record your score : it is saved and "
                     "will be sent later.");
 
@@ -5800,6 +5859,67 @@ void MainWindow::submit_session_score(const std::string& system,
         m_hiscore_results.push_back({why.raw(), offer_signin});
         m_hiscore_result_dispatcher.emit();
         return;
+    }
+
+    /* Le verdict du serveur, en un mot : c'est LUI qu'on traduit.
+     *
+     * Le serveur ecrit aussi une phrase, `detail`, dans sa langue a lui.
+     * L'afficher donnait « Score not recorded : la table des scores n'a pas
+     * bouge » a un joueur chinois : moitie traduit, et sans dire l'essentiel,
+     * a savoir quel score il fallait battre. La phrase ne sert plus que pour
+     * un code que ce launcher ne connait pas encore. Un serveur plus ancien,
+     * sans code, garde le chemin d'avant, plus bas.
+     */
+    if (!r.code.empty()) {
+        std::cerr << "[HISCORE] verdict " << r.code << " pour " << system << "/" << game
+                  << (r.detail.empty() ? std::string() : " : " + r.detail) << std::endl;
+        const std::string& c = r.code;
+        if (c == "not_ranked" || c == "not_ranked_yet" || c == "playtime_only") return;
+
+        const std::string metric = HiscoreClient::metric_of(system, game);
+        HiscoreNotice notice{std::string()};
+        if (c == "accepted")
+            notice.message = r.has_score
+                ? Glib::ustring::compose(_("Score %1 published on the leaderboard."),
+                                         format_by_metric(r.score, metric)).raw()
+                : std::string(_("Score published on the leaderboard."));
+        else if (c == "not_in_table")
+            notice.message = r.rows > 0 && r.has_to_beat
+                ? Glib::ustring::compose(_("Your score did not make this game's top %1. "
+                                           "Beat %2 to appear on the leaderboard."),
+                                         r.rows, format_by_metric(r.to_beat, metric)).raw()
+                : r.rows > 0
+                ? Glib::ustring::compose(_("Your score did not make this game's top %1."), r.rows).raw()
+                : std::string(_("Your score did not make it into this game's own table."));
+        else if (c == "first_run_waiting")
+            notice.message = _("First game on this title : your score is kept and will count very soon.");
+        else if (c == "unreadable")
+            notice.message = _("We could not read your score. This is on our side : "
+                               "report it so we can check.");
+        else if (c == "not_original")
+            notice.message = _("No leaderboard for this version : only original versions are ranked.");
+        else if (c == "missing_game" || c == "missing_file")
+            notice.message = _("Incomplete submission : update the launcher.");
+        else
+            notice.message = r.detail;   // code inconnu : la phrase de secours
+
+        if (!notice.message.empty()) {
+            if (r.report) {
+                notice.offer_report         = true;
+                notice.report.submission    = r.submission;
+                notice.report.system        = system;
+                notice.report.game          = game;
+                const Game g = m_database->getGame(game, system);
+                notice.report_title         = g.description.empty() ? game : g.description;
+                notice.report_rom           = fbneo_rom_name;
+                notice.report_launch        = launch_time;
+            }
+            std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
+            m_hiscore_results.push_back(std::move(notice));
+            if (r.accepted) m_hiscore_refresh_target = {system, game};
+            m_hiscore_result_dispatcher.emit();
+            return;
+        }
     }
 
     /* Sans objet : le service a regarde et n'a rien trouve a enregistrer.
@@ -5897,6 +6017,11 @@ void MainWindow::on_hiscore_result_ready() {
     // au joueur deja connecte que son compte avait lache.
     if (notice.offer_signin) m_hiscore_signin_button->show();
     else                     m_hiscore_signin_button->hide();
+    if (notice.offer_report) m_hiscore_report_button->show();
+    else                     m_hiscore_report_button->hide();
+    if (notice.offer_replies) m_hiscore_replies_button->show();
+    else                      m_hiscore_replies_button->hide();
+    m_hiscore_shown = notice;
     m_hiscore_nudge_shown = false;
     m_hiscore_infobar.show();
 
@@ -5919,6 +6044,34 @@ void MainWindow::on_hiscore_result_ready() {
 
     auto sel = m_treeview_games.get_selection();
     if (sel) { if (auto it = sel->get_selected()) show_game_details(*it); }
+}
+
+void MainWindow::open_report_dialog(const HiscoreNotice& notice) {
+    // Les captures de la partie, prises avec F6 : la derniere est proposee
+    // jointe, c'est souvent la preuve du score.
+    std::vector<std::string> shots;
+    if (!notice.report_rom.empty() && notice.report_launch > 0)
+        shots = find_session_screenshots(notice.report_rom, notice.report_launch);
+    ReportDialog dlg(*this, notice.report, notice.report_title, shots);
+    dlg.run();
+}
+
+void MainWindow::open_my_reports() {
+    if (!BootcadeAuth::signed_in()) {
+        LoginDialog login(*this);
+        login.run();
+        refresh_account_button();
+        if (!BootcadeAuth::signed_in()) return;
+    }
+    MyReportsDialog dlg(*this,
+        [this](const std::string& system, const std::string& game) {
+            const Game g = m_database->getGame(game, system);
+            return g.description.empty() ? game : g.description;
+        },
+        [](const std::string& system, const std::string& game, long long value) {
+            return format_by_metric(value, HiscoreClient::metric_of(system, game));
+        });
+    dlg.run();
 }
 
 // "1.0.9" contre "1.0.12" : une comparaison de chaines dirait que 9 est plus
@@ -7707,11 +7860,13 @@ void MainWindow::build_account_button() {
     m_btn_account.add(m_account_face);
 
     m_mi_profile.set_label(_("My profile"));
+    m_mi_reports.set_label(_("My reports"));
     m_mi_leaderboard.set_label(_("Leaderboard"));
     m_mi_settings.set_label(_("Settings"));
     m_mi_signout.set_label(_("Sign out"));
 
     m_mi_profile.signal_activate().connect([this] { open_web("/profile/"); });
+    m_mi_reports.signal_activate().connect([this] { open_my_reports(); });
     m_mi_leaderboard.signal_activate().connect([this] { open_web("/leaderboard/"); });
     m_mi_settings.signal_activate().connect(
         sigc::mem_fun(*this, &MainWindow::on_settings_clicked));
@@ -7721,7 +7876,7 @@ void MainWindow::build_account_button() {
         refresh_hiscore_data_async(false);
     });
 
-    for (Gtk::MenuItem* mi : {&m_mi_profile, &m_mi_leaderboard, &m_mi_settings})
+    for (Gtk::MenuItem* mi : {&m_mi_profile, &m_mi_reports, &m_mi_leaderboard, &m_mi_settings})
         m_account_menu.append(*mi);
     m_account_menu.append(*Gtk::make_managed<Gtk::SeparatorMenuItem>());
     m_account_menu.append(m_mi_signout);

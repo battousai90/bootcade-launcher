@@ -73,7 +73,7 @@ struct JsonReply {
     nlohmann::json body = nullptr;
 };
 
-JsonReply get_json(const std::string& path, long timeout_secs) {
+JsonReply get_json(const std::string& path, long timeout_secs, bool with_account = false) {
     JsonReply r;
     std::string base;
     { std::lock_guard<std::mutex> lock(g_mutex); base = g_base_url; }
@@ -94,11 +94,19 @@ JsonReply get_json(const std::string& path, long timeout_secs) {
     // transfer timeout on every game the player clicks.
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
+    struct curl_slist* headers = nullptr;
+    if (with_account) {
+        const std::string token = BootcadeAuth::access_token();
+        if (!token.empty())
+            headers = curl_slist_append(headers, ("Authorization: Bearer " + token).c_str());
+        if (headers) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    }
 
     CURLcode res = curl_easy_perform(curl);
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     curl_easy_cleanup(curl);
+    if (headers) curl_slist_free_all(headers);
 
     // Seul un echec de transport signifie que rien n'a repondu.
     if (res != CURLE_OK) { r.error = curl_easy_strerror(res); return r; }
@@ -475,6 +483,20 @@ SubmitResult submit(const std::string& system,
                 || code == "rejected_score" || code == "forbidden_account")
                 r.retryable = false;
         }
+        r.code   = j.value("code", std::string());
+        r.detail = j.value("detail", std::string());
+        if (j.contains("params") && j["params"].is_object()) {
+            const auto& p = j["params"];
+            if (p.contains("rows") && p["rows"].is_number()) r.rows = p["rows"].get<int>();
+            if (p.contains("to_beat") && p["to_beat"].is_number()) {
+                r.to_beat = p["to_beat"].get<long long>();
+                r.has_to_beat = true;
+            }
+        }
+        if (j.contains("submission") && j["submission"].is_number())
+            r.submission = j["submission"].get<long long>();
+        if (j.contains("report") && j["report"].is_boolean())
+            r.report = j["report"].get<bool>();
         std::string st = j.value("status", "");
         r.accepted = (st == "accepted");
         r.pending  = (st == "pending");
@@ -489,6 +511,108 @@ SubmitResult submit(const std::string& system,
     }
     if (status >= 500) { r.reached = false; r.error = "HTTP " + std::to_string(status); }
     return r;
+}
+
+// ── Signalements ──────────────────────────────────────────────────────────
+ReportReply send_report(const ReportForm& form) {
+    ReportReply r;
+    std::string base;
+    { std::lock_guard<std::mutex> lock(g_mutex); base = g_base_url; }
+    if (base.empty()) { r.error = "adresse du service non configuree"; return r; }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) { r.error = "curl indisponible"; return r; }
+
+    curl_mime* mime = curl_mime_init(curl);
+    auto add_field = [&](const char* name, const std::string& value) {
+        curl_mimepart* part = curl_mime_addpart(mime);
+        curl_mime_name(part, name);
+        curl_mime_data(part, value.c_str(), value.size());
+    };
+    if (form.submission > 0) add_field("submission", std::to_string(form.submission));
+    else {
+        add_field("system", form.system);
+        add_field("game",   form.game);
+    }
+    if (form.has_score) add_field("score", std::to_string(form.score));
+    if (!form.message.empty()) add_field("message", form.message);
+    if (!form.screenshot_path.empty()) {
+        std::string ext = std::filesystem::path(form.screenshot_path).extension().string();
+        for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+        const char* type = ext == ".png" ? "image/png" : ext == ".webp" ? "image/webp" : "image/jpeg";
+        curl_mimepart* part = curl_mime_addpart(mime);
+        curl_mime_name(part, "screenshot");
+        curl_mime_filedata(part, form.screenshot_path.c_str());
+        curl_mime_type(part, type);
+    }
+
+    struct curl_slist* headers = nullptr;
+    const std::string token = BootcadeAuth::access_token();
+    if (!token.empty())
+        headers = curl_slist_append(headers, ("Authorization: Bearer " + token).c_str());
+
+    std::string body;
+    curl_easy_setopt(curl, CURLOPT_URL, (base + "/api/reports").c_str());
+    if (headers) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_string);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
+
+    CURLcode res = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_mime_free(mime);
+    if (headers) curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) { r.error = curl_easy_strerror(res); return r; }
+    r.answered    = true;
+    r.http_status = status;
+    r.ok          = status == 201 || status == 200;
+    try {
+        auto j = nlohmann::json::parse(body);
+        r.code   = j.value("code", std::string());
+        r.detail = j.value("detail", std::string());
+    } catch (const std::exception&) {}
+    if (!r.ok && r.error.empty()) r.error = "HTTP " + std::to_string(status);
+    return r;
+}
+
+Fetched<std::vector<PlayerReport>> fetch_my_reports() {
+    Fetched<std::vector<PlayerReport>> res;
+    if (BootcadeAuth::access_token().empty()) { res.error = "pas de compte"; return res; }
+    auto rep = get_json("/api/me/reports", 10L, true);
+    carry(res, rep);
+    if (!rep.ok) return res;
+    if (!rep.body.is_array()) { res.error = "reponse inattendue"; return res; }
+    res.ok = true;
+    auto text = [](const nlohmann::json& o, const char* k) {
+        return o.contains(k) && o[k].is_string() ? o[k].get<std::string>() : std::string();
+    };
+    for (const auto& o : rep.body) {
+        if (!o.is_object()) continue;
+        PlayerReport p;
+        if (o.contains("id") && o["id"].is_number()) p.id = o["id"].get<long long>();
+        p.system     = text(o, "system");
+        p.game       = text(o, "game");
+        p.status     = text(o, "status");
+        p.reply      = text(o, "reply");
+        p.replied_at = text(o, "replied_at");
+        p.created_at = text(o, "created_at");
+        if (o.contains("score_claimed") && o["score_claimed"].is_number()) {
+            p.score_claimed = o["score_claimed"].get<long long>();
+            p.has_claimed = true;
+        }
+        if (o.contains("published") && o["published"].is_number()) {
+            p.published = o["published"].get<long long>();
+            p.has_published = true;
+        }
+        res.value.push_back(std::move(p));
+    }
+    return res;
 }
 
 // ── Offline store ─────────────────────────────────────────────────────────
@@ -680,6 +804,18 @@ FlushReport flush_outbox() {
         else if (!r.error.empty()) rep.reason = r.error;
     }
     return rep;
+}
+
+std::string reports_seen_at() {
+    if (cache_file().empty()) return {};
+    return read_json_file(cache_file()).value("reports_seen_at", std::string());
+}
+
+void set_reports_seen_at(const std::string& iso) {
+    if (cache_file().empty() || iso.empty()) return;
+    auto j = read_json_file(cache_file());
+    j["reports_seen_at"] = iso;
+    write_json_file(cache_file(), j);
 }
 
 void cache_supported(const std::set<std::string>& supported) {

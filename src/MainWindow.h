@@ -214,7 +214,7 @@ private:
     Gtk::Menu       m_account_menu;      // connecte
     Gtk::Menu       m_account_menu_out;  // deconnecte : une seule entree
     Gtk::MenuItem   m_mi_signin;
-    Gtk::MenuItem   m_mi_profile, m_mi_leaderboard, m_mi_settings, m_mi_signout;
+    Gtk::MenuItem   m_mi_profile, m_mi_reports, m_mi_leaderboard, m_mi_settings, m_mi_signout;
     // Emis depuis le fil de restauration : une interface ne se touche que
     // depuis le fil principal, et un Dispatcher est fait pour ce passage.
     Glib::Dispatcher m_account_restored;
@@ -555,10 +555,16 @@ private:
     // Reponse du bouton « Sign in » du bandeau. Distincte de GTK_RESPONSE_*
     // pour ne pas se confondre avec la croix de fermeture.
     static constexpr int kHiscoreSignIn = 1;
+    static constexpr int kHiscoreReport  = 2;   // « Signaler un probleme »
+    static constexpr int kHiscoreReplies = 3;   // « Voir la reponse »
     // Le bouton lui-meme, garde pour pouvoir le cacher : un bandeau qui
     // annonce une publication reussie tout en proposant de se connecter fait
     // douter le joueur de son propre compte.
     Gtk::Button*     m_hiscore_signin_button{nullptr};
+    // Proposes seulement quand le serveur le dit (`report`), ou quand une
+    // reponse a un signalement attend le joueur.
+    Gtk::Button*     m_hiscore_report_button{nullptr};
+    Gtk::Button*     m_hiscore_replies_button{nullptr};
     // Le bandeau sert a deux choses : le resultat d'une partie, qui se ferme
     // et ne revient pas, et l'etat « pas de compte », qui doit revenir tant
     // qu'il est vrai. Ce drapeau dit lequel des deux est affiche.
@@ -576,7 +582,19 @@ private:
             : message(std::move(m)), offer_signin(offer) {}
         std::string message;
         bool        offer_signin;
+        // La partie a signaler, quand le serveur propose de le faire : le
+        // numero de partie, le nom du jeu et de quoi retrouver ses captures.
+        bool        offer_report = false;
+        HiscoreClient::ReportForm report;
+        std::string report_title;
+        std::string report_rom;
+        std::time_t report_launch = 0;
+        bool        offer_replies = false;
     };
+    // Le message affiche : les boutons du bandeau agissent sur lui.
+    HiscoreNotice    m_hiscore_shown{std::string()};
+    void open_report_dialog(const HiscoreNotice& notice);
+    void open_my_reports();
     std::deque<HiscoreNotice> m_hiscore_results;
     // Le jeu dont le classement vient de changer, à recharger sur le fil
     // graphique. La publication a lieu sur un fil de travail, qui n'a pas le
@@ -601,7 +619,8 @@ private:
                               const std::string& player,
                               const std::string& country,
                               bool hiscore_enabled,
-                              bool share_playtime);
+                              bool share_playtime,
+                              std::time_t launch_time);
     void on_hiscore_result_ready();
 
     // Mise a jour du lanceur lui-meme. Aucun de nos formats ne sait se mettre
