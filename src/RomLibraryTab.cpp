@@ -79,12 +79,17 @@ std::string format_time(int64_t t) {
 //   fixable   : absent or wrong pieces, every one of which exists elsewhere
 //               in the library
 //   incorrect : wrong data (bad CRC) with no good copy anywhere : unrepairable
+//   extra     : an archive of its own carrying files the DAT does not need,
+//               and nothing else Fix can do : once Fix has taken them out,
+//               the set is Correct, or Missing when a piece is still absent
 //   missing   : pieces absent and nowhere to be found
+bool has_extra_files(const RomAudit::GameEntry& g);
 const char* status_key_of(const RomAudit::GameEntry& g) {
-    if (g.status == "available") return "available";
     if (g.status == "incorrect" && g.corrupt == 0) return "misnamed";
     if (g.repairable) return "fixable";
-    return g.status == "incorrect" ? "incorrect" : "missing";
+    if (g.status == "incorrect") return "incorrect";
+    if (has_extra_files(g)) return "extra";
+    return g.status == "available" ? "available" : "missing";
 }
 
 const char* status_label_of(const std::string& key) {
@@ -92,6 +97,7 @@ const char* status_label_of(const std::string& key) {
     if (key == "misnamed")  return N_("Misnamed");
     if (key == "fixable")   return N_("Fixable");
     if (key == "incorrect") return N_("Incorrect");
+    if (key == "extra")     return N_("Extra");
     return N_("Missing");
 }
 
@@ -257,20 +263,22 @@ void RomLibraryTab::build_summary() {
     m_pill_incorrect = Gtk::make_managed<ui::Pill>(_("Incorrect"), ui::PillTone::Warn,    true);
     m_pill_misnamed  = Gtk::make_managed<ui::Pill>(_("Misnamed"),  ui::PillTone::Info,    true);
     m_pill_fixable   = Gtk::make_managed<ui::Pill>(_("Fixable"),   ui::PillTone::Accent,  true);
+    m_pill_extra     = Gtk::make_managed<ui::Pill>(_("Extra"),     ui::PillTone::Neutral, true);
     m_pill_orphan    = Gtk::make_managed<ui::Pill>(_("Orphan"),    ui::PillTone::Neutral, true);
     m_pill_ignored   = Gtk::make_managed<ui::Pill>(_("Ignored"),   ui::PillTone::Neutral, true);
     m_pill_incorrect->set_tooltip_text(_("Wrong data (bad CRC) and no good copy anywhere in the library : cannot be repaired, Fix moves them to quarantine."));
     m_pill_misnamed->set_tooltip_text(_("Right data under the wrong entry names : Fix sends them to Import, which rebuilds them."));
     m_pill_fixable->set_tooltip_text(_("Absent or wrong pieces that exist elsewhere in the library : Fix sends them to Import, which rebuilds them."));
+    m_pill_extra->set_tooltip_text(_("Files in the archive the DAT does not need : Fix moves them to quarantine. A set still lacking a ROM is Missing afterwards."));
     m_pill_orphan->set_tooltip_text(_("Archives no set of the DAT group claims : Fix moves them to quarantine."));
     for (auto* p : {m_pill_total, m_pill_correct, m_pill_missing, m_pill_incorrect, m_pill_misnamed,
-                    m_pill_fixable, m_pill_orphan, m_pill_ignored}) {
+                    m_pill_fixable, m_pill_extra, m_pill_orphan, m_pill_ignored}) {
         p->set_count(0);
         m_pills.pack_start(*p, Gtk::PACK_SHRINK);
     }
     // Problems first : what the tab is for.
-    for (auto* p : {m_pill_missing, m_pill_incorrect, m_pill_misnamed, m_pill_fixable, m_pill_orphan}) p->set_active(true);
-    for (auto* p : {m_pill_correct, m_pill_missing, m_pill_incorrect, m_pill_misnamed, m_pill_fixable, m_pill_orphan, m_pill_ignored})
+    for (auto* p : {m_pill_missing, m_pill_incorrect, m_pill_misnamed, m_pill_fixable, m_pill_extra, m_pill_orphan}) p->set_active(true);
+    for (auto* p : {m_pill_correct, m_pill_missing, m_pill_incorrect, m_pill_misnamed, m_pill_fixable, m_pill_extra, m_pill_orphan, m_pill_ignored})
         p->signal_toggled().connect([this](bool) { refilter(); });
     body->pack_start(m_pills, Gtk::PACK_SHRINK);
 
@@ -344,6 +352,7 @@ void RomLibraryTab::build_table() {
             else if (key == "incorrect")      c = m_colours.warn;
             else if (key == "misnamed")       c = m_colours.info;
             else if (key == "fixable")        c = m_colours.accent;
+            else if (key == "extra")          c = m_colours.muted;
             else if (key == "orphan")         c = m_colours.muted;
             renderer->property_foreground_rgba() = c;
             renderer->property_weight() = ignored ? Pango::WEIGHT_NORMAL : Pango::WEIGHT_BOLD;
@@ -645,7 +654,7 @@ void RomLibraryTab::populate() {
 void RomLibraryTab::update_summary() {
     // Counted by the table's own vocabulary (see status_key_of) : the
     // report's incorrect/missing/repairable overlap, these pills do not.
-    int correct = 0, missing = 0, incorrect = 0, misnamed = 0, fixable = 0;
+    int correct = 0, missing = 0, incorrect = 0, misnamed = 0, fixable = 0, extra = 0;
     for (const auto& g : m_audit.games) {
         if (g.ignored) continue;
         const std::string key = status_key_of(g);
@@ -653,6 +662,7 @@ void RomLibraryTab::update_summary() {
         else if (key == "missing")   ++missing;
         else if (key == "incorrect") ++incorrect;
         else if (key == "misnamed")  ++misnamed;
+        else if (key == "extra")     ++extra;
         else                         ++fixable;
     }
     m_pill_total->set_count(m_audit.total);
@@ -661,6 +671,7 @@ void RomLibraryTab::update_summary() {
     m_pill_incorrect->set_count(incorrect);
     m_pill_misnamed->set_count(misnamed);
     m_pill_fixable->set_count(fixable);
+    m_pill_extra->set_count(extra);
     m_pill_orphan->set_count((long)m_audit.orphans.size());
     m_pill_ignored->set_count(m_audit.ignored);
 
@@ -712,6 +723,7 @@ bool RomLibraryTab::row_visible(const Gtk::TreeModel::const_iterator& it) const 
     else if (key == "incorrect") wanted = m_pill_incorrect->active();
     else if (key == "misnamed")  wanted = m_pill_misnamed->active();
     else if (key == "fixable")   wanted = m_pill_fixable->active();
+    else if (key == "extra")     wanted = m_pill_extra->active();
     if (!wanted) return false;
 
     if (!m_vis_system.empty() && row[m_cols.system] != m_vis_system) return false;

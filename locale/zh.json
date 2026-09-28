@@ -1670,5 +1670,6 @@
   "right content under another file name": "内容正确，但文件名不同",
   "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 个游戏包使用了其他文件名 → 移至导入，由其以正确的名称归档\n",
   "Asking the Bootcade server…": "正在询问 Bootcade 服务器…",
-  "outdated on the Bootcade server": "Bootcade 服务器上的版本已过时"
+  "outdated on the Bootcade server": "Bootcade 服务器上的版本已过时",
+  "Files in the archive the DAT does not need : Fix moves them to quarantine. A set still lacking a ROM is Missing afterwards.": "归档中 DAT 不需要的文件：修复会将其移入隔离区。仍缺少 ROM 的集随后会变为“缺失”。"
 }

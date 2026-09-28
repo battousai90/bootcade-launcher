@@ -1670,5 +1670,6 @@
   "right content under another file name": "内容は正しいがファイル名が異なる",
   "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 件のセットが別のファイル名 → インポートへ移動し、正しい名前で整理します\n",
   "Asking the Bootcade server…": "Bootcade サーバーに問い合わせ中…",
-  "outdated on the Bootcade server": "Bootcade サーバー上のバージョンが古い"
+  "outdated on the Bootcade server": "Bootcade サーバー上のバージョンが古い",
+  "Files in the archive the DAT does not need : Fix moves them to quarantine. A set still lacking a ROM is Missing afterwards.": "DAT が必要としないアーカイブ内のファイル：修復で隔離に移動します。まだ ROM が足りないセットはその後「欠落」になります。"
 }

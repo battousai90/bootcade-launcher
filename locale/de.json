@@ -1670,5 +1670,6 @@
   "right content under another file name": "richtiger Inhalt unter einem anderen Dateinamen",
   "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 Set(s) unter einem anderen Dateinamen → nach Import verschoben, das sie unter dem richtigen Namen ablegt\n",
   "Asking the Bootcade server…": "Bootcade-Server wird abgefragt…",
-  "outdated on the Bootcade server": "veraltete Version auf dem Bootcade-Server"
+  "outdated on the Bootcade server": "veraltete Version auf dem Bootcade-Server",
+  "Files in the archive the DAT does not need : Fix moves them to quarantine. A set still lacking a ROM is Missing afterwards.": "Dateien im Archiv, die die DAT nicht braucht : Reparieren verschiebt sie in die Quarantäne. Ein Set, dem noch eine ROM fehlt, steht danach auf Fehlt."
 }

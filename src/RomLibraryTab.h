@@ -145,6 +145,7 @@ private:
     SettingsUi::Pill*   m_pill_incorrect = nullptr;
     SettingsUi::Pill*   m_pill_misnamed  = nullptr;
     SettingsUi::Pill*   m_pill_fixable   = nullptr;
+    SettingsUi::Pill*   m_pill_extra     = nullptr;
     SettingsUi::Pill*   m_pill_orphan    = nullptr;
     SettingsUi::Pill*   m_pill_ignored   = nullptr;
     Gtk::MenuButton*    m_btn_export = nullptr;
@@ -171,7 +172,7 @@ private:
     struct Columns : public Gtk::TreeModel::ColumnRecord {
         Gtk::TreeModelColumn<bool>          include;
         Gtk::TreeModelColumn<Glib::ustring> status;      // shown
-        Gtk::TreeModelColumn<Glib::ustring> status_key;  // available|misnamed|fixable|incorrect|missing|orphan
+        Gtk::TreeModelColumn<Glib::ustring> status_key;  // available|misnamed|fixable|incorrect|extra|missing|orphan
         Gtk::TreeModelColumn<Glib::ustring> game;
         Gtk::TreeModelColumn<Glib::ustring> system;
         Gtk::TreeModelColumn<Glib::ustring> parent;
