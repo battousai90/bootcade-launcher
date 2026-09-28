@@ -1666,5 +1666,7 @@
   "cancelled": "ยกเลิกแล้ว",
   "not available on the Bootcade server": "ไม่มีบนเซิร์ฟเวอร์ Bootcade",
   "refused by the server (quota or account)": "เซิร์ฟเวอร์ปฏิเสธ (โควตาหรือบัญชี)",
-  "the server is busy, try again later": "เซิร์ฟเวอร์ไม่ว่าง โปรดลองใหม่ภายหลัง"
+  "the server is busy, try again later": "เซิร์ฟเวอร์ไม่ว่าง โปรดลองใหม่ภายหลัง",
+  "right content under another file name": "เนื้อหาถูกต้องแต่ชื่อไฟล์ต่างไป",
+  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 เซ็ตใช้ชื่อไฟล์อื่น → ย้ายไปที่นำเข้า ซึ่งจะจัดเก็บด้วยชื่อที่ถูกต้อง\n"
 }

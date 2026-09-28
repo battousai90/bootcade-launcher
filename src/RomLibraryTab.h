@@ -215,8 +215,10 @@ private:
         std::vector<Whole>  orphans;    // archives no DAT entry claims → quarantine
         std::vector<Extras> extras;     // entries pulled out of sound archives → quarantine
         std::vector<std::string> repairable;   // archives copied into the import folder
+        std::vector<std::string> renamed;      // sets under another file name, moved there
         std::vector<std::string> sent;         // what actually landed there (copied or already present)
         int moved = 0, cleaned = 0, copied = 0, failed = 0;
+        int relocated = 0;   // misnamed archives moved out of the library to Import
     } m_fix;
 
     // Download job : the sets asked for, what arrived, why it stopped.

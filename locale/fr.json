@@ -1666,5 +1666,7 @@
   "cancelled": "annulé",
   "not available on the Bootcade server": "absent du serveur Bootcade",
   "refused by the server (quota or account)": "refusé par le serveur (quota ou compte)",
-  "the server is busy, try again later": "le serveur est occupé, réessaie plus tard"
+  "the server is busy, try again later": "le serveur est occupé, réessaie plus tard",
+  "right content under another file name": "bon contenu sous un autre nom de fichier",
+  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 set(s) sous un autre nom de fichier → déplacés vers Import, qui les range sous le bon nom\n"
 }

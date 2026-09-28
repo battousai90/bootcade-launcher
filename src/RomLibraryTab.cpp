@@ -533,6 +533,7 @@ void RomLibraryTab::populate() {
         if (g.wrong)   bits.push_back(Glib::ustring::compose(_("%1 misnamed"), g.wrong).raw());
         if (has_extras) bits.push_back(Glib::ustring::compose(_("%1 extra file(s) not needed by the DAT"), (int)g.extra_entries.size()).raw());
         if (g.is_chd && g.status != "available") bits.push_back(_("Fix not available for CHDs"));
+        else if (g.misnamed_archive) bits.push_back(_("right content under another file name"));
         else if (g.repairable) bits.push_back(_("repairable from the library"));
         else if (!g.archive_found && (g.has_disks ? g.zip_status : g.status) != "available") bits.push_back(_("no archive found"));
         int inherited = 0;
@@ -1145,6 +1146,10 @@ void RomLibraryTab::on_fix_clicked(std::vector<Gtk::TreeModel::Row> rows) {
         }
         const auto& g = m_audit.games[(unsigned int)row[m_cols.index]];
         std::string header = g.dat_header.empty() ? g.system : g.dat_header;
+        if (g.misnamed_archive && !g.ignored) {
+            m_fix.renamed.push_back(g.archive);
+            continue;
+        }
         if (can_send_to_import(g)) {
             std::string src = import_source_of(g);
             if (std::find(m_fix.repairable.begin(), m_fix.repairable.end(), src) == m_fix.repairable.end())
@@ -1159,7 +1164,8 @@ void RomLibraryTab::on_fix_clicked(std::vector<Gtk::TreeModel::Row> rows) {
     m_fix.orphans.erase(std::remove_if(m_fix.orphans.begin(), m_fix.orphans.end(), [&](const auto& o) {
         return std::find(m_fix.repairable.begin(), m_fix.repairable.end(), o.archive) != m_fix.repairable.end();
     }), m_fix.orphans.end());
-    if (m_fix.whole.empty() && m_fix.orphans.empty() && m_fix.extras.empty() && m_fix.repairable.empty()) {
+    if (m_fix.whole.empty() && m_fix.orphans.empty() && m_fix.extras.empty() && m_fix.repairable.empty() &&
+        m_fix.renamed.empty()) {
         flash(_("Nothing to fix : the audit found no repairable set, unrepairable set, orphan or extra file."));
         return;
     }
@@ -1173,7 +1179,7 @@ void RomLibraryTab::on_fix_clicked(std::vector<Gtk::TreeModel::Row> rows) {
         fs::create_directories(p.quarantine, ec);
         if (ec || !fs::is_directory(p.quarantine, ec)) { if (top) ui::notice(*top, _("Quarantine folder"), _("Could not create the quarantine folder.")); return; }
     }
-    if (!m_fix.repairable.empty()) {
+    if (!m_fix.repairable.empty() || !m_fix.renamed.empty()) {
         if (p.inbox.empty()) { if (top) ui::notice(*top, _("No import folder"), _("Set an import folder (Import tab) first.")); return; }
         fs::create_directories(p.inbox, ec);
         if (ec || !fs::is_directory(p.inbox, ec)) { if (top) ui::notice(*top, _("Import folder"), _("Could not create the import folder.")); return; }
@@ -1182,6 +1188,8 @@ void RomLibraryTab::on_fix_clicked(std::vector<Gtk::TreeModel::Row> rows) {
     int extra_files = 0;
     for (const auto& x : m_fix.extras) extra_files += (int)x.entries.size();
     Glib::ustring summary;
+    if (!m_fix.renamed.empty())
+        summary += Glib::ustring::compose(_("%1 set(s) under another file name → moved to Import, which files them under the right name\n"), (int)m_fix.renamed.size());
     if (!m_fix.repairable.empty())
         summary += Glib::ustring::compose(_("%1 repairable set(s) (misnamed, or pieces found elsewhere in the library) → copied to Import, which rebuilds them\n"), (int)m_fix.repairable.size());
     if (!m_fix.whole.empty())
@@ -1221,7 +1229,8 @@ void RomLibraryTab::worker_fix() {
         return true;
     };
 
-    const size_t total = m_fix.whole.size() + m_fix.extras.size() + m_fix.orphans.size() + m_fix.repairable.size();
+    const size_t total = m_fix.whole.size() + m_fix.extras.size() + m_fix.orphans.size() + m_fix.repairable.size() +
+                         m_fix.renamed.size();
     size_t done = 0;
     auto step = [&](const std::string& what) { push_progress(100.0 * (double)(++done) / (double)total, what); };
 
@@ -1292,6 +1301,22 @@ void RomLibraryTab::worker_fix() {
         e.details.push_back("matches no set of the DAT group, by name or by content");
         manifest.add(std::move(e));
         push_log("[FIX] orphan " + src.filename().string() + " -> quarantine");
+    }
+
+    // A set under another file name is MOVED to the import folder : copied,
+    // it came back rebuilt under its right name and the old file stayed in
+    // the library as an orphan.
+    for (const auto& a : m_fix.renamed) {
+        if (m_cancelled) break;
+        fs::path src(a);
+        fs::path dest = fs::path(inbox) / src.filename();
+        step(src.filename().string());
+        std::error_code cec;
+        if (fs::exists(dest, cec)) { m_fix.failed++; push_log("[FIX] import folder already holds " + dest.string() + " : left alone"); continue; }
+        if (!move_file(src, dest)) { m_fix.failed++; push_log("[FIX] FAILED to move " + src.string()); continue; }
+        m_fix.relocated++;
+        m_fix.sent.push_back(dest.string());
+        push_log("[FIX] misnamed " + src.filename().string() + " -> import folder");
     }
 
     // A repairable set is COPIED into the import folder : the library keeps
@@ -1493,7 +1518,7 @@ void RomLibraryTab::on_worker_finished() {
         // The library changed under the audit : the owner rescans, then calls
         // refresh_after_scan(). Import takes over the copied sets ; when a
         // scan is pending the owner holds that until the scan is done.
-        if (m_fix.moved || m_fix.cleaned) m_sig_scan.emit(m_audit.emulator);
+        if (m_fix.moved || m_fix.cleaned || m_fix.relocated) m_sig_scan.emit(m_audit.emulator);
         if (!m_fix.sent.empty()) m_sig_send_to_import.emit(m_fix.sent);
         return;
     }
