@@ -110,12 +110,45 @@ Quota fetch_quota() {
     return q;
 }
 
+Presence presence(const std::string& dat_header, const std::string& name) {
+    const std::string token = BootcadeAuth::access_token();
+    if (token.empty()) return Presence::Unknown;
+    CURL* curl = curl_easy_init();
+    if (!curl) return Presence::Unknown;
+    const std::string url = roms_url() + "/roms/" + escape(curl, dat_header) + "/" + escape(curl, name) + ".zip";
+    struct curl_slist* headers = curl_slist_append(nullptr, ("Authorization: Bearer " + token).c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
+    const CURLcode res = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    if (res != CURLE_OK) return Presence::Unknown;
+    if (status == 200) return Presence::Present;
+    if (status == 404) return Presence::Absent;
+    return Presence::Unknown;
+}
+
 Result download(const std::string& dat_header, const std::string& name,
                 const std::string& dest_dir, const std::atomic<bool>& cancelled,
                 const std::function<void(double)>& progress) {
     Result r;
     const std::string token = BootcadeAuth::access_token();
     if (token.empty()) { r.reason = explain("not_signed_in"); return r; }
+
+    // The server counts a GET against the quota before it looks for the
+    // file : asking for a set it does not have spent a download for nothing.
+    // A HEAD first costs nothing and settles it.
+    if (presence(dat_header, name) == Presence::Absent) {
+        r.http_status = 404;
+        r.reason = _("not available on the Bootcade server");
+        return r;
+    }
 
     std::error_code ec;
     fs::create_directories(dest_dir, ec);

@@ -25,6 +25,12 @@ struct Quota {
 };
 Quota fetch_quota();
 
+// Whether the server holds /roms/<dat_header>/<name>.zip. A HEAD request :
+// the server counts only a GET against the quota, so asking costs nothing.
+// Unknown : no answer, or a refusal that hides the answer (quota, account).
+enum class Presence { Present, Absent, Unknown };
+Presence presence(const std::string& dat_header, const std::string& name);
+
 // One set, /roms/<dat_header>/<name>.zip, written to <dest_dir>/<name>.zip
 // (through a .part file, so Import never sees half a zip).
 struct Result {

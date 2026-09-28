@@ -1668,5 +1668,6 @@
   "refused by the server (quota or account)": "เซิร์ฟเวอร์ปฏิเสธ (โควตาหรือบัญชี)",
   "the server is busy, try again later": "เซิร์ฟเวอร์ไม่ว่าง โปรดลองใหม่ภายหลัง",
   "right content under another file name": "เนื้อหาถูกต้องแต่ชื่อไฟล์ต่างไป",
-  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 เซ็ตใช้ชื่อไฟล์อื่น → ย้ายไปที่นำเข้า ซึ่งจะจัดเก็บด้วยชื่อที่ถูกต้อง\n"
+  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 เซ็ตใช้ชื่อไฟล์อื่น → ย้ายไปที่นำเข้า ซึ่งจะจัดเก็บด้วยชื่อที่ถูกต้อง\n",
+  "Asking the Bootcade server…": "กำลังสอบถามเซิร์ฟเวอร์ Bootcade…"
 }

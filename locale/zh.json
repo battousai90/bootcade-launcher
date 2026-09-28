@@ -1668,5 +1668,6 @@
   "refused by the server (quota or account)": "被服务器拒绝（配额或账户）",
   "the server is busy, try again later": "服务器繁忙，请稍后再试",
   "right content under another file name": "内容正确，但文件名不同",
-  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 个游戏包使用了其他文件名 → 移至导入，由其以正确的名称归档\n"
+  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 个游戏包使用了其他文件名 → 移至导入，由其以正确的名称归档\n",
+  "Asking the Bootcade server…": "正在询问 Bootcade 服务器…"
 }

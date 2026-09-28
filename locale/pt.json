@@ -1668,5 +1668,6 @@
   "refused by the server (quota or account)": "recusado pelo servidor (cota ou conta)",
   "the server is busy, try again later": "o servidor está ocupado, tente novamente mais tarde",
   "right content under another file name": "conteúdo correto com outro nome de ficheiro",
-  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 set(s) com outro nome de ficheiro → movidos para Importar, que os arquiva com o nome certo\n"
+  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 set(s) com outro nome de ficheiro → movidos para Importar, que os arquiva com o nome certo\n",
+  "Asking the Bootcade server…": "A consultar o servidor Bootcade…"
 }

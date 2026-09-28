@@ -113,6 +113,13 @@ std::string import_source_of(const RomAudit::GameEntry& g) {
     }
     return fallback;
 }
+// Missing or wrong, and not rebuildable from the library : Fix does that
+// without spending the quota. Never a CHD, never an ignored set.
+bool downloadable(const RomAudit::Report& rep, const RomAudit::GameEntry& g) {
+    return rep.emulator == "fbneo" && !g.is_chd && !g.ignored && g.archive_is_own
+        && !g.repairable && !g.dat_header.empty()
+        && (g.status == "missing" || g.status == "incorrect");
+}
 bool can_send_to_import(const RomAudit::GameEntry& g) {
     return !import_source_of(g).empty();
 }
@@ -491,9 +498,26 @@ void RomLibraryTab::worker_audit() {
     // pill like the others.
     RomAudit::Report rep = RomAudit::audit(m_db, m_job_paths.roms_paths, /*problems_only=*/false, cb,
                                            m_job_dat_sources, m_job_emulator);
+
+    // Which of the sets it would offer the Bootcade server actually holds :
+    // one HEAD each, free of quota. Only for a short list : a library that
+    // lacks thousands of sets is asked at download time, set by set.
+    std::set<std::string> not_on_server;
+    if (rep.emulator == "fbneo" && BootcadeAuth::signed_in() && !rep.cancelled) {
+        std::vector<const RomAudit::GameEntry*> asked;
+        for (const auto& g : rep.games) if (downloadable(rep, g)) asked.push_back(&g);
+        if (!asked.empty() && asked.size() <= 200) {
+            for (size_t i = 0; i < asked.size() && !m_cancelled; ++i) {
+                if (cb.progress) cb.progress(100.0 * (double)i / (double)asked.size(), _("Asking the Bootcade server…"));
+                if (RomDownload::presence(asked[i]->dat_header, asked[i]->name) == RomDownload::Presence::Absent)
+                    not_on_server.insert(asked[i]->dat_header + "/" + asked[i]->name);
+            }
+        }
+    }
     {
         std::lock_guard<std::mutex> lk(m_shared_mutex);
         m_audit = std::move(rep);
+        m_not_on_server = std::move(not_on_server);
     }
     m_finished_dispatcher();
 }
@@ -536,6 +560,7 @@ void RomLibraryTab::populate() {
         else if (g.misnamed_archive) bits.push_back(_("right content under another file name"));
         else if (g.repairable) bits.push_back(_("repairable from the library"));
         else if (!g.archive_found && (g.has_disks ? g.zip_status : g.status) != "available") bits.push_back(_("no archive found"));
+        if (m_not_on_server.count(g.dat_header + "/" + g.name)) bits.push_back(_("not available on the Bootcade server"));
         int inherited = 0;
         for (const auto& r : g.roms) if (!r.inherited_from.empty()) ++inherited;
         if (inherited) bits.push_back(Glib::ustring::compose(_("%1 from parent/BIOS"), inherited).raw());
@@ -881,11 +906,7 @@ void RomLibraryTab::update_action_buttons() {
 }
 
 bool RomLibraryTab::can_download(const RomAudit::GameEntry& g) const {
-    // Missing or wrong, and not rebuildable from the library : Fix does that
-    // without spending the quota. Never a CHD, never an ignored set.
-    return m_audit.emulator == "fbneo" && !g.is_chd && !g.ignored && g.archive_is_own
-        && !g.repairable && !g.dat_header.empty()
-        && (g.status == "missing" || g.status == "incorrect");
+    return downloadable(m_audit, g) && !m_not_on_server.count(g.dat_header + "/" + g.name);
 }
 
 std::vector<Gtk::TreeModel::Row> RomLibraryTab::download_candidates() const {
