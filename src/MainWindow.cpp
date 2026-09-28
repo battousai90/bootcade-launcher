@@ -6045,6 +6045,9 @@ void MainWindow::on_download_latest_fbneo() {
     download_dialog->set_settings_entry(&m_settings_panel.m_entry_fbneo);
     download_dialog->start_download();
     int result = download_dialog->run();
+    // run() rend la main sans fermer la fenetre : elle restait affichee
+    // derriere la question des DAT et toute leur generation.
+    download_dialog.reset();
 
     // Record what "latest" pointed at just now, so a future startup check has a
     // baseline to compare against. The startup check already did this fetch in

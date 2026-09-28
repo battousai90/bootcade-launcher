@@ -4122,6 +4122,9 @@ void SettingsPanel::on_download_fbneo_clicked() {
     download_dialog->set_settings_entry(&m_entry_fbneo);
     download_dialog->start_download();
     download_dialog->run();
+    // run() rend la main sans fermer la fenetre : elle restait affichee
+    // pendant la lecture de la release qui suit.
+    download_dialog.reset();
 
     // Record what "latest" pointed at just now, so a future startup check has
     // a baseline to notice the next time our fork moves past this build.
