@@ -367,6 +367,61 @@ Report audit(std::shared_ptr<DatabaseManager> db,
     std::sort(rep.orphans.begin(), rep.orphans.end(),
               [](const OrphanArchive& a, const OrphanArchive& b) { return a.path < b.path; });
 
+    // ── 4. Sets left under a former file name ────────────────────────────────
+    // An orphan that holds exactly one absent set of its folder : the same
+    // entries, under the same names, and nothing else. It IS that set, filed
+    // under the wrong name : one misnamed set, not a missing set plus an
+    // orphan. Two absent sets with identical content would make the answer a
+    // guess : those stay as they were.
+    {
+        std::unordered_map<std::string, size_t> orphan_at;
+        for (size_t i = 0; i < rep.orphans.size(); ++i) orphan_at[rep.orphans[i].path] = i;
+        std::unordered_map<size_t, std::vector<size_t>> claims;   // orphan → sets it holds
+        for (size_t gi = 0; gi < rep.games.size(); ++gi) {
+            const GameEntry& e = rep.games[gi];
+            if (e.ignored || e.is_chd || e.has_disks || !e.archive_is_own || e.archive_found ||
+                e.status != "missing" || e.roms.empty())
+                continue;
+            auto range = crc_to_archive.equal_range(e.roms.front().crc);
+            std::unordered_set<size_t> seen;
+            for (auto it = range.first; it != range.second; ++it) {
+                auto o = orphan_at.find(it->second);
+                if (o == orphan_at.end() || !seen.insert(o->second).second) continue;
+                if (fs::path(o->first).parent_path().filename().string() != e.dat_header) continue;
+                const RomResolve::Archive& a = index.all().at(o->first);
+                if (a.entries.size() != e.roms.size()) continue;
+                bool same = true;
+                for (const auto& r : e.roms) {
+                    auto c = a.crc_by_name.find(r.name);
+                    if (c == a.crc_by_name.end() || c->second != r.crc) { same = false; break; }
+                }
+                if (same) claims[o->second].push_back(gi);
+            }
+        }
+        std::unordered_set<size_t> claimed;
+        for (const auto& [oi, sets] : claims) {
+            if (sets.size() != 1) continue;
+            GameEntry& e = rep.games[sets.front()];
+            e.archive          = rep.orphans[oi].path;
+            e.archive_found    = true;
+            e.misnamed_archive = true;
+            e.status           = "incorrect";
+            e.absent           = 0;
+            for (auto& r : e.roms) { r.state = RomState::Present; r.found_in.clear(); }
+            rep.missing--;
+            rep.incorrect++;
+            claimed.insert(oi);
+            log(cb, "  " + fs::path(e.archive).filename().string() + " holds " + e.name +
+                    " under another file name");
+        }
+        if (!claimed.empty()) {
+            std::vector<OrphanArchive> kept;
+            for (size_t i = 0; i < rep.orphans.size(); ++i)
+                if (!claimed.count(i)) kept.push_back(std::move(rep.orphans[i]));
+            rep.orphans = std::move(kept);
+        }
+    }
+
     report(cb, 100.0, _("Audit complete."));
     log(cb, "Library: " + std::to_string(rep.available) + " available, " +
                 std::to_string(rep.incorrect) + " incorrect, " +

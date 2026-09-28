@@ -150,7 +150,10 @@ public:
      *
      * `from_shown` : tirer parmi les jeux affiches (les filtres de la colonne
      * de gauche et la recherche font foi) ; sinon parmi `systems`. Les trois
-     * restrictions s'appliquent dans les deux cas. `systems` vide = tous. */
+     * restrictions s'appliquent dans les deux cas. `systems` vide = tous.
+     * Chaque entree de `systems` est « emulateur/systeme » (« mame/Arcade ») :
+     * FinalBurn Neo et MAME ont tous deux un systeme « Arcade », et le nom
+     * seul ne permettait pas de cocher l'un sans l'autre. */
     struct RandomPick {
         bool from_shown     = true;
         std::set<std::string> systems;
@@ -162,7 +165,8 @@ public:
     RandomPick random_pick() const;
     // Les systemes connus ne le sont qu'une fois la base lue : la fenetre
     // principale les fournit, et la carte construit alors ses cases.
-    void set_random_systems(const std::vector<std::string>& systems);
+    // Chaque paire est (emulateur, systeme).
+    void set_random_systems(const std::vector<std::pair<std::string, std::string>>& systems);
 
     /* ── Options propres a l'emulateur ────────────────────────────────
      *
@@ -296,6 +300,8 @@ private:
     Gtk::Widget* build_page_general();
     Gtk::Widget* build_page_library();
     Gtk::Widget* build_page_random();
+    // Vrai si la case « emulateur/systeme » doit etre cochee d'apres le fichier.
+    bool random_system_saved(const std::string& key) const;
     Gtk::Widget* build_page_emulator();
     Gtk::Widget* build_page_online();
     void         on_restore_defaults_clicked();
@@ -442,8 +448,14 @@ private:
     Gtk::ComboBoxText m_combo_random_from;
     Gtk::Switch m_switch_random_hiscore, m_switch_random_originals,
                 m_switch_random_unplayed, m_switch_random_launch;
-    Gtk::FlowBox m_random_systems_box;
+    // Un groupe par emulateur, son nom en tete et ses systemes en dessous.
+    // Les groupes sont possedes ici : un widget gere retire de son parent
+    // n'est pas detruit pour autant, et la liste est refaite a chaque
+    // rechargement de la base.
+    Gtk::Box m_random_systems_box{Gtk::ORIENTATION_VERTICAL, 10};
+    std::vector<std::unique_ptr<Gtk::Box>> m_random_groups;
     std::vector<Gtk::CheckButton*> m_random_system_checks;
+    std::vector<std::string> m_random_system_keys;   // « emulateur/systeme », parallele aux cases
     std::set<std::string> m_random_systems_saved;   // lu du fichier avant que la liste existe
     Gtk::Switch m_switch_auto_update;
     Gtk::Button m_btn_check_updates;

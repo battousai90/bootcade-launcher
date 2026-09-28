@@ -700,7 +700,7 @@
   "Rescan every configured ROM directory for new or changed files.": "Rebalaye chaque dossier de ROMs configuré à la recherche de fichiers nouveaux ou modifiés.",
   "Audit library": "Auditer la bibliothèque",
   "Compare the last scan with the DAT group.": "Compare le dernier balayage avec le groupe de DAT.",
-  "Deal with every problem the audit found : misnamed and fixable sets are sent to Import to be rebuilt, unrepairable sets, orphans and extra files are moved to quarantine. Acts on the checked rows, or on every row shown when none is checked.": "Traite chaque problème trouvé par l'audit : les sets mal nommés et réparables sont envoyés à Import pour être reconstruits, les sets irréparables, les orphelins et les fichiers en trop sont mis en quarantaine. Agit sur les lignes cochées, ou sur toutes les lignes affichées si aucune n'est cochée.",
+  "Deal with every problem the audit found : misnamed and fixable sets are sent to Import to be rebuilt, unrepairable sets, orphans and extra files are moved to quarantine. Acts on the ticked rows shown : everything it can act on is ticked after an audit.": "Traite chaque problème trouvé par l'audit : les sets mal nommés et réparables sont envoyés à Import pour être reconstruits, les sets irréparables, les orphelins et les fichiers en trop sont mis en quarantaine. Agit sur les lignes cochées affichées : après un audit, tout ce qu'il peut traiter est coché.",
   "%1 (%2 DAT file)": "%1 (%2 fichier DAT)",
   "%1 (%2 DAT files)": "%1 (%2 fichiers DAT)",
   "Auditing…": "Audit en cours…",
@@ -1584,7 +1584,7 @@
   "%1 DAT file(s) downloaded from %2. Reloading the database…": "%1 fichier(s) DAT téléchargé(s) depuis %2. Rechargement de la base…",
   "%1 DAT file(s) downloaded from %2 : tick the ones this group uses.": "%1 fichier(s) DAT téléchargé(s) depuis %2 : cochez ceux que ce groupe utilise.",
   "Fix not available for CHDs": "Correction impossible pour les CHD",
-  "Fix all leaves it alone : tick it to quarantine it": "Tout corriger n'y touche pas : cochez-le pour le mettre en quarantaine",
+  "Left unticked : tick it to quarantine it": "Laissé décoché : cochez-le pour le mettre en quarantaine",
   "SHA1 expected": "SHA1 attendu",
   "CRC / SHA1 expected": "CRC / SHA1 attendu",
   "SHA1 found": "SHA1 trouvé",
@@ -1651,7 +1651,7 @@
   "Download from Bootcade": "Télécharger depuis Bootcade",
   "Download from Bootcade (%1)": "Télécharger depuis Bootcade (%1)",
   "Download from Bootcade?": "Télécharger depuis Bootcade ?",
-  "Download the missing or wrong FinalBurn Neo sets from the Bootcade server, with your account and its daily quota. They go to Import, which checks and files them. Acts on the checked rows, or on every row shown when none is checked.": "Télécharge depuis le serveur Bootcade les jeux FinalBurn Neo manquants ou incorrects, avec ton compte et son quota quotidien. Ils vont dans l'Import, qui les vérifie et les range. Agit sur les lignes cochées, ou sur toutes les lignes affichées si aucune n'est cochée.",
+  "Download the missing or wrong FinalBurn Neo sets from the Bootcade server, with your account and its daily quota. They go to Import, which checks and files them. Acts on the ticked rows shown : everything it can act on is ticked after an audit.": "Télécharge depuis le serveur Bootcade les jeux FinalBurn Neo manquants ou incorrects, avec ton compte et son quota quotidien. Ils vont dans l'Import, qui les vérifie et les range. Agit sur les lignes cochées affichées : après un audit, tout ce qu'il peut traiter est coché.",
   "Downloaded %1.": "%1 téléchargé.",
   "Downloading %1 (%2/%3)…": "Téléchargement de %1 (%2/%3)…",
   "Downloads are not possible right now.": "Téléchargement impossible pour le moment.",
@@ -1666,5 +1666,10 @@
   "cancelled": "annulé",
   "not available on the Bootcade server": "absent du serveur Bootcade",
   "refused by the server (quota or account)": "refusé par le serveur (quota ou compte)",
-  "the server is busy, try again later": "le serveur est occupé, réessaie plus tard"
+  "the server is busy, try again later": "le serveur est occupé, réessaie plus tard",
+  "right content under another file name": "bon contenu sous un autre nom de fichier",
+  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 set(s) sous un autre nom de fichier → déplacés vers Import, qui les range sous le bon nom\n",
+  "Asking the Bootcade server…": "Interrogation du serveur Bootcade…",
+  "outdated on the Bootcade server": "version dépassée sur le serveur Bootcade",
+  "Files in the archive the DAT does not need : Fix moves them to quarantine. A set still lacking a ROM is Missing afterwards.": "Fichiers de l'archive dont le DAT n'a pas besoin : Corriger les met en quarantaine. Un set à qui il manque encore une ROM passe ensuite en Manquant."
 }

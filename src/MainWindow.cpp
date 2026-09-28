@@ -459,6 +459,10 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
         std::filesystem::exists(BootcadeAuth::session_path());
     m_account_settled.connect([this] {
         m_account_pending = false;
+        if (m_account_question_waiting) {
+            m_account_question_waiting = false;
+            ask_hiscore_account_again();
+        }
         // Le seul affichage que la restauration laissait derriere elle. Le
         // bouton du compte et le panneau de reglages sont deja traites par
         // m_account_restored ; le bandeau, lui, n'etait prevenu par personne
@@ -1890,9 +1894,10 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     { std::lock_guard<std::mutex> lk(m_filter_mutex); m_filtered_games.clear(); }
     {
         // Les systemes connus, pour la carte « Random game » des reglages.
-        std::set<std::string> systems;
-        for (const auto& g : m_cached_games) if (!g.system.empty()) systems.insert(g.system);
-        m_settings_panel.set_random_systems(std::vector<std::string>(systems.begin(), systems.end()));
+        std::set<std::pair<std::string, std::string>> systems;
+        for (const auto& g : m_cached_games)
+            if (!g.system.empty()) systems.emplace(g.emulator, g.system);
+        m_settings_panel.set_random_systems({systems.begin(), systems.end()});
     }
     
     // Populate system filter and display games
@@ -4656,12 +4661,15 @@ void MainWindow::on_random_game_clicked() {
         if (opt.hiscore_only   && !game_ranks_online(g.emulator, g.system, g.name)) return false;
         if (opt.originals_only && !g.cloneof.empty()) return false;
         if (opt.unplayed_only  && g.play_count > 0) return false;
-        if (!opt.from_shown && !opt.systems.empty() && !opt.systems.count(g.system)) return false;
+        if (!opt.from_shown && !opt.systems.empty() &&
+            !opt.systems.count(g.emulator + "/" + g.system)) return false;
         return true;
     };
 
     static std::mt19937 rng{std::random_device{}()};
-    std::string pick_name, pick_system;
+    // L'emulateur fait partie de l'identite : '88games existe chez FinalBurn
+    // Neo et chez MAME, tous deux en « Arcade ».
+    std::string pick_name, pick_system, pick_emulator;
     int pick_index = -1;   // ligne du modele quand on tire dans l'affiche
     if (opt.from_shown) {
         std::vector<int> idx;
@@ -4673,6 +4681,7 @@ void MainWindow::on_random_game_clicked() {
                 pick_index  = idx[std::uniform_int_distribution<size_t>(0, idx.size() - 1)(rng)];
                 pick_name   = m_filtered_games[pick_index]->name;
                 pick_system = m_filtered_games[pick_index]->system;
+                pick_emulator = m_filtered_games[pick_index]->emulator;
             }
         }
     } else {
@@ -4680,7 +4689,7 @@ void MainWindow::on_random_game_clicked() {
         for (const auto& g : m_cached_games) if (eligible(g)) pool.push_back(&g);
         if (!pool.empty()) {
             const Game* g = pool[std::uniform_int_distribution<size_t>(0, pool.size() - 1)(rng)];
-            pick_name = g->name; pick_system = g->system;
+            pick_name = g->name; pick_system = g->system; pick_emulator = g->emulator;
         }
     }
     if (pick_name.empty()) {
@@ -4695,7 +4704,8 @@ void MainWindow::on_random_game_clicked() {
     if (pick_index < 0) {
         std::lock_guard<std::mutex> lock(m_filter_mutex);
         for (size_t i = 0; i < m_filtered_games.size(); ++i)
-            if (m_filtered_games[i]->name == pick_name && m_filtered_games[i]->system == pick_system) { pick_index = (int)i; break; }
+            if (m_filtered_games[i]->name == pick_name && m_filtered_games[i]->system == pick_system &&
+                m_filtered_games[i]->emulator == pick_emulator) { pick_index = (int)i; break; }
     }
     if (pick_index < 0) {
         m_search_entry.set_text("");
@@ -4704,7 +4714,8 @@ void MainWindow::on_random_game_clicked() {
         apply_tree_filters();
         std::lock_guard<std::mutex> lock(m_filter_mutex);
         for (size_t i = 0; i < m_filtered_games.size(); ++i)
-            if (m_filtered_games[i]->name == pick_name && m_filtered_games[i]->system == pick_system) { pick_index = (int)i; break; }
+            if (m_filtered_games[i]->name == pick_name && m_filtered_games[i]->system == pick_system &&
+                m_filtered_games[i]->emulator == pick_emulator) { pick_index = (int)i; break; }
     }
     if (pick_index < 0) return;
 
@@ -4712,7 +4723,7 @@ void MainWindow::on_random_game_clicked() {
     auto it = m_model_games->get_iter(path);
     if (!it) return;
     reveal_model_row(it);
-    std::cout << "[RANDOM] " << pick_system << "/" << pick_name << (opt.launch ? " (launch)" : "") << std::endl;
+    std::cout << "[RANDOM] " << pick_emulator << "/" << pick_system << "/" << pick_name << (opt.launch ? " (launch)" : "") << std::endl;
     if (opt.launch) on_play_clicked();
 }
 
@@ -5073,6 +5084,15 @@ void MainWindow::ask_hiscore_account_again() {
      * Jamais reposee a un joueur connecte : pour lui tout fonctionne, et une
      * question sans objet a chaque mise a jour serait du harcelement.
      */
+    /* Posee depuis le premier tour de boucle, elle passait AVANT que le fil
+     * de restauration ait relu la session : signed_in() repondait non, et un
+     * joueur connecte se voyait demander de se connecter a chaque nouvelle
+     * version. Comme le bandeau, elle attend que la reponse soit connue ;
+     * m_account_settled la rappelle. */
+    if (m_account_pending) {
+        m_account_question_waiting = true;
+        return;
+    }
     if (BootcadeAuth::signed_in()) {
         // Sa reponse vaut pour cette version : inutile de la lui redemander
         // s'il se deconnecte plus tard dans la meme.
@@ -6025,6 +6045,9 @@ void MainWindow::on_download_latest_fbneo() {
     download_dialog->set_settings_entry(&m_settings_panel.m_entry_fbneo);
     download_dialog->start_download();
     int result = download_dialog->run();
+    // run() rend la main sans fermer la fenetre : elle restait affichee
+    // derriere la question des DAT et toute leur generation.
+    download_dialog.reset();
 
     // Record what "latest" pointed at just now, so a future startup check has a
     // baseline to compare against. The startup check already did this fetch in

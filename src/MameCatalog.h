@@ -30,6 +30,12 @@ namespace MameCatalog {
 // sable, comme FinalBurn Neo.
 std::string find_executable();
 
+// Vrai si `exe` est un executable que Bootcade peut lancer. Sous Flatpak, le
+// MAME de la distribution (/usr/games/mame) n'existe pas dans le bac a sable :
+// un access() local le declarait absent alors que le jeu se lancait sur
+// l'hote. On pose donc la question a l'hote.
+bool is_runnable(const std::string& exe);
+
 // La version annoncee par le binaire, p.ex. "0.289 (unknown)". Chaine vide si
 // MAME ne repond pas. C'est la cle d'invalidation du cache : elle est gardee
 // telle quelle, suffixe compris, pour qu'un meme MAME ne se mette jamais a

@@ -229,6 +229,9 @@ private:
      * aller-retour reseau pendant lequel signed_in() repond non.
      */
     bool             m_account_pending{false};
+    // La question du compte, reposee a chaque version, attend elle aussi la
+    // fin de la restauration : voir ask_hiscore_account_again.
+    bool             m_account_question_waiting{false};
     void build_account_button();
     /* TROIS etats INDEPENDANTS, jamais fusionnes.
      *

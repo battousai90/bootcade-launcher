@@ -93,8 +93,7 @@ private:
     std::string all_details_of(const Gtk::TreeModel::Row& row) const;
     void search_on_web(const Gtk::TreeModel::Row& row);
     void toggle_ignore(const Gtk::TreeModel::Row& row);
-    // Fix : on the given rows, or when empty on the checked rows, or when
-    // nothing is checked on every actionable row shown.
+    // Fix : on the given rows, or when empty on the ticked rows shown.
     void on_fix_clicked(std::vector<Gtk::TreeModel::Row> rows = {});
     void worker_fix();
     std::vector<Gtk::TreeModel::Row> fix_candidates() const;
@@ -103,13 +102,14 @@ private:
     // per account) : FinalBurn Neo sets that are missing or wrong and cannot
     // be rebuilt from the library. Into the import folder, which verifies
     // and files them as for any other ROM. On the given rows, else the
-    // checked ones, else every row shown.
+    // ticked rows shown.
     bool can_download(const RomAudit::GameEntry& g) const;
     std::vector<Gtk::TreeModel::Row> download_candidates() const;
     void on_download_clicked(std::vector<Gtk::TreeModel::Row> rows = {});
     void worker_download();
     void update_action_buttons();
     std::vector<Gtk::TreeModel::Row> checked_rows() const;
+    bool ticked_by_default(const Gtk::TreeModel::Row& row) const;
 
     // ── Worker plumbing ─────────────────────────────────────────────────────
     enum class Job { None, Audit, Fix, Download };
@@ -145,6 +145,7 @@ private:
     SettingsUi::Pill*   m_pill_incorrect = nullptr;
     SettingsUi::Pill*   m_pill_misnamed  = nullptr;
     SettingsUi::Pill*   m_pill_fixable   = nullptr;
+    SettingsUi::Pill*   m_pill_extra     = nullptr;
     SettingsUi::Pill*   m_pill_orphan    = nullptr;
     SettingsUi::Pill*   m_pill_ignored   = nullptr;
     Gtk::MenuButton*    m_btn_export = nullptr;
@@ -171,7 +172,7 @@ private:
     struct Columns : public Gtk::TreeModel::ColumnRecord {
         Gtk::TreeModelColumn<bool>          include;
         Gtk::TreeModelColumn<Glib::ustring> status;      // shown
-        Gtk::TreeModelColumn<Glib::ustring> status_key;  // available|misnamed|fixable|incorrect|missing|orphan
+        Gtk::TreeModelColumn<Glib::ustring> status_key;  // available|misnamed|fixable|incorrect|extra|missing|orphan
         Gtk::TreeModelColumn<Glib::ustring> game;
         Gtk::TreeModelColumn<Glib::ustring> system;
         Gtk::TreeModelColumn<Glib::ustring> parent;
@@ -184,11 +185,15 @@ private:
         Gtk::TreeModelColumn<bool>          repairable;
         Gtk::TreeModelColumn<bool>          ignored;
         Gtk::TreeModelColumn<bool>          has_extras;
-        Gtk::TreeModelColumn<bool>          actionable;  // can be checked
+        Gtk::TreeModelColumn<bool>          actionable;  // Fix can act on it
+        // Can be ticked : Fix can act on it, or it can be downloaded. A set
+        // that is only missing has nothing for Fix, and its box refused the
+        // tick that Download from Bootcade reads.
+        Gtk::TreeModelColumn<bool>          checkable;
         Columns() {
             add(include); add(status); add(status_key); add(game); add(system); add(parent);
             add(expected); add(yours); add(details); add(search_blob); add(kind); add(index);
-            add(repairable); add(ignored); add(has_extras); add(actionable);
+            add(repairable); add(ignored); add(has_extras); add(actionable); add(checkable);
         }
     };
     Columns m_cols;
@@ -204,6 +209,10 @@ private:
 
     // ── State ───────────────────────────────────────────────────────────────
     RomAudit::Report m_audit;
+    // Sets the Bootcade server does not hold ("<dat_header>/<name>"), asked
+    // at the end of the audit : never offered for download.
+    // "<dat_header>/<name>" -> true when the server holds an older version.
+    std::map<std::string, bool> m_not_on_server;
     bool m_audit_ever_run = false;
     Paths m_job_paths;   // snapshot for the worker
 
@@ -215,8 +224,10 @@ private:
         std::vector<Whole>  orphans;    // archives no DAT entry claims → quarantine
         std::vector<Extras> extras;     // entries pulled out of sound archives → quarantine
         std::vector<std::string> repairable;   // archives copied into the import folder
+        std::vector<std::string> renamed;      // sets under another file name, moved there
         std::vector<std::string> sent;         // what actually landed there (copied or already present)
         int moved = 0, cleaned = 0, copied = 0, failed = 0;
+        int relocated = 0;   // misnamed archives moved out of the library to Import
     } m_fix;
 
     // Download job : the sets asked for, what arrived, why it stopped.

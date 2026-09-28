@@ -10,7 +10,10 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace RomDownload {
 
@@ -24,6 +27,31 @@ struct Quota {
     std::string error;              // transport problem, when !answered
 };
 Quota fetch_quota();
+
+// Whether the server holds /roms/<dat_header>/<name>.zip. A HEAD request :
+// the server counts only a GET against the quota, so asking costs nothing.
+// Unknown : no answer, or a refusal that hides the answer (quota, account).
+enum class Presence { Present, Absent, Unknown };
+Presence presence(const std::string& dat_header, const std::string& name);
+
+// Whether the server holds the version the DAT asks for, judged the way the
+// server gets its corrected ROMs : a set added, or whose ROMs changed, in a
+// DAT change (changes.json) is up to date there only once its zip sits in a
+// RomFix lot of that date or later. A set no change mentions is judged on
+// presence alone. One view per job : it reads changes.json and the RomFix
+// listings once, and asks nothing that counts against the quota.
+enum class Offer { Yes, Outdated, Absent, Unknown };
+class ServerView {
+public:
+    Offer check(const std::string& dat_header, const std::string& name);
+private:
+    void load();
+    const std::set<std::string>& lot(const std::string& date, const std::string& dat_header);
+    bool m_loaded = false, m_changes_ok = false;
+    std::map<std::string, std::string> m_changed;   // set name -> YYYY-MM-DD
+    std::vector<std::string> m_dates;               // RomFix lots, oldest first
+    std::map<std::string, std::set<std::string>> m_lots;   // "date/header" -> zip names
+};
 
 // One set, /roms/<dat_header>/<name>.zip, written to <dest_dir>/<name>.zip
 // (through a .part file, so Import never sees half a zip).

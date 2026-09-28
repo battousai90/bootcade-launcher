@@ -8,9 +8,11 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <regex>
 
 namespace fs = std::filesystem;
 
@@ -68,6 +70,56 @@ std::string escape(CURL* curl, const std::string& part) {
     return out;
 }
 
+// The DAT changes the site publishes : config.json "changes_url".
+std::string changes_url() {
+    std::string url = "https://files.bootcade.duckdns.org/dat/changes.json";
+    try {
+        std::ifstream f(AppContext::get_config_path());
+        nlohmann::json j;
+        if (f) f >> j;
+        if (j.contains("changes_url") && j["changes_url"].is_string() && !j["changes_url"].get<std::string>().empty())
+            url = j["changes_url"].get<std::string>();
+    } catch (...) {}
+    return url;
+}
+
+// A plain GET : the body and the status, 0 when nothing answered.
+long get(const std::string& url, const std::string& token, std::string& body) {
+    CURL* curl = curl_easy_init();
+    if (!curl) return 0;
+    struct curl_slist* headers = nullptr;
+    if (!token.empty()) headers = curl_slist_append(nullptr, ("Authorization: Bearer " + token).c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    if (headers) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, to_string);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
+    const CURLcode res = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    if (headers) curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return res == CURLE_OK ? status : 0;
+}
+
+// The links of an nginx directory listing, decoded.
+std::vector<std::string> listing_links(const std::string& html) {
+    std::vector<std::string> out;
+    static const std::regex href("href=\"([^\"]+)\"");
+    CURL* curl = curl_easy_init();
+    for (auto it = std::sregex_iterator(html.begin(), html.end(), href); it != std::sregex_iterator(); ++it) {
+        const std::string raw = (*it)[1].str();
+        int n = 0;
+        char* d = curl ? curl_easy_unescape(curl, raw.c_str(), (int)raw.size(), &n) : nullptr;
+        out.push_back(d ? std::string(d, (size_t)n) : raw);
+        if (d) curl_free(d);
+    }
+    if (curl) curl_easy_cleanup(curl);
+    return out;
+}
+
 }  // namespace
 
 Quota fetch_quota() {
@@ -110,12 +162,113 @@ Quota fetch_quota() {
     return q;
 }
 
+Presence presence(const std::string& dat_header, const std::string& name) {
+    const std::string token = BootcadeAuth::access_token();
+    if (token.empty()) return Presence::Unknown;
+    CURL* curl = curl_easy_init();
+    if (!curl) return Presence::Unknown;
+    const std::string url = roms_url() + "/roms/" + escape(curl, dat_header) + "/" + escape(curl, name) + ".zip";
+    struct curl_slist* headers = curl_slist_append(nullptr, ("Authorization: Bearer " + token).c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 8L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
+    const CURLcode res = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    if (res != CURLE_OK) return Presence::Unknown;
+    if (status == 200) return Presence::Present;
+    if (status == 404) return Presence::Absent;
+    return Presence::Unknown;
+}
+
+void ServerView::load() {
+    m_loaded = true;
+    std::string body;
+    if (get(changes_url(), "", body) == 200) {
+        try {
+            // Newest first : the first date met for a set is its latest.
+            for (const auto& entry : nlohmann::json::parse(body)) {
+                const std::string date = entry.value("generated", std::string()).substr(0, 10);
+                if (date.size() != 10 || !entry.contains("systems")) continue;
+                for (const auto& sys : entry["systems"]) {
+                    if (sys.contains("added"))
+                        for (const auto& g : sys["added"]) m_changed.emplace(g.value("n", std::string()), date);
+                    // A new title alone leaves the zip as it was : only a
+                    // change of ROMs asks the server for a new one.
+                    if (sys.contains("modified"))
+                        for (const auto& g : sys["modified"]) {
+                            const auto& c = g.contains("changed") ? g["changed"] : nlohmann::json::array();
+                            if (std::find(c.begin(), c.end(), "rom") != c.end())
+                                m_changed.emplace(g.value("n", std::string()), date);
+                        }
+                }
+            }
+            m_changes_ok = true;
+        } catch (...) { m_changed.clear(); }
+    }
+    body.clear();
+    if (get(roms_url() + "/romfix/", BootcadeAuth::access_token(), body) == 200) {
+        static const std::regex day("^\\d{4}-\\d{2}-\\d{2}/$");
+        for (const auto& l : listing_links(body))
+            if (std::regex_match(l, day)) m_dates.push_back(l.substr(0, 10));
+        std::sort(m_dates.begin(), m_dates.end());
+    }
+}
+
+const std::set<std::string>& ServerView::lot(const std::string& date, const std::string& dat_header) {
+    const std::string key = date + "/" + dat_header;
+    auto it = m_lots.find(key);
+    if (it != m_lots.end()) return it->second;
+    std::set<std::string> zips;
+    std::string body;
+    CURL* curl = curl_easy_init();
+    const std::string url = roms_url() + "/romfix/" + date + "/" + (curl ? escape(curl, dat_header) : dat_header) + "/";
+    if (curl) curl_easy_cleanup(curl);
+    if (get(url, BootcadeAuth::access_token(), body) == 200)
+        for (const auto& l : listing_links(body))
+            if (l.size() > 4 && l.compare(l.size() - 4, 4, ".zip") == 0) zips.insert(l);
+    return m_lots.emplace(key, std::move(zips)).first->second;
+}
+
+Offer ServerView::check(const std::string& dat_header, const std::string& name) {
+    if (!m_loaded) load();
+    auto on_server = [&] {
+        switch (presence(dat_header, name)) {
+            case Presence::Present: return Offer::Yes;
+            case Presence::Absent:  return Offer::Absent;
+            default:                return Offer::Unknown;
+        }
+    };
+    const auto changed = m_changes_ok ? m_changed.find(name) : m_changed.end();
+    if (changed == m_changed.end()) return on_server();
+    for (const auto& date : m_dates)
+        if (date >= changed->second && lot(date, dat_header).count(name + ".zip")) return Offer::Yes;
+    // Changed, and no RomFix lot carries it since : the server's copy, if
+    // any, is the version the DAT has moved away from.
+    const Offer here = on_server();
+    return here == Offer::Absent ? Offer::Absent : here == Offer::Yes ? Offer::Outdated : Offer::Unknown;
+}
+
 Result download(const std::string& dat_header, const std::string& name,
                 const std::string& dest_dir, const std::atomic<bool>& cancelled,
                 const std::function<void(double)>& progress) {
     Result r;
     const std::string token = BootcadeAuth::access_token();
     if (token.empty()) { r.reason = explain("not_signed_in"); return r; }
+
+    // The server counts a GET against the quota before it looks for the
+    // file : asking for a set it does not have spent a download for nothing.
+    // A HEAD first costs nothing and settles it.
+    if (presence(dat_header, name) == Presence::Absent) {
+        r.http_status = 404;
+        r.reason = _("not available on the Bootcade server");
+        return r;
+    }
 
     std::error_code ec;
     fs::create_directories(dest_dir, ec);

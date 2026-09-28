@@ -700,7 +700,7 @@
   "Rescan every configured ROM directory for new or changed files.": "สแกนโฟลเดอร์ ROM ที่ตั้งค่าไว้ทั้งหมดใหม่เพื่อหาไฟล์ใหม่หรือที่เปลี่ยนแปลง",
   "Audit library": "ตรวจสอบคลังเกม",
   "Compare the last scan with the DAT group.": "เปรียบเทียบการสแกนล่าสุดกับกลุ่ม DAT",
-  "Deal with every problem the audit found : misnamed and fixable sets are sent to Import to be rebuilt, unrepairable sets, orphans and extra files are moved to quarantine. Acts on the checked rows, or on every row shown when none is checked.": "จัดการทุกปัญหาที่การตรวจสอบพบ: ชุดที่ชื่อผิดและซ่อมได้จะถูกส่งไปที่นำเข้าเพื่อสร้างใหม่ ชุดที่ซ่อมไม่ได้ ไฟล์ไม่มีเจ้าของ และไฟล์เกินจะถูกย้ายไปโซนกักกัน ทำงานกับแถวที่ติ๊กไว้ หรือทุกแถวที่แสดงหากไม่ได้ติ๊กเลย",
+  "Deal with every problem the audit found : misnamed and fixable sets are sent to Import to be rebuilt, unrepairable sets, orphans and extra files are moved to quarantine. Acts on the ticked rows shown : everything it can act on is ticked after an audit.": "จัดการทุกปัญหาที่การตรวจสอบพบ: ชุดที่ชื่อผิดและซ่อมได้จะถูกส่งไปที่นำเข้าเพื่อสร้างใหม่ ชุดที่ซ่อมไม่ได้ ไฟล์ไม่มีเจ้าของ และไฟล์เกินจะถูกย้ายไปโซนกักกัน ทำงานกับแถวที่เลือกไว้และแสดงอยู่ : หลังการตรวจสอบ ทุกรายการที่ทำได้จะถูกเลือกไว้",
   "%1 (%2 DAT file)": "%1 (%2 ไฟล์ DAT)",
   "%1 (%2 DAT files)": "%1 (%2 ไฟล์ DAT)",
   "Auditing…": "กำลังตรวจสอบ…",
@@ -1584,7 +1584,7 @@
   "%1 DAT file(s) downloaded from %2. Reloading the database…": "ดาวน์โหลดไฟล์ DAT %1 ไฟล์จาก %2 แล้ว กำลังโหลดฐานข้อมูลใหม่…",
   "%1 DAT file(s) downloaded from %2 : tick the ones this group uses.": "ดาวน์โหลดไฟล์ DAT %1 ไฟล์จาก %2 แล้ว: เลือกไฟล์ที่กลุ่มนี้ใช้",
   "Fix not available for CHDs": "แก้ไข CHD ไม่ได้",
-  "Fix all leaves it alone : tick it to quarantine it": "แก้ไขทั้งหมดจะไม่แตะรายการนี้: เลือกไว้เพื่อย้ายไปกักกัน",
+  "Left unticked : tick it to quarantine it": "ไม่ได้เลือกไว้ : เลือกเพื่อย้ายไปกักกัน",
   "SHA1 expected": "SHA1 ที่คาดหวัง",
   "CRC / SHA1 expected": "CRC / SHA1 ที่คาดหวัง",
   "SHA1 found": "SHA1 ที่พบ",
@@ -1651,7 +1651,7 @@
   "Download from Bootcade": "ดาวน์โหลดจาก Bootcade",
   "Download from Bootcade (%1)": "ดาวน์โหลดจาก Bootcade (%1)",
   "Download from Bootcade?": "ดาวน์โหลดจาก Bootcade หรือไม่?",
-  "Download the missing or wrong FinalBurn Neo sets from the Bootcade server, with your account and its daily quota. They go to Import, which checks and files them. Acts on the checked rows, or on every row shown when none is checked.": "ดาวน์โหลดชุด FinalBurn Neo ที่ขาดหรือไม่ถูกต้องจากเซิร์ฟเวอร์ Bootcade ด้วยบัญชีของคุณและโควตารายวัน ไฟล์จะไปที่นำเข้า ซึ่งจะตรวจสอบและจัดเก็บ ใช้กับแถวที่เลือก หรือทุกแถวที่แสดงหากไม่ได้เลือก",
+  "Download the missing or wrong FinalBurn Neo sets from the Bootcade server, with your account and its daily quota. They go to Import, which checks and files them. Acts on the ticked rows shown : everything it can act on is ticked after an audit.": "ดาวน์โหลดชุด FinalBurn Neo ที่ขาดหรือไม่ถูกต้องจากเซิร์ฟเวอร์ Bootcade ด้วยบัญชีของคุณและโควตารายวัน ไฟล์จะไปที่นำเข้า ซึ่งจะตรวจสอบและจัดเก็บ ทำงานกับแถวที่เลือกไว้และแสดงอยู่ : หลังการตรวจสอบ ทุกรายการที่ทำได้จะถูกเลือกไว้",
   "Downloaded %1.": "ดาวน์โหลด %1 แล้ว",
   "Downloading %1 (%2/%3)…": "กำลังดาวน์โหลด %1 (%2/%3)…",
   "Downloads are not possible right now.": "ไม่สามารถดาวน์โหลดได้ในขณะนี้",
@@ -1666,5 +1666,10 @@
   "cancelled": "ยกเลิกแล้ว",
   "not available on the Bootcade server": "ไม่มีบนเซิร์ฟเวอร์ Bootcade",
   "refused by the server (quota or account)": "เซิร์ฟเวอร์ปฏิเสธ (โควตาหรือบัญชี)",
-  "the server is busy, try again later": "เซิร์ฟเวอร์ไม่ว่าง โปรดลองใหม่ภายหลัง"
+  "the server is busy, try again later": "เซิร์ฟเวอร์ไม่ว่าง โปรดลองใหม่ภายหลัง",
+  "right content under another file name": "เนื้อหาถูกต้องแต่ชื่อไฟล์ต่างไป",
+  "%1 set(s) under another file name → moved to Import, which files them under the right name\n": "%1 เซ็ตใช้ชื่อไฟล์อื่น → ย้ายไปที่นำเข้า ซึ่งจะจัดเก็บด้วยชื่อที่ถูกต้อง\n",
+  "Asking the Bootcade server…": "กำลังสอบถามเซิร์ฟเวอร์ Bootcade…",
+  "outdated on the Bootcade server": "เวอร์ชันบนเซิร์ฟเวอร์ Bootcade ล้าสมัย",
+  "Files in the archive the DAT does not need : Fix moves them to quarantine. A set still lacking a ROM is Missing afterwards.": "ไฟล์ในอาร์ไคฟ์ที่ DAT ไม่ต้องการ : การแก้ไขจะย้ายไปกักกัน ชุดที่ยังขาด ROM จะกลายเป็นขาดหายหลังจากนั้น"
 }

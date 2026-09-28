@@ -91,6 +91,12 @@ struct GameEntry {
     // only, and whole-archive actions (quarantine, extra files) belong to
     // the parent's row.
     bool archive_is_own = true;
+    // `archive` is not named after the set but holds exactly its content :
+    // the set left under a former file name (FinalBurn Neo renamed
+    // spec_robo2048 to spec_robo2084). Reported as Misnamed rather than as a
+    // missing set plus an orphan, and Fix MOVES the archive to Import, which
+    // files it under the right name : a copy left the old one behind.
+    bool misnamed_archive = false;
 };
 
 // A BIOS set that is not available, and how many sets depend on it: in a
