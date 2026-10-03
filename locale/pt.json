@@ -1680,6 +1680,7 @@
   "Your score did not make this game's top %1. Beat %2 to appear on the leaderboard.": "A sua pontuação não entrou no top %1 deste jogo. Supere %2 para aparecer na classificação.",
   "Your score did not make this game's top %1.": "A sua pontuação não entrou no top %1 deste jogo.",
   "Your score did not make it into this game's own table.": "A sua pontuação não entrou na tabela de pontuações deste jogo.",
+  "The game had not saved its scores yet when it was closed, so your score was lost. Next time, after entering your name, wait until the game returns to its demo before quitting.": "O jogo ainda não tinha guardado as pontuações quando foi fechado, por isso a sua pontuação perdeu-se. Da próxima vez, depois de introduzir o seu nome, espere que o jogo volte à demonstração antes de sair.",
   "First game on this title : your score is kept and will count very soon.": "Primeiro jogo neste título: a sua pontuação fica guardada e contará muito em breve.",
   "We could not read your score. This is on our side : report it so we can check.": "Não conseguimos ler a sua pontuação. O problema é nosso: comunique-o para verificarmos.",
   "No leaderboard for this version : only original versions are ranked.": "Sem classificação para esta versão: só as versões originais são classificadas.",

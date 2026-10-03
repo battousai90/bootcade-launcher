@@ -206,6 +206,23 @@ static std::string fbneo_saveram_path(const std::string& fbneo_rom_name) {
            "/.local/share/fbneo/config/games/" + fbneo_rom_name + ".fs";
 }
 
+/* Laisse par le FBNeo de Bootcade quand on quitte un jeu Neo Geo avant que
+ * son BIOS ait recopie les scores dans la memoire sauvegardee. Le .fs est
+ * alors bien ecrit, mais sans le score qui vient d'etre entre : le serveur ne
+ * peut pas le voir, et lui repondre << battez 1 500 >> apres un 807 000
+ * decourage le joueur pour une raison qu'il ne peut pas deviner. Le marqueur
+ * est lu une seule fois, puis efface : un FBNeo plus ancien ne le remettrait
+ * pas, et il annoncerait a tort la meme perte a chaque partie. */
+static bool take_unsaved_scores_marker(const std::string& fbneo_rom_name) {
+    const char* home = std::getenv("HOME");
+    const std::string path = std::string(home ? home : "") +
+        "/.local/share/fbneo/config/games/" + fbneo_rom_name + ".unsaved";
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) return false;
+    std::filesystem::remove(path, ec);
+    return true;
+}
+
 // The one file that holds this game's score table. The choice stays the same
 // before and after the session : comparing a .hi against a .fs would compare
 // two unrelated blobs and could publish a score nobody played.
@@ -5772,6 +5789,20 @@ void MainWindow::submit_session_score(const std::string& system,
      * publie : tout le reste (en attente, refuse, garde hors ligne) ne lui
      * promettait rien. */
     const bool ranked = game_ranks_online("fbneo", system, game);
+    const bool unsaved = take_unsaved_scores_marker(fbneo_rom_name);
+    if (unsaved)
+        std::cerr << "[HISCORE] " << system << "/" << game
+                  << " : quitte avant que le jeu ait sauvegarde ses scores" << std::endl;
+    const std::string unsaved_message =
+        _("The game had not saved its scores yet when it was closed, so your score "
+          "was lost. Next time, after entering your name, wait until the game "
+          "returns to its demo before quitting.");
+    // Tout autre verdict parlerait d'une table ou le score n'est jamais entre.
+    auto announce_unsaved = [&] {
+        std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
+        m_hiscore_results.push_back(unsaved_message);
+        m_hiscore_result_dispatcher.emit();
+    };
 
     if (player.empty()) {
         std::string hi_after = read_file_bytes(after_path);
@@ -5779,6 +5810,7 @@ void MainWindow::submit_session_score(const std::string& system,
         HiscoreClient::queue_submission(system, game, player, country, pt,
                                         hi_before, hi_after);
         if (!ranked) return;
+        if (unsaved) { announce_unsaved(); return; }
         std::cerr << "[HISCORE] deconnecte : score gare pour " << system << "/"
                   << game << ", envoye a la prochaine connexion" << std::endl;
         std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
@@ -5792,6 +5824,7 @@ void MainWindow::submit_session_score(const std::string& system,
     std::string hi_after = read_file_bytes(after_path);
     if (hi_after.empty() || hi_after == hi_before) {   // no score table, or nothing new in it
         send_playtime_only();
+        if (unsaved && ranked) announce_unsaved();
         return;
     }
 
@@ -5834,6 +5867,7 @@ void MainWindow::submit_session_score(const std::string& system,
                                         hi_before, hi_after);
         std::cerr << "[HISCORE] queued for later (" << r.error << ")" << std::endl;
         if (!ranked) return;
+        if (unsaved) { announce_unsaved(); return; }
 
         /* Dire la VRAIE raison. Le score est gare dans les trois cas, mais
          * une session expiree, une panne du service et une absence de reseau
@@ -5874,7 +5908,10 @@ void MainWindow::submit_session_score(const std::string& system,
         std::cerr << "[HISCORE] verdict " << r.code << " pour " << system << "/" << game
                   << (r.detail.empty() ? std::string() : " : " + r.detail) << std::endl;
         const std::string& c = r.code;
-        if (c == "not_ranked" || c == "not_ranked_yet" || c == "playtime_only") return;
+        if (c == "not_ranked" || c == "not_ranked_yet" || c == "playtime_only") {
+            if (unsaved && ranked) announce_unsaved();
+            return;
+        }
 
         const std::string metric = HiscoreClient::metric_of(system, game);
         HiscoreNotice notice{std::string()};
@@ -5902,6 +5939,9 @@ void MainWindow::submit_session_score(const std::string& system,
             notice.message = _("Incomplete submission : update the launcher.");
         else
             notice.message = r.detail;   // code inconnu : la phrase de secours
+        if (unsaved && !r.accepted && ranked) {
+            notice = HiscoreNotice{unsaved_message};
+        }
 
         if (!notice.message.empty()) {
             if (r.report) {
@@ -5937,7 +5977,8 @@ void MainWindow::submit_session_score(const std::string& system,
         std::cerr << "[HISCORE] sans objet pour " << system << "/" << game
                   << " : " << (r.reason.empty() ? "aucune raison donnee" : r.reason)
                   << std::endl;
-        if (ranked && !r.reason.empty()) {
+        if (ranked && unsaved) announce_unsaved();
+        else if (ranked && !r.reason.empty()) {
             std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
             m_hiscore_results.push_back(Glib::ustring::compose(
                 _("Score not recorded : %1"), r.reason).raw());
@@ -5981,6 +6022,8 @@ void MainWindow::submit_session_score(const std::string& system,
         // It goes to the log, where it belongs.
         if (!r.reason.empty())
             std::cerr << "[HISCORE] queued: " << r.reason << std::endl;
+    } else if (unsaved) {
+        message = unsaved_message;
     } else {
         // A refusal with an explanation, e.g. a clone having no leaderboard.
         message = r.reason.empty() ? _("Score not kept.") : r.reason;
