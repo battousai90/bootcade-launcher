@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="1.6.0" date="2026-10-04">
+      <description>
+        <p>Play MAME Sooner and get guided setup when no emulator is ready</p>
+      </description>
+    </release>
     <release version="1.5.3" date="2026-10-04">
       <description>
         <p>1.5.3</p>
