@@ -2902,6 +2902,10 @@ void MainWindow::on_play_clicked() {
     // is what a one-pad setup should do. The pad works fine without the flag.
     if (m_launch_fullscreen)   launch_args.push_back("-fullscreen");
     if (m_launch_integerscale) launch_args.push_back("-integerscale");
+    // Filtres et effets d'image de Settings > Emulator > Display : seulement
+    // ceux qui s'ecartent du defaut, et seulement si ce binaire les connait.
+    for (auto& a : m_settings_panel.fbneo_video_args(fbneo_executable))
+        launch_args.push_back(std::move(a));
     /* Ce que le joueur a ajoute lui-meme dans Settings > Emulator.
      *
      * Decoupe sur les espaces, sans passer par un shell : l'interpretation

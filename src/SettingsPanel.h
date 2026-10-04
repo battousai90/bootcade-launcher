@@ -3,6 +3,7 @@
 
 #include <gtkmm.h>
 #include "SettingsUi.h"
+#include "FbneoVideo.h"
 // Seulement la declaration du type : les options MAME se lisent et s'ecrivent
 // en JSON, mais inclure tout nlohmann ici le ferait recompiler a chaque
 // fichier qui n'a besoin que du panneau.
@@ -218,6 +219,11 @@ public:
     void        set_shows_mechanical(bool on) { m_switch_mechanical.set_active(on); }
     void        set_launch_flags(bool fullscreen, bool integerscale);
     std::string get_emulator_extra_args() const { return m_entry_emu_args.get_text(); }
+    /* Les options d'affichage de FinalBurn Neo, pretes a passer au lancement.
+     *
+     * Le chemin est celui que le lancement va executer : les options valides
+     * sont celles que CE binaire annonce, pas celles d'un autre. */
+    std::vector<std::string> fbneo_video_args(const std::string& exe) const;
     // Emis quand une de ces trois options change, pour que la fenetre
     // principale realigne son menu « Launch » sur ce que l'ecran affiche.
     sigc::signal<void>& signal_launch_options_changed() { return m_sig_launch_options; }
@@ -658,6 +664,41 @@ private:
      * dispatcher et le libelle de FinalBurn Neo, puisque le bandeau n'en
      * montre qu'un a la fois. */
     void check_mame_update_async();
+    /* ── Affichage de FinalBurn Neo ───────────────────────────────────
+     *
+     * Les listes (filtres, motifs, backends) viennent du binaire, par
+     * `fbneo -list-video-json`, interroge hors du fil de l'interface. Le
+     * choix du joueur vit dans m_fbneo_video, les widgets n'en sont que la
+     * vue : un filtre absent du build du jour n'efface pas celui qu'on avait
+     * choisi, il redevient actif quand le binaire le propose a nouveau. */
+    FbneoVideo::Options      m_fbneo_video;
+    FbneoVideo::Capabilities m_fbneo_caps;
+    std::string              m_fbneo_caps_key;     // chemin + date du binaire sonde
+    Glib::Dispatcher         m_fbneo_caps_done;
+    std::mutex               m_fbneo_caps_mutex;
+    std::string              m_fbneo_caps_pending_key;
+    FbneoVideo::Capabilities m_fbneo_caps_pending;
+    bool                     m_fx_syncing = false;
+    Gtk::Switch       m_sw_fx_softfx;
+    Gtk::ComboBoxText m_cb_fx_softfx;
+    Gtk::Switch       m_sw_fx_scanlines;
+    Gtk::Scale        m_sc_fx_scanint{Gtk::ORIENTATION_HORIZONTAL};
+    Gtk::Switch       m_sw_fx_rgbmask;
+    Gtk::ComboBoxText m_cb_fx_rgbmask;
+    Gtk::Switch       m_sw_fx_stretch;
+    Gtk::Switch       m_sw_fx_internalres;
+    Gtk::ComboBoxText m_cb_fx_internalres;
+    Gtk::Switch       m_sw_fx_renderer;
+    Gtk::ComboBoxText m_cb_fx_renderer;
+    Gtk::Label        m_lbl_fx_note;
+    Gtk::Widget*      m_emu_video_fbneo = nullptr;
+    Gtk::Widget* build_fbneo_video();
+    // m_fbneo_caps + m_fbneo_video -> widgets (listes comprises).
+    void         fbneo_video_fill();
+    // widgets -> m_fbneo_video, apres un geste du joueur.
+    void         fbneo_video_read();
+    void         sync_fbneo_video_sensitivity();
+    void         probe_fbneo_video_async();
     Glib::Dispatcher m_emu_update_done;
     std::mutex       m_emu_mutex;
     std::string      m_emu_update_msg;
