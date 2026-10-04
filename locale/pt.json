@@ -1783,5 +1783,11 @@
   "\"%1\" is active.": "\"%1\" está ativo.",
   "\"%1\" is active, \"%2\" is turned off. The database reloads in a moment…": "\"%1\" está ativo, \"%2\" foi desativado. O banco de dados será recarregado em instantes…",
   "\"%1\" is active, \"%2\" is turned off.": "\"%1\" está ativo, \"%2\" foi desativado.",
-  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "Grupo \"%1\" criado, desativado: configure-o e depois ative-o para usá-lo no lugar do atual."
+  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "Grupo \"%1\" criado, desativado: configure-o e depois ative-o para usá-lo no lugar do atual.",
+  "MAME is not installed on this system. Install it with your package manager, or open Settings › Emulator › MAME, choose Sooner and press Download.": "O MAME não está instalado neste sistema. Instale-o com seu gerenciador de pacotes, ou abra Configurações › Emulador › MAME, escolha Sooner e clique em Baixar.",
+  "FinalBurn Neo is not set up yet. Open Settings › Emulator › FinalBurn Neo and press Download, or choose an FBNeo executable you already have.": "O FinalBurn Neo ainda não está configurado. Abra Configurações › Emulador › FinalBurn Neo e clique em Baixar, ou escolha um executável do FBNeo que você já tenha.",
+  "Download FinalBurn Neo again, or choose the right file, in Settings.": "Baixe o FinalBurn Neo novamente, ou escolha o arquivo certo, nas Configurações.",
+  "Open Settings": "Abrir configurações",
+  "No emulator is ready yet": "Nenhum emulador está pronto ainda",
+  "Bootcade plays games with FinalBurn Neo or MAME, and neither is ready on this system. One of them is enough:\n\n• FinalBurn Neo: Settings › Emulator › FinalBurn Neo, then Download.\n• MAME: install it with your package manager, or Settings › Emulator › MAME, choose Sooner, then Download.\n\nThen add the folders that hold your ROMs in Settings › Library.": "O Bootcade roda os jogos com o FinalBurn Neo ou o MAME, e nenhum dos dois está pronto neste sistema. Um basta:\n\n• FinalBurn Neo: Configurações › Emulador › FinalBurn Neo, depois Baixar.\n• MAME: instale-o com seu gerenciador de pacotes, ou Configurações › Emulador › MAME, escolha Sooner, depois Baixar.\n\nDepois adicione as pastas com suas ROMs em Configurações › Biblioteca."
 }

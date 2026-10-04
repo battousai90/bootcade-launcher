@@ -19,6 +19,9 @@
 
 class SettingsPanel : public Gtk::Box {
 public:
+    // L'onglet Emulator, sur la fiche de cet emulateur (« fbneo », « mame ») :
+    // la ou se regle ce qui manque pour jouer.
+    void open_emulator(const std::string& emulator_id);
     SettingsPanel();
     virtual ~SettingsPanel();
 

@@ -1783,5 +1783,11 @@
   "\"%1\" is active.": "„%1“ ist aktiv.",
   "\"%1\" is active, \"%2\" is turned off. The database reloads in a moment…": "„%1“ ist aktiv, „%2“ ist ausgeschaltet. Die Datenbank wird gleich neu geladen…",
   "\"%1\" is active, \"%2\" is turned off.": "„%1“ ist aktiv, „%2“ ist ausgeschaltet.",
-  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "Gruppe „%1“ erstellt, ausgeschaltet: richten Sie sie ein und schalten Sie sie dann ein, um sie statt der aktuellen zu nutzen."
+  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "Gruppe „%1“ erstellt, ausgeschaltet: richten Sie sie ein und schalten Sie sie dann ein, um sie statt der aktuellen zu nutzen.",
+  "MAME is not installed on this system. Install it with your package manager, or open Settings › Emulator › MAME, choose Sooner and press Download.": "MAME ist auf diesem System nicht installiert. Installieren Sie es mit Ihrer Paketverwaltung, oder öffnen Sie Einstellungen › Emulator › MAME, wählen Sie Sooner und klicken Sie auf Herunterladen.",
+  "FinalBurn Neo is not set up yet. Open Settings › Emulator › FinalBurn Neo and press Download, or choose an FBNeo executable you already have.": "FinalBurn Neo ist noch nicht eingerichtet. Öffnen Sie Einstellungen › Emulator › FinalBurn Neo und klicken Sie auf Herunterladen, oder wählen Sie eine vorhandene FBNeo-Programmdatei.",
+  "Download FinalBurn Neo again, or choose the right file, in Settings.": "Laden Sie FinalBurn Neo erneut herunter oder wählen Sie die richtige Datei in den Einstellungen.",
+  "Open Settings": "Einstellungen öffnen",
+  "No emulator is ready yet": "Noch kein Emulator bereit",
+  "Bootcade plays games with FinalBurn Neo or MAME, and neither is ready on this system. One of them is enough:\n\n• FinalBurn Neo: Settings › Emulator › FinalBurn Neo, then Download.\n• MAME: install it with your package manager, or Settings › Emulator › MAME, choose Sooner, then Download.\n\nThen add the folders that hold your ROMs in Settings › Library.": "Bootcade startet Spiele mit FinalBurn Neo oder MAME, und keiner von beiden ist auf diesem System bereit. Einer genügt:\n\n• FinalBurn Neo: Einstellungen › Emulator › FinalBurn Neo, dann Herunterladen.\n• MAME: mit Ihrer Paketverwaltung installieren, oder Einstellungen › Emulator › MAME, Sooner wählen, dann Herunterladen.\n\nFügen Sie dann die Ordner mit Ihren ROMs unter Einstellungen › Bibliothek hinzu."
 }

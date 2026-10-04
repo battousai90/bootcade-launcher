@@ -1783,5 +1783,11 @@
   "\"%1\" is active.": "「%1」が有効です。",
   "\"%1\" is active, \"%2\" is turned off. The database reloads in a moment…": "「%1」が有効になり、「%2」はオフになりました。まもなくデータベースを再読み込みします…",
   "\"%1\" is active, \"%2\" is turned off.": "「%1」が有効になり、「%2」はオフになりました。",
-  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "グループ「%1」を作成しました(オフ)。設定してからオンにすると、現在のグループの代わりに使われます。"
+  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "グループ「%1」を作成しました(オフ)。設定してからオンにすると、現在のグループの代わりに使われます。",
+  "MAME is not installed on this system. Install it with your package manager, or open Settings › Emulator › MAME, choose Sooner and press Download.": "このシステムには MAME がインストールされていません。パッケージマネージャーでインストールするか、設定 › エミュレーター › MAME で Sooner を選んで「ダウンロード」を押してください。",
+  "FinalBurn Neo is not set up yet. Open Settings › Emulator › FinalBurn Neo and press Download, or choose an FBNeo executable you already have.": "FinalBurn Neo はまだ設定されていません。設定 › エミュレーター › FinalBurn Neo で「ダウンロード」を押すか、お持ちの FBNeo 実行ファイルを選んでください。",
+  "Download FinalBurn Neo again, or choose the right file, in Settings.": "設定で FinalBurn Neo を再ダウンロードするか、正しいファイルを選んでください。",
+  "Open Settings": "設定を開く",
+  "No emulator is ready yet": "準備できたエミュレーターがまだありません",
+  "Bootcade plays games with FinalBurn Neo or MAME, and neither is ready on this system. One of them is enough:\n\n• FinalBurn Neo: Settings › Emulator › FinalBurn Neo, then Download.\n• MAME: install it with your package manager, or Settings › Emulator › MAME, choose Sooner, then Download.\n\nThen add the folders that hold your ROMs in Settings › Library.": "Bootcade は FinalBurn Neo または MAME でゲームを起動しますが、このシステムではどちらも準備できていません。どちらか一方で十分です:\n\n• FinalBurn Neo: 設定 › エミュレーター › FinalBurn Neo で「ダウンロード」。\n• MAME: パッケージマネージャーでインストールするか、設定 › エミュレーター › MAME で Sooner を選んで「ダウンロード」。\n\nその後、設定 › ライブラリで ROM のあるフォルダーを追加してください。"
 }

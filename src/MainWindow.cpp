@@ -2610,9 +2610,10 @@ void MainWindow::on_play_clicked() {
         // automatique quand le champ est vide.
         const std::string mame = m_settings_panel.mame_executable();
         if (mame.empty()) {
-            SettingsUi::notice(*this, _("MAME not found"),
-                               _("MAME does not seem to be installed on this system."),
-                               "bc-error.svg");
+            emulator_problem("mame", _("MAME not found"),
+                             _("MAME is not installed on this system. Install it with your package "
+                               "manager, or open Settings › Emulator › MAME, choose Sooner and press "
+                               "Download."));
             return;
         }
 
@@ -2838,9 +2839,9 @@ void MainWindow::on_play_clicked() {
     std::vector<std::string> roms_paths = m_settings_panel.get_roms_paths();
     
     if (fbneo_executable.empty()) {
-        SettingsUi::notice(*this, _("FBNeo not configured"),
-                           _("Please set the FBNeo executable path in Settings."),
-                           "bc-error.svg");
+        emulator_problem("fbneo", _("FBNeo not configured"),
+                         _("FinalBurn Neo is not set up yet. Open Settings › Emulator › FinalBurn Neo "
+                           "and press Download, or choose an FBNeo executable you already have."));
         return;
     }
 
@@ -2849,10 +2850,9 @@ void MainWindow::on_play_clicked() {
         std::error_code ec;
         auto status_fs = std::filesystem::status(fbneo_executable, ec);
         if (ec || !std::filesystem::exists(status_fs)) {
-            SettingsUi::notice(*this, _("FBNeo executable not found"),
-                               _("The file does not exist:\n") + fbneo_executable
-                                   + "\n\nPlease update the path in Settings.",
-                               "bc-error.svg");
+            emulator_problem("fbneo", _("FBNeo executable not found"),
+                             _("The file does not exist:\n") + fbneo_executable
+                                 + "\n\n" + _("Download FinalBurn Neo again, or choose the right file, in Settings."));
             return;
         }
         if (access(fbneo_executable.c_str(), X_OK) != 0) {
@@ -3633,6 +3633,38 @@ void MainWindow::run_update_dat_once(const std::string& emulator) {
     }
 }
 
+
+void MainWindow::emulator_problem(const std::string& emulator_id, const std::string& title,
+                                  const std::string& message) {
+    if (SettingsUi::offer(*this, title, message, _("Open Settings"), "bc-error.svg", "gear.svg"))
+        open_emulator_settings(emulator_id);
+}
+
+void MainWindow::open_emulator_settings(const std::string& emulator_id) {
+    on_settings_clicked();
+    m_settings_panel.open_emulator(emulator_id);
+}
+
+/* Aucun emulateur pret : le joueur doit l'apprendre en ouvrant Bootcade.
+ *
+ * Avant, il ne le decouvrait qu'en cliquant sur Play, jeu apres jeu, et rien
+ * ne lui disait par ou commencer. Le message revient a chaque demarrage tant
+ * que ni FinalBurn Neo ni MAME ne peut lancer un jeu : sans eux, Bootcade ne
+ * sert a rien. Un seul des deux suffit : l'autre reste facultatif, et son
+ * etat se lit en bas de la colonne. */
+void MainWindow::check_emulators_ready() {
+    const std::string fbneo = m_settings_panel.get_fbneo_executable();
+    const bool fbneo_ok = !fbneo.empty() && ::access(fbneo.c_str(), X_OK) == 0;
+    const bool mame_ok  = MameCatalog::is_runnable(m_settings_panel.mame_executable());
+    if (fbneo_ok || mame_ok) return;
+    emulator_problem("fbneo", _("No emulator is ready yet"),
+        _("Bootcade plays games with FinalBurn Neo or MAME, and neither is ready on this "
+          "system. One of them is enough:\n\n"
+          "• FinalBurn Neo: Settings › Emulator › FinalBurn Neo, then Download.\n"
+          "• MAME: install it with your package manager, or Settings › Emulator › MAME, "
+          "choose Sooner, then Download.\n\n"
+          "Then add the folders that hold your ROMs in Settings › Library."));
+}
 
 void MainWindow::on_settings_clicked() {
     // Deja ouverte : on la ramene devant plutot que d'en ouvrir une seconde.

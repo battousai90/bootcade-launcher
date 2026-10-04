@@ -1783,5 +1783,11 @@
   "\"%1\" is active.": "“%1”已启用。",
   "\"%1\" is active, \"%2\" is turned off. The database reloads in a moment…": "“%1”已启用,“%2”已关闭。数据库即将重新加载…",
   "\"%1\" is active, \"%2\" is turned off.": "“%1”已启用,“%2”已关闭。",
-  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "已创建组“%1”(已关闭):设置好后启用,即可代替当前组使用。"
+  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "已创建组“%1”(已关闭):设置好后启用,即可代替当前组使用。",
+  "MAME is not installed on this system. Install it with your package manager, or open Settings › Emulator › MAME, choose Sooner and press Download.": "本系统未安装 MAME。请用软件包管理器安装,或打开 设置 › 模拟器 › MAME,选择 Sooner 并点击“下载”。",
+  "FinalBurn Neo is not set up yet. Open Settings › Emulator › FinalBurn Neo and press Download, or choose an FBNeo executable you already have.": "FinalBurn Neo 尚未设置。请打开 设置 › 模拟器 › FinalBurn Neo 并点击“下载”,或选择您已有的 FBNeo 可执行文件。",
+  "Download FinalBurn Neo again, or choose the right file, in Settings.": "请在设置中重新下载 FinalBurn Neo,或选择正确的文件。",
+  "Open Settings": "打开设置",
+  "No emulator is ready yet": "还没有可用的模拟器",
+  "Bootcade plays games with FinalBurn Neo or MAME, and neither is ready on this system. One of them is enough:\n\n• FinalBurn Neo: Settings › Emulator › FinalBurn Neo, then Download.\n• MAME: install it with your package manager, or Settings › Emulator › MAME, choose Sooner, then Download.\n\nThen add the folders that hold your ROMs in Settings › Library.": "Bootcade 使用 FinalBurn Neo 或 MAME 运行游戏,但本系统上两者都未就绪。任选其一即可:\n\n• FinalBurn Neo:设置 › 模拟器 › FinalBurn Neo,然后“下载”。\n• MAME:用软件包管理器安装,或 设置 › 模拟器 › MAME,选择 Sooner,然后“下载”。\n\n然后在 设置 › 库 中添加存放 ROM 的文件夹。"
 }

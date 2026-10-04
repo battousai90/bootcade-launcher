@@ -2396,6 +2396,15 @@ std::vector<std::string> SettingsPanel::fbneo_video_args(const std::string& exe)
  * a la distribution et n'est qu'interroge. Montrer les memes cartes aux deux
  * promettrait des gestes qui n'existent pas pour l'un d'eux.
  */
+void SettingsPanel::open_emulator(const std::string& emulator_id) {
+    // L'onglet par son bouton : le meme geste que le clic du joueur.
+    if (m_tabs_buttons.size() > 2) m_tabs_buttons[2]->clicked();
+    const auto& registry = emulator_registry();
+    for (size_t i = 0; i < registry.size(); ++i)
+        if (registry[i].id == emulator_id)
+            if (auto* row = m_emu_list.get_row_at_index(static_cast<int>(i))) m_emu_list.select_row(*row);
+}
+
 void SettingsPanel::show_emulator_page(size_t index) {
     const auto& registry = emulator_registry();
     if (registry.empty()) return;

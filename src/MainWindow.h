@@ -34,6 +34,9 @@ class ControllerDialog;
 
 class MainWindow : public Gtk::Window {
 public:
+    // Aucun emulateur pret : dire au joueur quoi faire, une fois la fenetre
+    // affichee (au demarrage).
+    void check_emulators_ready();
     /* Ouverture directe d'une fenetre, pour l'automatisation.
      *
      * Sans elle, photographier « Controller Configuration » demandait de
@@ -80,6 +83,11 @@ private:
     Gtk::Window*      m_controller_win = nullptr;
 
     void on_settings_clicked();
+    // Les Settings, ouverts sur la fiche de cet emulateur.
+    void open_emulator_settings(const std::string& emulator_id);
+    // Un message, et « Open Settings » qui mene a la fiche de l'emulateur.
+    void emulator_problem(const std::string& emulator_id, const std::string& title,
+                          const std::string& message);
     void on_hide();
     void on_quit();
     

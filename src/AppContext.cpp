@@ -1,5 +1,8 @@
 // src/AppContext.cpp
 #include "AppContext.h"
+#include <ctime>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <unistd.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -150,6 +153,27 @@ std::string AppContext::get_user_config_dir() {
 
 std::string AppContext::get_config_path() {
     return get_user_config_dir() + "/config.json";
+}
+
+void AppContext::ensure_config() {
+    const std::string path = get_config_path();
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec)) {
+        bool ok = false;
+        try {
+            std::ifstream in(path);
+            nlohmann::json j;
+            in >> j;
+            ok = j.is_object();
+        } catch (...) {}
+        if (ok) return;
+        // Illisible : garde pour qui voudra le reparer, jamais ecrase.
+        const std::string aside = path + ".unreadable-" + std::to_string(std::time(nullptr));
+        std::filesystem::rename(path, aside, ec);
+        std::cerr << "[WARN] config.json could not be read : kept as " << aside << std::endl;
+    }
+    std::ofstream out(path, std::ios::trunc);
+    out << "{}\n";
 }
 
 

@@ -103,6 +103,12 @@ int main(int argc, char *argv[]) {
     if (const char* wd = std::getenv("BOOTCADE_WATCHDOG"); wd && *wd && std::string(wd) != "0")
         start_main_loop_watchdog();
 
+    // Avant toute lecture : un premier demarrage n'a pas encore de config.json,
+    // et plusieurs lecteurs en prennent les cles avec json::value(), qui leve
+    // une exception sur un document vide. Le launcher plantait ainsi des le
+    // premier lancement d'un nouveau joueur.
+    AppContext::ensure_config();
+
     // Initialize translations before any UI string is built. Use the language saved
     // in settings if any; otherwise auto-detect the system language (English fallback).
     std::string ui_lang;
@@ -372,19 +378,6 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            // Diagnostic : installer le MAME Sooner publie (ou celui de
-            // BOOTCADE_MAME_SOONER_URL) sans passer par l'interface.
-            if (const char* so = std::getenv("BOOTCADE_MAME_SOONER"); so && *so == '1') {
-                const auto info = MameSooner::fetch_info();
-                std::string err;
-                const bool ok = info.ok && MameSooner::install(info, err);
-                std::cout << "[SOONER] info=" << (info.ok ? info.build : info.error)
-                          << " install=" << (ok ? "ok" : err)
-                          << " exe=" << MameSooner::executable()
-                          << " missing=" << MameSooner::missing_libraries(MameSooner::executable())
-                          << std::endl;
-            }
-
             if (const char* want = std::getenv("BOOTCADE_MAME_AUDIT")) {
                 if (*want && *want != '0') {
                     std::vector<std::string> paths;
@@ -435,6 +428,12 @@ int main(int argc, char *argv[]) {
             window.open_named_window(open_window);
         });
     }
+
+    // Une fois la fenetre a l'ecran : un message avant elle n'aurait pas de
+    // parent, et le joueur ne verrait pas de quoi on lui parle.
+    window.signal_show().connect([&window] {
+        Glib::signal_timeout().connect_once([&window] { window.check_emulators_ready(); }, 400);
+    });
 
     int rc = app->run(window);
     return rc;

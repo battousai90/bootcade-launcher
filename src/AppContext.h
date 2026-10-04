@@ -8,6 +8,11 @@ public:
     static std::string get_executable_dir();
     static std::string get_user_config_dir();
     static std::string get_config_path();
+    // config.json exists and holds a JSON object once this has run : created
+    // empty on a first start, set aside (config.json.unreadable-<time>) and
+    // recreated when it cannot be read. Called once, at the very start : many
+    // readers take its keys with json::value(), which throws on a missing file.
+    static void ensure_config();
 
     // Root holding assets/ and locale/. Resolved once, by probing the layouts the
     // app can actually be run from: the build tree, a portable/AppImage bundle, and

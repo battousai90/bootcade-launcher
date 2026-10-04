@@ -1783,5 +1783,11 @@
   "\"%1\" is active.": "“%1” ใช้งานอยู่",
   "\"%1\" is active, \"%2\" is turned off. The database reloads in a moment…": "“%1” ใช้งานอยู่ “%2” ถูกปิด ฐานข้อมูลจะโหลดใหม่ในไม่ช้า…",
   "\"%1\" is active, \"%2\" is turned off.": "“%1” ใช้งานอยู่ “%2” ถูกปิด",
-  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "สร้างกลุ่ม “%1” แล้ว (ปิดอยู่): ตั้งค่าแล้วเปิดใช้เพื่อใช้แทนกลุ่มปัจจุบัน"
+  "Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one.": "สร้างกลุ่ม “%1” แล้ว (ปิดอยู่): ตั้งค่าแล้วเปิดใช้เพื่อใช้แทนกลุ่มปัจจุบัน",
+  "MAME is not installed on this system. Install it with your package manager, or open Settings › Emulator › MAME, choose Sooner and press Download.": "ยังไม่ได้ติดตั้ง MAME ในระบบนี้ ติดตั้งด้วยตัวจัดการแพ็กเกจ หรือเปิด การตั้งค่า › อีมูเลเตอร์ › MAME เลือก Sooner แล้วกด ดาวน์โหลด",
+  "FinalBurn Neo is not set up yet. Open Settings › Emulator › FinalBurn Neo and press Download, or choose an FBNeo executable you already have.": "ยังไม่ได้ตั้งค่า FinalBurn Neo เปิด การตั้งค่า › อีมูเลเตอร์ › FinalBurn Neo แล้วกด ดาวน์โหลด หรือเลือกไฟล์โปรแกรม FBNeo ที่คุณมีอยู่แล้ว",
+  "Download FinalBurn Neo again, or choose the right file, in Settings.": "ดาวน์โหลด FinalBurn Neo ใหม่ หรือเลือกไฟล์ที่ถูกต้องในการตั้งค่า",
+  "Open Settings": "เปิดการตั้งค่า",
+  "No emulator is ready yet": "ยังไม่มีอีมูเลเตอร์ที่พร้อมใช้งาน",
+  "Bootcade plays games with FinalBurn Neo or MAME, and neither is ready on this system. One of them is enough:\n\n• FinalBurn Neo: Settings › Emulator › FinalBurn Neo, then Download.\n• MAME: install it with your package manager, or Settings › Emulator › MAME, choose Sooner, then Download.\n\nThen add the folders that hold your ROMs in Settings › Library.": "Bootcade เล่นเกมด้วย FinalBurn Neo หรือ MAME แต่ทั้งสองยังไม่พร้อมในระบบนี้ ใช้อย่างใดอย่างหนึ่งก็พอ:\n\n• FinalBurn Neo: การตั้งค่า › อีมูเลเตอร์ › FinalBurn Neo แล้วกด ดาวน์โหลด\n• MAME: ติดตั้งด้วยตัวจัดการแพ็กเกจ หรือ การตั้งค่า › อีมูเลเตอร์ › MAME เลือก Sooner แล้วกด ดาวน์โหลด\n\nจากนั้นเพิ่มโฟลเดอร์ที่เก็บ ROM ใน การตั้งค่า › คลัง"
 }

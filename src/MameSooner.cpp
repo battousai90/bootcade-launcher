@@ -48,12 +48,7 @@ int on_progress(void* data, curl_off_t total, curl_off_t now, curl_off_t, curl_o
     return 0;
 }
 
-// BOOTCADE_MAME_SOONER_URL remplace l'adresse de la fiche, pour essayer un
-// serveur de chantier sans toucher a celui des joueurs.
-std::string info_url() {
-    if (const char* env = std::getenv("BOOTCADE_MAME_SOONER_URL"); env && *env) return env;
-    return kInfoUrl;
-}
+std::string info_url() { return kInfoUrl; }
 
 nlohmann::json read_config() {
     nlohmann::json j;
