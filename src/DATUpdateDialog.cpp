@@ -116,6 +116,10 @@ void DATUpdateDialog::start_update() {
     m_worker_thread = std::thread(&DATUpdateDialog::worker_thread, this);
 }
 
+void DATUpdateDialog::note_conflicts(const std::vector<std::string>& conflicts) {
+    for (const auto& c : conflicts) add_log_message("Skipped: " + c, Level::Warn);
+}
+
 void DATUpdateDialog::on_cancel_clicked() {
     m_cancelled.store(true);
     m_cancel_button->set_sensitive(false);

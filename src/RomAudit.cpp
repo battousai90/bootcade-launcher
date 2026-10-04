@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <cctype>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -13,6 +14,39 @@ namespace fs = std::filesystem;
 
 namespace RomAudit {
 namespace {
+
+/* Une copie qu'un DAT demande en double.
+ *
+ * Certains DAT listent le meme fichier plusieurs fois dans un set (les DAT
+ * MAME de Pleasuredome : « basic200.rom » trois fois dans abc110, meme
+ * CRC). Un zip ne tient pas deux entrees du meme nom : RomVault range les
+ * copies sous « basic200_0.rom », « basic200_1.rom ». La base, elle, ne
+ * garde qu'une ligne par nom de ROM, donc ces copies semblaient en trop, et
+ * Fix les retirait — RomVault les reclamait ensuite comme manquantes.
+ *
+ * Une entree « <nom>_<n><ext> » n'est donc pas en trop quand le set attend
+ * « <nom><ext> » et qu'elle a exactement le meme contenu (meme CRC) : c'est
+ * la meme ROM, rangee comme le DAT le demande. Elle n'est jamais exigee pour
+ * autant : un zip qui n'en a qu'une copie reste correct. */
+bool duplicate_copy(const RomResolve::Archive& archive, const std::string& entry,
+                    const std::unordered_map<std::string, unsigned long>& required_crc) {
+    const std::string path = DatLayout::entry_path(entry);
+    const auto slash = path.rfind('/');
+    const auto dot   = path.rfind('.');
+    const size_t stem_end = (dot == std::string::npos || (slash != std::string::npos && dot < slash))
+                                ? path.size() : dot;
+    const auto us = path.rfind('_', stem_end);
+    if (us == std::string::npos || us + 1 >= stem_end || (slash != std::string::npos && us < slash))
+        return false;
+    for (size_t i = us + 1; i < stem_end; ++i)
+        if (!std::isdigit((unsigned char)path[i])) return false;
+    const std::string base = path.substr(0, us) + path.substr(stem_end);
+    const auto want = required_crc.find(base);
+    if (want == required_crc.end()) return false;
+    const auto have = archive.crc_by_name.find(entry);
+    return have != archive.crc_by_name.end() && have->second == want->second;
+}
+
 
 void report(const RomInbox::Callbacks& cb, double pct, const std::string& msg) {
     if (cb.progress) cb.progress(pct, msg);
@@ -201,11 +235,16 @@ Report audit(std::shared_ptr<DatabaseManager> db,
             // a merged clone's row speaks for its part of its parent's archive.
             if (own && e.archive_is_own) {
                 std::unordered_set<std::string> required;
-                for (const auto& x : arc->entries) required.insert(x.name);
+                std::unordered_map<std::string, unsigned long> required_crc;
+                for (const auto& x : arc->entries) {
+                    required.insert(x.name);
+                    required_crc.emplace(x.name, x.crc);
+                }
                 for (const auto& r : e.roms) if (!r.found_as.empty()) required.insert(r.found_as);
                 for (const auto& name : own->entries)
                     if (!required.count(name) && !required.count(RomScanner::normalize_name(name))
-                        && !required.count(DatLayout::entry_path(name)))
+                        && !required.count(DatLayout::entry_path(name))
+                        && !duplicate_copy(*own, name, required_crc))
                         e.extra_entries.push_back(name);
             }
         }

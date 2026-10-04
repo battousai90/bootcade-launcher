@@ -3,6 +3,7 @@
 #include "SplashScreen.h"
 #include "DatabaseManager.h"
 #include "MameCatalog.h"
+#include "MameSooner.h"
 #include "DatSource.h"
 #include "RomAudit.h"
 #include "RomScanner.h"
@@ -101,6 +102,12 @@ int main(int argc, char *argv[]) {
     auto app = Gtk::Application::create(argc, argv, "org.gilbert.bootcade");
     if (const char* wd = std::getenv("BOOTCADE_WATCHDOG"); wd && *wd && std::string(wd) != "0")
         start_main_loop_watchdog();
+
+    // Avant toute lecture : un premier demarrage n'a pas encore de config.json,
+    // et plusieurs lecteurs en prennent les cles avec json::value(), qui leve
+    // une exception sur un document vide. Le launcher plantait ainsi des le
+    // premier lancement d'un nouveau joueur.
+    AppContext::ensure_config();
 
     // Initialize translations before any UI string is built. Use the language saved
     // in settings if any; otherwise auto-detect the system language (English fallback).
@@ -314,7 +321,9 @@ int main(int argc, char *argv[]) {
     // FBNeo n'est pas touche. Sans MAME sur la machine, on passe simplement
     // notre chemin.
     try {
-        const std::string mame = MameCatalog::find_executable();
+        // Celui que le joueur utilise : le Sooner si c'est son canal, sinon
+        // celui qu'il a designe, sinon celui du systeme.
+        const std::string mame = MameSooner::resolve_executable();
         if (!mame.empty()) {
             splash.set_progress(0.72, "Reading the MAME catalog...");
             const int n = MameCatalog::sync(database, mame,
@@ -419,6 +428,12 @@ int main(int argc, char *argv[]) {
             window.open_named_window(open_window);
         });
     }
+
+    // Une fois la fenetre a l'ecran : un message avant elle n'aurait pas de
+    // parent, et le joueur ne verrait pas de quoi on lui parle.
+    window.signal_show().connect([&window] {
+        Glib::signal_timeout().connect_once([&window] { window.check_emulators_ready(); }, 400);
+    });
 
     int rc = app->run(window);
     return rc;

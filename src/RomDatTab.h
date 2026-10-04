@@ -143,6 +143,9 @@ private:
     void worker_check();
     void worker_site();
     void on_download_site(size_t site);
+    // Custom URL : on_download_site avec cet index, l'adresse du groupe.
+    static constexpr size_t kCustomUrl = (size_t)-1;
+    void on_download_url();
     void worker_download();
     void push_progress(double pct, const std::string& msg);
     void push_log(const std::string& msg);
@@ -187,17 +190,31 @@ private:
     Gtk::Button*        m_btn_add = nullptr;
     Gtk::MenuButton*    m_btn_more = nullptr;
     Gtk::Menu           m_more_menu;
-    Gtk::MenuButton*    m_btn_site = nullptr;   // Local folder : download from a DAT site
-    Gtk::Menu           m_site_menu;
-    std::vector<std::pair<Gtk::MenuItem*, std::string>> m_site_items;   // item, emulator
-    Gtk::RadioButton    m_radio_emulator, m_radio_http, m_radio_folder;
-    Gtk::Box            m_url_line;   // libelle + adresse du manifeste
+    Gtk::RadioButton    m_radio_emulator, m_radio_http, m_radio_url, m_radio_site, m_radio_folder;
+    Gtk::Box            m_url_line;   // Custom URL : l'adresse, et Unzip archives
     Gtk::Entry          m_entry_url;
+    Gtk::CheckButton    m_check_unzip;
+    Gtk::Box            m_site_line;  // DAT site : le site choisi
+    Gtk::ComboBoxText   m_combo_site; // id = libelle du site (DatSource::sites())
+    // Vrai pendant qu'on remplit ces controles depuis le groupe : leurs
+    // signaux ne doivent pas l'ecrire en retour.
+    bool                m_source_filling = false;
+    // Le groupe dont le champ montre l'adresse : il est partage par tous les
+    // groupes, et le quitter apres avoir change de groupe ecrivait l'adresse
+    // de l'ancien dans le nouveau.
+    std::string         m_url_group;
     Gtk::Label          m_source_hint;
     Gtk::Label          m_status;
 
     SettingsUi::Table*  m_table = nullptr;
     Gtk::Box            m_info_column{Gtk::ORIENTATION_VERTICAL, SettingsUi::kCardSpacing};
+    // Les quatre cartes de la colonne se replient comme celles des Settings
+    // (SettingsUi::fold) ; leur etat se retrouve d'une ouverture a l'autre
+    // (cle « rom_dat_sections » de config.json).
+    std::map<std::string, SettingsUi::Fold> m_folds;
+    Gtk::Widget* fold_card(const SettingsUi::Card& card, const std::string& key,
+                           std::function<std::string()> describe);
+    void         refresh_folds();
     Gtk::Grid           m_info_grid;
     std::map<std::string, Gtk::Label*> m_info_values;
     Gtk::Button*        m_btn_open_in_folder = nullptr;
@@ -260,6 +277,8 @@ private:
     int                      m_job_downloaded = 0, m_job_failed = 0;
     std::string              m_job_url, m_job_folder, m_job_group_id;
     size_t                   m_job_site = 0;
+    std::string              m_job_custom_url;   // Custom URL : l'adresse a telecharger
+    bool                     m_job_unzip = true;
     std::vector<std::string> m_job_written, m_job_before;
     DatSource::Group         m_job_group;
 

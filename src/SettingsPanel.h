@@ -19,6 +19,9 @@
 
 class SettingsPanel : public Gtk::Box {
 public:
+    // L'onglet Emulator, sur la fiche de cet emulateur (« fbneo », « mame ») :
+    // la ou se regle ce qui manque pour jouer.
+    void open_emulator(const std::string& emulator_id);
     SettingsPanel();
     virtual ~SettingsPanel();
 
@@ -512,14 +515,7 @@ private:
      * L'etat est garde dans config.json : refaire le meme pliage a chaque
      * ouverture serait un reglage qui ne se souvient de rien.
      */
-    struct Section {
-        Gtk::Revealer*    body     = nullptr;
-        Gtk::Label*       summary  = nullptr;
-        SettingsUi::Icon* chevron  = nullptr;
-        // Ce que la section dit d'elle-meme une fois fermee. Recalcule a
-        // chaque repli : un resume fige mentirait des le premier reglage.
-        std::function<std::string()> describe;
-    };
+    using Section = SettingsUi::Fold;
     std::map<std::string, Section> m_sections;
     Gtk::Widget* collapsible(const SettingsUi::Card& card, const std::string& key,
                              bool open_by_default,
@@ -533,6 +529,17 @@ private:
     SettingsUi::Icon m_mame_exe_state_icon{"bc-info.svg", 16};
     Gtk::Label   m_mame_exe_state_text;
     Gtk::Button  m_btn_test_mame;
+    // Quel MAME : la version publiee (celui du systeme ou celui designe
+    // ci-dessus) ou Sooner, celui en cours de developpement que Bootcade
+    // telecharge (MameSooner.h). Le canal decide aussi des DAT que le
+    // serveur Bootcade sert au groupe MAME.
+    Gtk::ComboBoxText m_combo_mame_channel;
+    Gtk::Box     m_sooner_line{Gtk::ORIENTATION_HORIZONTAL, 10};
+    Gtk::Label   m_lbl_sooner;
+    Gtk::Button  m_btn_sooner;
+    std::string  mame_channel() const;
+    void         refresh_sooner_state();
+    void         on_sooner_download();
     // Les tuiles du bandeau d'identite, au meme endroit et dans le meme
     // dessin que la bande Build / Installed / Last checked de FinalBurn Neo :
     // deux emulateurs qui repondent aux memes questions doivent y repondre a

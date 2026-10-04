@@ -902,4 +902,127 @@ void Choice::choose(int index, bool emit) {
     if (emit) m_changed.emit();
 }
 
+/* ── Une carte que l'on peut replier ────────────────────────────────────
+ *
+ * Meme langage visuel que le volet de details de la fenetre principale : le
+ * titre reste, et une fois la section fermee un RESUME prend la place de ce
+ * qui disparait. Replier sans resume effacerait l'information au lieu de la
+ * ranger, et il faudrait rouvrir chaque section rien que pour savoir
+ * laquelle rouvrir.
+ *
+ * L'en-tete de la carte EST la poignee : la tuile, le titre et le sous-titre
+ * sont deja la ou l'oeil vise, et un bouton de repli pose a cote aurait
+ * donne deux commandes pour un seul geste.
+ *
+ * Pas de Gtk::Expander ici, malgre le volet de details : sa fleche est celle
+ * du theme du bureau, que la feuille de style de cette fenetre efface deja
+ * (« .cc-window expander > title > arrow »), et son etiquette garde sa
+ * largeur NATURELLE — le resume et le chevron se collaient au sous-titre au
+ * lieu de tenir le bord droit, et deux cartes voisines ne les alignaient
+ * plus. L'en-tete reste donc un enfant ordinaire de la carte, qui prend
+ * toute sa largeur comme les boutons d'action des autres cartes, et c'est le
+ * CORPS qui se montre ou se cache.
+ */
+Fold fold(const Card& card, bool open_by_default,
+          std::function<std::string()> describe,
+          std::function<void()> toggled,
+          std::function<void()> revealed) {
+    Fold section;
+    section.describe = std::move(describe);
+
+    auto* chevron = Gtk::make_managed<Icon>("bc-chevron-down.svg", 15);
+    chevron->set_valign(Gtk::ALIGN_CENTER);
+    section.chevron = chevron;
+
+    auto* summary = sub_label("");
+    summary->get_style_context()->add_class("dock-summary");
+    summary->set_ellipsize(Pango::ELLIPSIZE_MIDDLE);
+    summary->set_max_width_chars(44);
+    summary->set_xalign(1.0f);
+    summary->set_valign(Gtk::ALIGN_CENTER);
+    // Le show_all() de la fenetre rallume tout ce qui ne porte pas ce
+    // drapeau : sans lui, le resume reapparaitrait section ouverte.
+    summary->set_no_show_all(true);
+    section.summary = summary;
+
+    card.head->pack_end(*chevron, Gtk::PACK_SHRINK);
+    card.head->pack_end(*summary, Gtk::PACK_SHRINK);
+
+    /* Le corps passe dans un Gtk::Revealer : replie, il ne prend plus aucune
+     * hauteur, alors qu'un simple hide() laisse le show_all() de la fenetre
+     * le rallumer a la premiere occasion. */
+    auto* reveal = Gtk::make_managed<Gtk::Revealer>();
+    reveal->set_transition_type(Gtk::REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
+    reveal->set_transition_duration(140);
+    card.body->set_margin_top(14);
+    /* remove() ne detruit pas un enfant gere : gtkmm le re-reference pour
+     * qu'on puisse le reposer ailleurs, ce qui est exactement ce qu'on fait. */
+    card.frame->remove(*card.body);
+    reveal->add(*card.body);
+    reveal->set_reveal_child(open_by_default);
+    card.frame->pack_start(*reveal, Gtk::PACK_EXPAND_WIDGET);
+    section.body = reveal;
+
+    /* ── Quand recaler la fenetre : a la FIN de l'animation ──────────────
+     *
+     * Un Gtk::Revealer interpole sa hauteur pendant toute la transition. Au
+     * moment du clic il annonce donc encore la hauteur d'AVANT le geste :
+     * presque rien quand on deplie, tout quand on replie. Le recalage de la
+     * fenetre (fit_to_page des Settings), meme differe en idle, s'executait dans la premiere milliseconde de ces
+     * 140 ms et mesurait une page qui n'avait pas encore bouge : deplier
+     * recalait la fenetre sur la hauteur repliee — elle retombait au
+     * minimum, pied d'actions compris, et le contenu ouvert se retrouvait
+     * derriere le defilement de la colonne — et replier ne la faisait pas
+     * redescendre. Une temporisation arbitraire n'aurait fait que parier sur
+     * la duree de l'animation.
+     *
+     * « child-revealed » est notifie quand la position courante atteint sa
+     * cible, c'est-a-dire a la fin de la transition, dans les deux sens (et
+     * immediatement quand il n'y a pas de transition, revealer non affiche).
+     * C'est le seul instant ou la hauteur naturelle de la page est celle
+     * qu'on verra : c'est la que `revealed` est appele.
+     */
+    if (revealed)
+        reveal->property_child_revealed().signal_changed().connect(std::move(revealed));
+
+    /* L'en-tete devient cliquable par une EventBox : elle a sa propre fenetre
+     * GDK, donc il faut lui poser nous-memes le masque des clics, comme la
+     * poignee de la liste des dossiers. */
+    auto* grip = Gtk::make_managed<Gtk::EventBox>();
+    grip->set_above_child(false);
+    grip->set_visible_window(false);
+    grip->add_events(Gdk::BUTTON_PRESS_MASK);
+    card.frame->remove(*card.head);
+    grip->add(*card.head);
+    card.frame->pack_start(*grip, Gtk::PACK_SHRINK);
+    card.frame->reorder_child(*grip, 0);
+    // Le curseur dit que l'en-tete se clique avant qu'on l'essaie.
+    grip->signal_realize().connect([grip] {
+        if (auto win = grip->get_window())
+            win->set_cursor(Gdk::Cursor::create(grip->get_display(), "pointer"));
+    });
+    grip->signal_button_press_event().connect([reveal, toggled = std::move(toggled)](GdkEventButton* ev) {
+        if (ev->type != GDK_BUTTON_PRESS || ev->button != 1) return false;
+        reveal->set_reveal_child(!reveal->get_reveal_child());
+        // Pas de recalage de la fenetre ICI : voir juste au-dessus, la
+        // hauteur de la page ne sera connue qu'une fois l'animation finie.
+        if (toggled) toggled();
+        return true;
+    });
+
+    return section;
+}
+
+// Chevron dans le bon sens, resume visible seulement quand il remplace
+// quelque chose.
+void refresh_fold(const Fold& f) {
+    if (!f.body) return;
+    const bool open = f.body->get_reveal_child();
+    if (f.chevron) f.chevron->set_file(open ? "bc-chevron-down.svg" : "bc-chevron-right.svg");
+    if (!f.summary) return;
+    const std::string text = (!open && f.describe) ? f.describe() : std::string();
+    f.summary->set_text(text);
+    f.summary->set_visible(!text.empty());
+}
+
 }  // namespace SettingsUi

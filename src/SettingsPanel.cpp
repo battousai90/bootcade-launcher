@@ -24,6 +24,7 @@
 #include "FbneoUpdateCheck.h"
 #include "HiscoreClient.h"
 #include "MameCatalog.h"
+#include "MameSooner.h"
 #include "ThumbnailDownloader.h"
 #include "i18n.h"
 #include <map>
@@ -38,6 +39,8 @@
 #include <ctime>
 #include <iomanip>
 #include <random>
+#include <atomic>
+#include <mutex>
 #include <thread>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -1534,7 +1537,65 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
 
     auto mame_exe = ui::card("bc-folder.svg", _("Executable"),
                              _("Select the MAME executable used to read the catalog and launch games."));
+    /* Quel MAME : la version publiee, ou Sooner.
+     *
+     * MAMEdev publie une version par mois, mais construit MAME a chaque
+     * modification. Sooner, c'est ce MAME de tous les jours : le serveur
+     * Bootcade le recupere chaque jour et Bootcade le telecharge ici. Le
+     * canal choisi decide aussi des DAT que le serveur sert au groupe MAME
+     * dont la source est « Bootcade server » (DatSource::manifest_url). */
+    auto* channel_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+    auto* channel_label = ui::title_label(_("Version"));
+    channel_label->set_valign(Gtk::ALIGN_CENTER);
+    m_combo_mame_channel.append(MameSooner::kChannelRelease,
+                                _("Official release — the MAME published every month"));
+    m_combo_mame_channel.append(MameSooner::kChannelSooner,
+                                _("Sooner — MAME in development, rebuilt every day"));
+    m_combo_mame_channel.set_active_id(MameSooner::channel());
+    m_combo_mame_channel.set_tooltip_text(
+        _("Sooner gets the machines and fixes added to MAME since its last release, "
+          "without waiting for the next one. The DAT files of the Bootcade server follow "
+          "this choice."));
+    m_combo_mame_channel.signal_changed().connect([this] {
+        // Ecrit tout de suite, pas a la fermeture des reglages : le
+        // gestionnaire de ROMs lit le canal pour savoir quels DAT demander.
+        const std::string chosen = mame_channel();
+        if (chosen != MameSooner::channel()) {
+            nlohmann::json j;
+            const std::string path = AppContext::get_config_path();
+            { std::ifstream fi(path); if (fi) { try { fi >> j; } catch (...) {} } }
+            j["mame_channel"] = chosen;
+            std::ofstream fo(path);
+            if (fo) fo << j.dump(4);
+        }
+        refresh_emulator_pill();
+        refresh_sections();
+    });
+    channel_line->pack_start(*channel_label, Gtk::PACK_SHRINK);
+    channel_line->pack_start(m_combo_mame_channel, Gtk::PACK_EXPAND_WIDGET);
+    mame_exe.body->pack_start(*channel_line, Gtk::PACK_SHRINK);
+
+    // L'etat du Sooner telecharge, et le bouton qui le telecharge ou le met
+    // a jour : seulement quand c'est le canal choisi.
+    m_lbl_sooner.set_xalign(0.0f);
+    m_lbl_sooner.set_line_wrap(true);
+    m_lbl_sooner.set_hexpand(true);
+    m_lbl_sooner.set_valign(Gtk::ALIGN_CENTER);
+    m_lbl_sooner.get_style_context()->add_class("set-sub");
+    m_btn_sooner.set_image(*ui::image("bc-download.svg", ui::kIconButton));
+    m_btn_sooner.set_always_show_image(true);
+    m_btn_sooner.set_valign(Gtk::ALIGN_CENTER);
+    m_btn_sooner.signal_clicked().connect(sigc::mem_fun(*this, &SettingsPanel::on_sooner_download));
+    m_sooner_line.pack_start(m_lbl_sooner, Gtk::PACK_EXPAND_WIDGET);
+    m_sooner_line.pack_start(m_btn_sooner, Gtk::PACK_SHRINK);
+    m_sooner_line.set_margin_top(8);
+    m_sooner_line.set_no_show_all(true);
+    m_lbl_sooner.show();
+    m_btn_sooner.show();
+    mame_exe.body->pack_start(m_sooner_line, Gtk::PACK_SHRINK);
+
     auto* mame_exe_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+    mame_exe_line->set_margin_top(10);
     m_entry_mame_exe.set_hexpand(true);
     m_entry_mame_exe.set_placeholder_text(_("Leave empty to let Bootcade find MAME"));
     // Pas de sonde a chaque touche : interroger le binaire coute un processus,
@@ -1622,7 +1683,10 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     mame_exe.body->pack_start(*mame_exe_foot, Gtk::PACK_SHRINK);
     mame_col->pack_start(*collapsible(mame_exe, "emulator.mame_executable", true, [this] {
         const std::string path = mame_executable();
-        return path.empty() ? std::string(_("MAME not found")) : path;
+        if (path.empty()) return std::string(_("MAME not found"));
+        return mame_channel() == MameSooner::kChannelSooner && path == MameSooner::executable()
+                   ? std::string(_("Sooner")) + " — " + path
+                   : path;
     }), Gtk::PACK_SHRINK);
 
     /* ── Ce que Bootcade sait du MAME retenu ─────────────────────────────
@@ -1824,133 +1888,23 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     return page;
 }
 
-/* ── Une carte que l'on peut replier ────────────────────────────────────
- *
- * Meme langage visuel que le volet de details de la fenetre principale : le
- * titre reste, et une fois la section fermee un RESUME prend la place de ce
- * qui disparait. Replier sans resume effacerait l'information au lieu de la
- * ranger, et il faudrait rouvrir chaque section rien que pour savoir
- * laquelle rouvrir.
- *
- * L'en-tete de la carte EST la poignee : la tuile, le titre et le sous-titre
- * sont deja la ou l'oeil vise, et un bouton de repli pose a cote aurait
- * donne deux commandes pour un seul geste.
- *
- * Pas de Gtk::Expander ici, malgre le volet de details : sa fleche est celle
- * du theme du bureau, que la feuille de style de cette fenetre efface deja
- * (« .cc-window expander > title > arrow »), et son etiquette garde sa
- * largeur NATURELLE — le resume et le chevron se collaient au sous-titre au
- * lieu de tenir le bord droit, et deux cartes voisines ne les alignaient
- * plus. L'en-tete reste donc un enfant ordinaire de la carte, qui prend
- * toute sa largeur comme les boutons d'action des autres cartes, et c'est le
- * CORPS qui se montre ou se cache.
- */
+// Le pliage lui-meme est dans SettingsUi::fold, partage avec le gestionnaire
+// de ROMs : ici, chaque section garde sa cle (son etat plie se retrouve d'une
+// ouverture a l'autre) et la fenetre se recale a la fin de l'animation.
 Gtk::Widget* SettingsPanel::collapsible(const ui::Card& card, const std::string& key,
                                         bool open_by_default,
                                         std::function<std::string()> describe) {
-    Section section;
-    section.describe = std::move(describe);
-
-    auto* chevron = Gtk::make_managed<ui::Icon>("bc-chevron-down.svg", 15);
-    chevron->set_valign(Gtk::ALIGN_CENTER);
-    section.chevron = chevron;
-
-    auto* summary = ui::sub_label("");
-    summary->get_style_context()->add_class("dock-summary");
-    summary->set_ellipsize(Pango::ELLIPSIZE_MIDDLE);
-    summary->set_max_width_chars(44);
-    summary->set_xalign(1.0f);
-    summary->set_valign(Gtk::ALIGN_CENTER);
-    // Le show_all() de la fenetre rallume tout ce qui ne porte pas ce
-    // drapeau : sans lui, le resume reapparaitrait section ouverte.
-    summary->set_no_show_all(true);
-    section.summary = summary;
-
-    card.head->pack_end(*chevron, Gtk::PACK_SHRINK);
-    card.head->pack_end(*summary, Gtk::PACK_SHRINK);
-
-    /* Le corps passe dans un Gtk::Revealer : replie, il ne prend plus aucune
-     * hauteur, alors qu'un simple hide() laisse le show_all() de la fenetre
-     * le rallumer a la premiere occasion. */
-    auto* reveal = Gtk::make_managed<Gtk::Revealer>();
-    reveal->set_transition_type(Gtk::REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
-    reveal->set_transition_duration(140);
-    card.body->set_margin_top(14);
-    /* remove() ne detruit pas un enfant gere : gtkmm le re-reference pour
-     * qu'on puisse le reposer ailleurs, ce qui est exactement ce qu'on fait. */
-    card.frame->remove(*card.body);
-    reveal->add(*card.body);
-    reveal->set_reveal_child(open_by_default);
-    card.frame->pack_start(*reveal, Gtk::PACK_EXPAND_WIDGET);
-    section.body = reveal;
-
-    /* ── Quand recaler la fenetre : a la FIN de l'animation ──────────────
-     *
-     * Un Gtk::Revealer interpole sa hauteur pendant toute la transition. Au
-     * moment du clic il annonce donc encore la hauteur d'AVANT le geste :
-     * presque rien quand on deplie, tout quand on replie. fit_to_page, meme
-     * differe en idle, s'executait dans la premiere milliseconde de ces
-     * 140 ms et mesurait une page qui n'avait pas encore bouge : deplier
-     * recalait la fenetre sur la hauteur repliee — elle retombait au
-     * minimum, pied d'actions compris, et le contenu ouvert se retrouvait
-     * derriere le defilement de la colonne — et replier ne la faisait pas
-     * redescendre. Une temporisation arbitraire n'aurait fait que parier sur
-     * la duree de l'animation.
-     *
-     * « child-revealed » est notifie quand la position courante atteint sa
-     * cible, c'est-a-dire a la fin de la transition, dans les deux sens (et
-     * immediatement quand il n'y a pas de transition, revealer non affiche).
-     * C'est le seul instant ou la hauteur naturelle de la page est celle
-     * qu'on verra.
-     */
-    reveal->property_child_revealed().signal_changed().connect(
-        [this] { fit_to_page(); });
-
-    /* L'en-tete devient cliquable par une EventBox : elle a sa propre fenetre
-     * GDK, donc il faut lui poser nous-memes le masque des clics, comme la
-     * poignee de la liste des dossiers. */
-    auto* grip = Gtk::make_managed<Gtk::EventBox>();
-    grip->set_above_child(false);
-    grip->set_visible_window(false);
-    grip->add_events(Gdk::BUTTON_PRESS_MASK);
-    card.frame->remove(*card.head);
-    grip->add(*card.head);
-    card.frame->pack_start(*grip, Gtk::PACK_SHRINK);
-    card.frame->reorder_child(*grip, 0);
-    // Le curseur dit que l'en-tete se clique avant qu'on l'essaie.
-    grip->signal_realize().connect([grip] {
-        if (auto win = grip->get_window())
-            win->set_cursor(Gdk::Cursor::create(grip->get_display(), "pointer"));
-    });
-    grip->signal_button_press_event().connect([this, key](GdkEventButton* ev) {
-        if (ev->type != GDK_BUTTON_PRESS || ev->button != 1) return false;
-        auto it = m_sections.find(key);
-        if (it == m_sections.end() || !it->second.body) return false;
-        it->second.body->set_reveal_child(!it->second.body->get_reveal_child());
-        refresh_sections();
-        // Pas de fit_to_page ICI : voir juste au-dessus, la hauteur de la
-        // page ne sera connue qu'une fois l'animation finie.
-        return true;
-    });
-
-    m_sections[key] = section;
+    m_sections[key] = ui::fold(card, open_by_default, std::move(describe),
+                               [this] { refresh_sections(); },
+                               [this] { fit_to_page(); });
     return card.frame;
 }
 
-// Chaque section dit ou elle en est : chevron dans le bon sens, resume
-// visible seulement quand il remplace quelque chose.
+// Chaque section dit ou elle en est.
 void SettingsPanel::refresh_sections() {
-    for (auto& [key, section] : m_sections) {
+    for (const auto& [key, section] : m_sections) {
         (void)key;
-        if (!section.body) continue;
-        const bool open = section.body->get_reveal_child();
-        if (section.chevron)
-            section.chevron->set_file(open ? "bc-chevron-down.svg"
-                                           : "bc-chevron-right.svg");
-        if (!section.summary) continue;
-        const std::string text = (!open && section.describe) ? section.describe() : std::string();
-        section.summary->set_text(text);
-        section.summary->set_visible(!text.empty());
+        ui::refresh_fold(section);
     }
 }
 
@@ -2442,6 +2396,15 @@ std::vector<std::string> SettingsPanel::fbneo_video_args(const std::string& exe)
  * a la distribution et n'est qu'interroge. Montrer les memes cartes aux deux
  * promettrait des gestes qui n'existent pas pour l'un d'eux.
  */
+void SettingsPanel::open_emulator(const std::string& emulator_id) {
+    // L'onglet par son bouton : le meme geste que le clic du joueur.
+    if (m_tabs_buttons.size() > 2) m_tabs_buttons[2]->clicked();
+    const auto& registry = emulator_registry();
+    for (size_t i = 0; i < registry.size(); ++i)
+        if (registry[i].id == emulator_id)
+            if (auto* row = m_emu_list.get_row_at_index(static_cast<int>(i))) m_emu_list.select_row(*row);
+}
+
 void SettingsPanel::show_emulator_page(size_t index) {
     const auto& registry = emulator_registry();
     if (registry.empty()) return;
@@ -2506,7 +2469,18 @@ void SettingsPanel::show_emulator_page(size_t index) {
  * lance pas, c'etait la seule question qui comptait, et elle restait sans
  * reponse. Le champ prime toujours sur la detection, et l'ecran le dit.
  */
+std::string SettingsPanel::mame_channel() const {
+    return m_combo_mame_channel.get_active_id() == MameSooner::kChannelSooner
+               ? MameSooner::kChannelSooner : MameSooner::kChannelRelease;
+}
+
 std::string SettingsPanel::mame_executable() const {
+    // Sooner, une fois telecharge, passe avant tout le reste ; tant qu'il ne
+    // l'est pas, on joue avec le MAME de la version publiee.
+    if (mame_channel() == MameSooner::kChannelSooner) {
+        const std::string sooner = MameSooner::executable();
+        if (!sooner.empty()) return sooner;
+    }
     const std::string typed = m_entry_mame_exe.get_text();
     if (!typed.empty()) return typed;
     // La detection ne coute qu'un access() dans les cas courants : la garder
@@ -2770,13 +2744,149 @@ void SettingsPanel::download_catver_clicked() {
     apply_catver_now(true);
 }
 
+// La ligne du Sooner : ce qui est installe, et le bouton qui l'installe ou
+// le met a jour. Le champ de l'executable ne sert qu'a la version publiee :
+// il s'eteint quand Sooner est la et choisi, sans perdre ce qu'il contient.
+void SettingsPanel::refresh_sooner_state() {
+    const bool sooner = mame_channel() == MameSooner::kChannelSooner;
+    m_sooner_line.set_visible(sooner);
+    const auto here = MameSooner::installed();
+    const bool in_use = sooner && !here.build.empty();
+    m_entry_mame_exe.set_sensitive(!in_use);
+    m_button_browse_mame.set_sensitive(!in_use);
+    if (!sooner) return;
+    if (here.build.empty()) {
+        m_lbl_sooner.set_text(_("MAME Sooner is not downloaded yet. Until it is, Bootcade "
+                                "keeps using the MAME of the official release."));
+        m_btn_sooner.set_label(_("Download"));
+    } else {
+        m_lbl_sooner.set_text(Glib::ustring::compose(_("MAME Sooner %1, built %2."), here.build,
+                                                     here.date.substr(0, 10)));
+        m_btn_sooner.set_label(_("Update"));
+    }
+}
+
+/* Telecharge le MAME Sooner publie par le serveur Bootcade.
+ *
+ * 130 Mo : un fil a cote, une barre qui avance et un bouton qui annule,
+ * comme la generation des DAT. Une fois installe, on verifie que l'hote a
+ * les bibliotheques dont il a besoin (Qt6, SDL2) : un MAME qui ne demarre
+ * pas doit le dire ici, pas au premier jeu. */
+void SettingsPanel::on_sooner_download() {
+    auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
+    if (!parent) return;
+
+    Gtk::Dialog dialog;
+    dialog.set_transient_for(*parent);
+    dialog.set_modal(true);
+    dialog.set_resizable(false);
+    dialog.set_default_size(520, -1);
+    dialog.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
+    ui::window_header(dialog, "bc-download.svg", _("MAME Sooner"),
+                      _("Downloading MAME from the Bootcade server..."));
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 14);
+    box->set_margin_start(22);
+    box->set_margin_end(22);
+    box->set_margin_top(20);
+    box->set_margin_bottom(20);
+    auto* bar = Gtk::make_managed<Gtk::ProgressBar>();
+    bar->set_show_text(true);
+    bar->set_text(_("Reading the build published by the server..."));
+    box->pack_start(*bar, Gtk::PACK_SHRINK);
+    auto* cancel = ui::button(_("Cancel"), "bc-close.svg");
+    cancel->set_halign(Gtk::ALIGN_END);
+    box->pack_start(*cancel, Gtk::PACK_SHRINK);
+    dialog.get_content_area()->set_spacing(0);
+    dialog.get_content_area()->pack_start(*box, Gtk::PACK_EXPAND_WIDGET);
+    dialog.show_all();
+
+    std::atomic<bool> cancelled{false}, finished{false};
+    std::mutex mtx;
+    double fraction = 0.0;
+    std::string text, error, build;
+    bool ok = false;
+    Glib::Dispatcher on_tick, on_done;
+    on_tick.connect([&] {
+        std::lock_guard<std::mutex> lock(mtx);
+        bar->set_fraction(fraction);
+        if (!cancelled.load()) bar->set_text(text);
+    });
+    on_done.connect([&dialog] { dialog.response(Gtk::RESPONSE_OK); });
+    cancel->signal_clicked().connect([&] {
+        cancelled = true;
+        cancel->set_sensitive(false);
+        bar->set_text(_("Cancelling..."));
+    });
+
+    std::thread worker([&] {
+        const auto info = MameSooner::fetch_info();
+        std::string err;
+        bool done = false;
+        if (!info.ok) {
+            err = info.error;
+        } else {
+            done = MameSooner::install(info, err,
+                [&](double f, const std::string& msg) {
+                    { std::lock_guard<std::mutex> lock(mtx); fraction = f; text = msg; }
+                    on_tick.emit();
+                },
+                [&] { return cancelled.load(); });
+        }
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            ok = done;
+            error = err;
+            build = info.build;
+        }
+        finished = true;
+        on_done.emit();
+    });
+    while (!finished.load()) dialog.run();
+    worker.join();
+    dialog.hide();
+
+    refresh_emulator_pill();
+    refresh_sections();
+    if (!ok) {
+        // 404 : le serveur repond, mais ne publie pas (encore) de Sooner.
+        if (!cancelled.load())
+            ui::notice(*parent, _("Download failed"),
+                       error == "HTTP 404"
+                           ? std::string(_("The Bootcade server does not publish MAME Sooner yet. "
+                                           "Try again later."))
+                           : error,
+                       "bc-error.svg");
+        return;
+    }
+    // Le binaire est la ; reste a savoir s'il demarrera sur cette machine.
+    const std::string missing = MameSooner::missing_libraries(MameSooner::executable());
+    if (!missing.empty())
+        ui::notice(*parent, _("MAME Sooner needs more libraries"),
+                   Glib::ustring::compose(
+                       _("MAME Sooner %1 is downloaded, but this system lacks libraries it "
+                         "needs to start: %2\n\nInstall them with your package manager "
+                         "(usually the Qt 6 and SDL2 packages)."), build, missing),
+                   "bc-info.svg");
+    else
+        ui::notice(*parent, _("MAME Sooner is ready"),
+                   Glib::ustring::compose(_("Bootcade now uses MAME Sooner %1. Its catalog "
+                                            "is read on the next start."), build),
+                   "bc-check.svg");
+}
+
 void SettingsPanel::refresh_mame_state() {
+    refresh_sooner_state();
     const bool        chosen = !m_entry_mame_exe.get_text().empty();
     const std::string exe    = mame_executable();
     const bool        ready  = MameCatalog::is_runnable(exe);
 
     // L'indication sous le champ repond a « et si je laisse vide ? ».
-    if (chosen)
+    const bool sooner_in_use = !exe.empty() && exe == MameSooner::executable()
+                            && mame_channel() == MameSooner::kChannelSooner;
+    if (sooner_in_use)
+        m_lbl_mame_exe.set_text(
+            _("Sooner is in use. The field above is used with the official release."));
+    else if (chosen)
         m_lbl_mame_exe.set_text(
             _("Clear this field to let Bootcade detect MAME again."));
     else if (exe.empty())
@@ -2815,8 +2925,13 @@ void SettingsPanel::refresh_mame_state() {
      * alors que tout va bien, d'ou l'infobulle pour qui veut la sortie
      * exacte. */
     const std::string build = ready ? MameCatalog::installed_build(exe) : std::string();
+    // Sooner se dit en toutes lettres : « 0.289 » seul ne distinguait pas le
+    // MAME de developpement de la version publiee.
+    const std::string number = build.empty() ? std::string()
+        : MameCatalog::header_version(MameCatalog::version_number(build), build);
     m_lbl_mame_build.set_text(build.empty() ? std::string(_("Unknown"))
-                                            : MameCatalog::version_number(build));
+                              : sooner_in_use ? std::string(_("Sooner")) + " " + number.substr(0, number.find('+'))
+                                              : number);
     m_lbl_mame_build.set_tooltip_text(build);
     m_lbl_mame_path.set_text(exe.empty() ? std::string("—") : exe);
     if (!exe.empty()) m_lbl_mame_path.set_tooltip_text(exe);
@@ -2939,6 +3054,46 @@ void SettingsPanel::check_emulator_update_async() {
  * qu'aucun bouton ne pourrait tenir.
  */
 void SettingsPanel::check_mame_update_async() {
+    /* Sooner : la question n'est plus « une version plus recente est-elle
+     * sortie ? » mais « le serveur Bootcade a-t-il un MAME plus recent que
+     * celui telecharge ici ? ». Le commit le dit, sans rien deviner. */
+    if (mame_channel() == MameSooner::kChannelSooner) {
+        const auto here = MameSooner::installed();
+        std::thread([this, alive = m_alive, here] {
+            const auto info = MameSooner::fetch_info();
+            {
+                std::lock_guard<std::mutex> lock(m_emu_mutex);
+                if (!info.ok) {
+                    m_emu_update_msg  = _("Could not reach the Bootcade server.");
+                    m_emu_update_tone = "warn";
+                } else if (here.commit.empty()) {
+                    m_emu_update_msg  = Glib::ustring::compose(
+                        _("MAME Sooner %1 is available. Press Download to get it."), info.build);
+                    m_emu_update_tone = "warn";
+                } else if (here.commit != info.commit) {
+                    m_emu_update_msg  = Glib::ustring::compose(
+                        _("A newer MAME Sooner is available: %1. Press Update to get it."), info.build);
+                    m_emu_update_tone = "warn";
+                } else {
+                    m_emu_update_msg  = Glib::ustring::compose(_("MAME Sooner %1 is up to date."),
+                                                               info.build);
+                    m_emu_update_tone = "ok";
+                }
+            }
+            if (info.ok) {
+                nlohmann::json j;
+                const std::string path = AppContext::get_config_path();
+                { std::ifstream fi(path); if (fi) { try { fi >> j; } catch (...) {} } }
+                j["mame_checked_at"] = today_iso();
+                std::ofstream fo(path);
+                if (fo) fo << j.dump(4);
+            }
+            std::lock_guard<std::mutex> live(alive->mutex);
+            if (alive->alive) m_emu_update_done.emit();
+        }).detach();
+        return;
+    }
+
     // La version installee se lit AVANT de partir : elle demande le binaire,
     // donc un widget, et un fil detache n'a rien a faire dans les widgets.
     const std::string exe = mame_executable();
@@ -4139,6 +4294,9 @@ bool SettingsPanel::load_from_file(const std::string& filename) {
         // « MAME est absent ». La sonde gardee est donc oubliee, sans quoi un
         // chemin lu du fichier ne se verrait qu'au prochain demarrage.
         m_entry_mame_exe.set_text(j.value("mame_executable", std::string()));
+        m_combo_mame_channel.set_active_id(
+            j.value("mame_channel", std::string(MameSooner::kChannelRelease)) == MameSooner::kChannelSooner
+                ? MameSooner::kChannelSooner : MameSooner::kChannelRelease);
         m_mame_probed = false;
         m_entry_catver.set_text(j.value("mame_catver_path", std::string()));
         m_entry_catver_url.set_text(j.value("mame_catver_url", std::string()));
@@ -4285,6 +4443,7 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
     // detection figerait dans le fichier un /usr/games/mame qui n'a aucune
     // raison de survivre a un changement de distribution.
     j["mame_executable"]        = m_entry_mame_exe.get_text();
+    j["mame_channel"]           = mame_channel();
     // Le catver.ini que le joueur a designe. Vide veut dire « celui que
     // Bootcade a telecharge, s'il existe » : MameCatalog::catver_path tranche.
     j["mame_catver_path"]       = m_entry_catver.get_text();

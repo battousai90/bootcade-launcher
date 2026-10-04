@@ -3621,6 +3621,15 @@ void DatabaseManager::beginMameCatalogRebuild() {
     // valide, un demarrage interrompu redeclenchera la regeneration au lieu
     // de faire confiance a une table a moitie remplie.
     setMetaString("mame_build", "");
+    // Le verdict de chaque machine (mame -verifyroms) survit a la
+    // reconstruction : un autre MAME (une nouvelle version, Sooner chaque
+    // jour) ne change rien aux fichiers de la collection, et sans cela toute
+    // la bibliotheque MAME retombait a « missing » jusqu'au prochain scan.
+    sqlite3_exec(m_db, "DROP TABLE IF EXISTS temp.mame_status_keep;", nullptr, nullptr, nullptr);
+    sqlite3_exec(m_db,
+        "CREATE TEMP TABLE mame_status_keep AS "
+        "SELECT name, status FROM mame_catalog WHERE status IS NOT NULL AND status <> 'missing';",
+        nullptr, nullptr, nullptr);
     sqlite3_exec(m_db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
     sqlite3_exec(m_db, "DELETE FROM mame_catalog;", nullptr, nullptr, nullptr);
 }
@@ -3666,7 +3675,13 @@ bool DatabaseManager::insertMameMachines(const std::vector<MameMachine>& machine
 
 void DatabaseManager::commitMameCatalogRebuild(const std::string& build) {
     if (!m_db) return;
+    sqlite3_exec(m_db,
+        "UPDATE mame_catalog SET status = "
+        "(SELECT k.status FROM temp.mame_status_keep k WHERE k.name = mame_catalog.name) "
+        "WHERE name IN (SELECT name FROM temp.mame_status_keep);",
+        nullptr, nullptr, nullptr);
     sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, nullptr);
+    sqlite3_exec(m_db, "DROP TABLE IF EXISTS temp.mame_status_keep;", nullptr, nullptr, nullptr);
     sqlite3_exec(m_db,
         "CREATE INDEX IF NOT EXISTS idx_mame_catalog_desc ON mame_catalog(description);",
         nullptr, nullptr, nullptr);
@@ -3676,6 +3691,7 @@ void DatabaseManager::commitMameCatalogRebuild(const std::string& build) {
 void DatabaseManager::abortMameCatalogRebuild() {
     if (!m_db) return;
     sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+    sqlite3_exec(m_db, "DROP TABLE IF EXISTS temp.mame_status_keep;", nullptr, nullptr, nullptr);
 }
 
 int DatabaseManager::countMameMachines() {

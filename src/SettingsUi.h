@@ -90,6 +90,26 @@ struct Card {
 Card card(const std::string& icon_file, const std::string& title,
           const std::string& subtitle);
 
+// Une carte qui se replie : son en-tete devient la poignee, et une fois
+// fermee un resume prend la place de ce qui disparait (voir fold dans
+// SettingsUi.cpp). Les widgets appartiennent a la carte.
+struct Fold {
+    Gtk::Revealer* body    = nullptr;
+    Gtk::Label*    summary = nullptr;
+    Icon*          chevron = nullptr;
+    // Ce que la carte dit d'elle-meme une fois fermee. Recalcule a chaque
+    // repli : un resume fige mentirait des le premier reglage.
+    std::function<std::string()> describe;
+};
+// `toggled` : apres chaque clic sur l'en-tete ; `revealed` : a la fin de
+// l'animation, quand la hauteur de la page est celle qu'on verra.
+Fold fold(const Card& card, bool open_by_default,
+          std::function<std::string()> describe,
+          std::function<void()> toggled = nullptr,
+          std::function<void()> revealed = nullptr);
+// Chevron et resume selon que la carte est ouverte ou fermee.
+void refresh_fold(const Fold& f);
+
 // Le cadre interieur qui regroupe des lignes, avec un filet entre chacune.
 Gtk::Box* rows();
 void      add_row(Gtk::Box* container, Gtk::Widget& row);

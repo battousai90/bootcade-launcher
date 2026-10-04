@@ -30,6 +30,9 @@ public:
     virtual ~DATUpdateDialog();
 
     void start_update();
+    // What was left out before loading (DatSource::files_to_load) : shown in
+    // the log, not only in the terminal.
+    void note_conflicts(const std::vector<std::string>& conflicts);
     bool was_cancelled() const { return m_cancelled.load(); }
     // The games were wiped and (partly) reloaded : whoever shows them must
     // read them again, even when the update was stopped half-way.
