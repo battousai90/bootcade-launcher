@@ -602,32 +602,74 @@ struct LxRom {
     unsigned long long size = 0;
     std::string merge;            // attribut merge= : la ROM vient du parent ou du BIOS
     bool merged = false;
+    bool baddump = false;
 };
 struct LxDisk {
-    std::string name, sha1;
+    std::string name, sha1, region;
     std::string merge;            // attribut merge= : le disque du parent ou du BIOS
     bool merged = false;
+    bool baddump = false;
 };
 struct LxMachine {
     std::string name, sourcefile, cloneof, romof, description, year, manufacturer;
-    bool isbios = false, isdevice = false, runnable = true;
+    bool isbios = false, isdevice = false, ismechanical = false, runnable = true;
     std::vector<LxRom>  roms;     // sans les nodump ni les ROMs sans CRC
     std::vector<LxDisk> disks;    // sans les nodump
     std::vector<std::string> devices;   // <device_ref>, dans l'ordre de -listxml
+    // Chaque carte qu'on peut brancher dans ses slots : slots ranges par nom,
+    // cartes par nom dans chaque slot. MAME ne liste pas les options d'un slot
+    // dans le meme ordre d'une construction a l'autre (le -listxml publie
+    // avec la 0.289 et celui du MAME 0.289 d'Ubuntu different), et a nom de
+    // ROM egal c'est la premiere rencontree qui reste (voir kit_of).
+    std::vector<std::string> slot_devices;
 };
 
-// Un DAT en cours d'ecriture. Il s'ecrit sous un nom cache et temporaire, que
-// rien ne prend pour un DAT (le chargeur ne lit que les .dat), et ne prend son
-// vrai nom qu'une fois complet : une generation interrompue ne laisse jamais
-// un demi-fichier que le prochain « Update DAT » chargerait.
+// L'ordre de Pleasuredome : chaque nom se lit par blocs, chiffres d'un cote,
+// tout le reste de l'autre. Deux blocs de chiffres se comparent par leur
+// valeur, le plus court d'abord a valeur egale (« 5koia » avant « 005 ») ;
+// sinon les deux blocs se comparent comme du texte, le plus court d'abord
+// quand l'un commence l'autre (« bm25.14l » avant « bm.7k », « cdu415.bin »
+// avant « cdu-75s… »).
+bool natural_less(const std::string& a, const std::string& b) {
+    auto chunk = [](const std::string& s, size_t from) {
+        const bool digit = std::isdigit((unsigned char)s[from]);
+        size_t e = from;
+        while (e < s.size() && (bool)std::isdigit((unsigned char)s[e]) == digit) ++e;
+        return e;
+    };
+    size_t i = 0, j = 0;
+    while (i < a.size() && j < b.size()) {
+        const size_t ie = chunk(a, i), je = chunk(b, j);
+        const bool da = std::isdigit((unsigned char)a[i]), db = std::isdigit((unsigned char)b[j]);
+        if (da && db) {
+            size_t ia = i, jb = j;
+            while (ia + 1 < ie && a[ia] == '0') ++ia;
+            while (jb + 1 < je && b[jb] == '0') ++jb;
+            if (ie - ia != je - jb) return ie - ia < je - jb;
+            const int c = a.compare(ia, ie - ia, b, jb, je - jb);
+            if (c != 0) return c < 0;
+            if (ie - i != je - j) return ie - i < je - j;
+        } else {
+            const int c = a.compare(i, ie - i, b, j, je - j);
+            if (c != 0) return c < 0;
+        }
+        i = ie; j = je;
+    }
+    return a.size() - i < b.size() - j;
+}
+
+// Un DAT en cours d'ecriture, au format des DAT de Pleasuredome : chaque
+// machine dit ce que contient son zip (ou son dossier de CHD), sans aucun
+// lien (cloneof, romof, merge=). Il s'ecrit sous un nom cache et temporaire
+// et ne prend son vrai nom qu'une fois complet : une generation interrompue
+// ne laisse jamais un demi-fichier que le prochain « Update DAT » chargerait.
 struct DatWriter {
     std::ofstream out;
     std::string tmp_path, final_path;
     int machines = 0;
 
     bool open(const std::string& dir, const std::string& file, const std::string& header_name,
-              const std::string& version, const std::string& date,
-              const std::string& description = std::string()) {
+              const std::string& version, const std::string& date, const std::string& build) {
         final_path = dir + "/" + file;
         tmp_path   = dir + "/." + file + ".tmp";
         out.open(tmp_path, std::ios::binary | std::ios::trunc);
@@ -635,18 +677,19 @@ struct DatWriter {
         // L'en-tete nomme la collection exactement comme les DAT de
         // Pleasuredome, et comme les dossiers que RomVault en tire : c'est ce
         // nom que le gestionnaire de ROMs attend comme dossier (RomResolve::
-        // expected_folder), et c'est a lui que DatParser reconnait MAME.
-        out << "<?xml version=\"1.0\"?>\n"
+        // expected_folder). L'auteur, lui, est Bootcade : c'est la signature
+        // qui permet de remplacer ces fichiers a la generation suivante.
+        out << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
                "<!DOCTYPE datafile PUBLIC \"-//Logiqx//DTD ROM Management Datafile//EN\""
                " \"http://www.logiqx.com/Dats/datafile.dtd\">\n"
-               "<datafile>\n\t<header>\n"
+               "<datafile build=\"" << xml_escape(build) << "\" debug=\"no\">\n\t<header>\n"
                "\t\t<name>" << xml_escape(header_name) << "</name>\n"
-               "\t\t<description>" << xml_escape(description.empty() ? header_name : description)
-            << "</description>\n"
+               "\t\t<description>" << xml_escape(header_name) << "</description>\n"
                "\t\t<version>" << xml_escape(version) << "</version>\n"
                "\t\t<date>" << xml_escape(date) << "</date>\n"
                "\t\t<author>Bootcade</author>\n"
                "\t\t<homepage>https://www.mamedev.org/</homepage>\n"
+               "\t\t<comment>Generated from MAME -listxml, Pleasuredome layout</comment>\n"
                "\t</header>\n";
         return true;
     }
@@ -654,11 +697,10 @@ struct DatWriter {
     void begin_machine(const LxMachine& m) {
         out << "\t<machine name=\"" << xml_escape(m.name) << "\"";
         if (!m.sourcefile.empty()) out << " sourcefile=\"" << xml_escape(m.sourcefile) << "\"";
-        if (!m.cloneof.empty())    out << " cloneof=\"" << xml_escape(m.cloneof) << "\"";
-        if (!m.romof.empty())      out << " romof=\"" << xml_escape(m.romof) << "\"";
-        if (m.isbios)    out << " isbios=\"yes\"";
-        if (m.isdevice)  out << " isdevice=\"yes\"";
-        if (!m.runnable) out << " runnable=\"no\"";
+        if (m.isbios)       out << " isbios=\"yes\"";
+        if (m.isdevice)     out << " isdevice=\"yes\"";
+        if (m.ismechanical) out << " ismechanical=\"yes\"";
+        if (!m.runnable)    out << " runnable=\"no\"";
         out << ">\n\t\t<description>" << xml_escape(m.description) << "</description>\n";
         if (!m.year.empty())         out << "\t\t<year>" << xml_escape(m.year) << "</year>\n";
         if (!m.manufacturer.empty()) out << "\t\t<manufacturer>" << xml_escape(m.manufacturer) << "</manufacturer>\n";
@@ -666,17 +708,15 @@ struct DatWriter {
     void rom(const LxRom& r) {
         out << "\t\t<rom name=\"" << xml_escape(r.name) << "\" size=\"" << r.size
             << "\" crc=\"" << xml_escape(r.crc) << "\"";
-        if (!r.sha1.empty())  out << " sha1=\"" << xml_escape(r.sha1) << "\"";
-        if (!r.merge.empty()) out << " merge=\"" << xml_escape(r.merge) << "\"";
-        out << "/>\n";
+        if (!r.sha1.empty()) out << " sha1=\"" << xml_escape(r.sha1) << "\"";
+        if (r.baddump)       out << " status=\"baddump\"";
+        out << " />\n";
     }
     void disk(const LxDisk& d) {
         out << "\t\t<disk name=\"" << xml_escape(d.name) << "\" sha1=\"" << xml_escape(d.sha1) << "\"";
-        if (!d.merge.empty()) out << " merge=\"" << xml_escape(d.merge) << "\"";
-        out << "/>\n";
-    }
-    void device_ref(const std::string& name) {
-        out << "\t\t<device_ref name=\"" << xml_escape(name) << "\"/>\n";
+        if (!d.region.empty()) out << " region=\"" << xml_escape(d.region) << "\"";
+        if (d.baddump)         out << " status=\"baddump\"";
+        out << " />\n";
     }
     void end_machine() { out << "\t</machine>\n"; ++machines; }
 
@@ -735,7 +775,8 @@ using ListxmlFeed = std::function<bool(const std::function<bool(const char*, siz
 // nombre de machines lues, -1 si le flux n'a pas pu etre lu ou a ete
 // interrompu.
 static int read_stream(const ListxmlFeed& feed, const std::function<bool(int)>& progress,
-                       std::vector<LxMachine>& machines, std::string& version) {
+                       std::vector<LxMachine>& machines, std::string& version,
+                       std::string* build = nullptr) {
     // Les references d'une machine vers d'autres (device_ref, romof,
     // cloneof) peuvent venir plus loin dans le flux : on lit tout d'abord.
     machines.reserve(50000);
@@ -758,6 +799,7 @@ static int read_stream(const ListxmlFeed& feed, const std::function<bool(int)>& 
         x.isbios       = m.attribute("isbios").as_bool(false);
         x.isdevice     = m.attribute("isdevice").as_bool(false);
         x.runnable     = m.attribute("runnable").as_bool(true);
+        x.ismechanical = m.attribute("ismechanical").as_bool(false);
         x.description  = m.child_value("description");
         x.year         = m.child_value("year");
         x.manufacturer = m.child_value("manufacturer");
@@ -773,6 +815,7 @@ static int read_stream(const ListxmlFeed& feed, const std::function<bool(int)>& 
             rom.size   = r.attribute("size").as_ullong();
             rom.merge  = r.attribute("merge").as_string();
             rom.merged = !rom.merge.empty();
+            rom.baddump = std::strcmp(r.attribute("status").as_string(), "baddump") == 0;
             x.roms.push_back(std::move(rom));
         }
         for (pugi::xml_node d = m.child("disk"); d; d = d.next_sibling("disk")) {
@@ -782,6 +825,8 @@ static int read_stream(const ListxmlFeed& feed, const std::function<bool(int)>& 
             disk.sha1   = d.attribute("sha1").as_string();
             disk.merge  = d.attribute("merge").as_string();
             disk.merged = !disk.merge.empty();
+            disk.region = d.attribute("region").as_string();
+            disk.baddump = std::strcmp(d.attribute("status").as_string(), "baddump") == 0;
             if (disk.name.empty() || disk.sha1.empty()) continue;
             x.disks.push_back(std::move(disk));
         }
@@ -790,6 +835,20 @@ static int read_stream(const ListxmlFeed& feed, const std::function<bool(int)>& 
             if (dev.empty() || dev == x.name) continue;
             if (std::find(x.devices.begin(), x.devices.end(), dev) == x.devices.end())
                 x.devices.push_back(std::move(dev));
+        }
+        std::vector<pugi::xml_node> slots;
+        for (pugi::xml_node sl = m.child("slot"); sl; sl = sl.next_sibling("slot")) slots.push_back(sl);
+        std::stable_sort(slots.begin(), slots.end(), [](const pugi::xml_node& a, const pugi::xml_node& b) {
+            return std::strcmp(a.attribute("name").as_string(), b.attribute("name").as_string()) < 0;
+        });
+        for (const auto& sl : slots) {
+            std::vector<std::string> options;
+            for (pugi::xml_node o = sl.child("slotoption"); o; o = o.next_sibling("slotoption"))
+                if (*o.attribute("devname").as_string()) options.push_back(o.attribute("devname").as_string());
+            std::sort(options.begin(), options.end());
+            for (auto& dev : options)
+                if (std::find(x.slot_devices.begin(), x.slot_devices.end(), dev) == x.slot_devices.end())
+                    x.slot_devices.push_back(std::move(dev));
         }
         machines.push_back(std::move(x));
         if (++seen % 2048 == 0 && progress && !progress(seen)) cancelled = true;
@@ -807,7 +866,10 @@ static int read_stream(const ListxmlFeed& feed, const std::function<bool(int)>& 
                     const auto b = line.find("build=\"", root);
                     if (b != std::string::npos) {
                         const auto e = line.find('"', b + 7);
-                        if (e != std::string::npos) version = version_number(line.substr(b + 7, e - b - 7));
+                        if (e != std::string::npos) {
+                            version = version_number(line.substr(b + 7, e - b - 7));
+                            if (build) *build = line.substr(b + 7, e - b - 7);
+                        }
                     }
                 }
             }
@@ -913,6 +975,87 @@ struct ListxmlSets {
     }
 };
 
+// La version que portent les en-tetes. Une construction de developpement
+// s'annonce « 0.289 (mame0289-1306-g8aeb28649e1) » : sa version, c'est la
+// version publiee la plus proche plus son ecart, pour que l'en-tete dise
+// d'un coup d'oeil qu'il ne s'agit pas de la 0.289.
+static std::string header_version(const std::string& version, const std::string& build) {
+    const auto p = build.find("(mame");
+    if (p == std::string::npos) return version;
+    const auto d1 = build.find('-', p);
+    const auto d2 = d1 == std::string::npos ? d1 : build.find("-g", d1 + 1);
+    if (d2 == std::string::npos) return version;
+    const std::string ahead = build.substr(d1 + 1, d2 - d1 - 1);
+    std::string sha = build.substr(d2 + 2);
+    sha = sha.substr(0, std::min(sha.find_first_not_of("0123456789abcdef"), (size_t)10));
+    if (ahead.empty() || ahead == "0" || ahead.find_first_not_of("0123456789") != std::string::npos)
+        return version;
+    return version + "-dev." + ahead + "+g" + sha;
+}
+
+/* ── Les trois DAT au decoupage Pleasuredome ──────────────────────────────
+ *
+ *   MAME ROMs (split)          chaque machine qui a des ROMs a elle, BIOS et
+ *                              devices compris : sans merge= (elles sont chez
+ *                              le parent ou le BIOS), sans nodump
+ *   MAME ROMs (bios-devices)   chaque BIOS et chaque device, avec tout ce
+ *                              qu'il emporte (kit_of)
+ *   MAME CHDs (merged)         les disques, ceux des clones ranges chez leur
+ *                              parent, ceux d'un BIOS chez le BIOS
+ *
+ * Les memes regles que generate-mame-dats.py, qui produit ces DAT sur le
+ * serveur Bootcade ; verifiees le 2026-10-04 contre les DAT Pleasuredome
+ * 0.289 avec le -listxml du MAME 0.289 publie : contenu de chaque zip
+ * identique, sauf 19 devices de bios-devices ou deux cartes portent une ROM
+ * du meme nom et d'un contenu different. Un zip n'en tient qu'une : on garde
+ * celle de la carte au plus petit nom, Pleasuredome celle que l'ordre de
+ * son MAME lui donnait. Le dossier attendu par le
+ * gestionnaire de ROMs est l'en-tete du DAT : une collection rangee d'apres
+ * les DAT Pleasuredome reste en place.
+ */
+constexpr const char* kSplit   = "MAME ROMs (split)";
+constexpr const char* kBiosDev = "MAME ROMs (bios-devices)";
+constexpr const char* kChds    = "MAME CHDs (merged)";
+
+struct KitBuilder {
+    std::unordered_map<std::string, const LxMachine*> by_name;
+    explicit KitBuilder(const std::vector<LxMachine>& machines) {
+        for (const auto& m : machines) by_name.emplace(m.name, &m);
+    }
+    // Les ROMs d'un BIOS ou d'un device, plus celles de tout ce qu'il
+    // emporte, de proche en proche : son parent (romof), sauf ce dont il a
+    // deja le contenu sous un autre nom (meme CRC) ; ses device_ref ; chaque
+    // carte qu'on peut brancher dans ses slots. Un zip ne peut pas tenir deux
+    // fichiers du meme nom : a nom egal, le premier rencontre reste. Chacune
+    // de ces regles est exigee par au moins une machine des DAT Pleasuredome
+    // (slvrball, osa_analyst, tandy_1000x_graphics...).
+    void kit_of(const std::string& name, std::unordered_set<std::string>& seen,
+                std::vector<const LxRom*>& out, std::unordered_set<std::string>& names) const {
+        if (!seen.insert(name).second) return;
+        auto it = by_name.find(name);
+        if (it == by_name.end()) return;
+        const LxMachine& m = *it->second;
+        if (!m.isbios && !m.isdevice) return;
+        auto add = [&](const LxRom* r) { if (names.insert(r->name).second) out.push_back(r); };
+        for (const auto& r : m.roms) add(&r);
+        if (!m.romof.empty()) {
+            std::unordered_set<std::string> crcs;
+            for (const auto* r : out) crcs.insert(r->crc);
+            std::vector<const LxRom*> parent;
+            std::unordered_set<std::string> parent_names;
+            kit_of(m.romof, seen, parent, parent_names);
+            for (const auto* r : parent) if (!crcs.count(r->crc)) add(r);
+        }
+        for (const auto* list : {&m.devices, &m.slot_devices})
+            for (const auto& dev : *list) {
+                std::vector<const LxRom*> sub;
+                std::unordered_set<std::string> sub_names;
+                kit_of(dev, seen, sub, sub_names);
+                for (const auto* r : sub) add(r);
+            }
+    }
+};
+
 static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
                    const std::function<bool(int)>& progress, bool replace_previous,
                    ConvertResult* result) {
@@ -920,27 +1063,26 @@ static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
     if (dat_dir.empty()) return -1;
     std::error_code ec;
     fs::create_directories(dat_dir, ec);
-    std::string version;
+    std::string version, build;
     std::vector<LxMachine> machines;
-    const int seen = read_stream(feed, progress, machines, version);
+    const int seen = read_stream(feed, progress, machines, version, &build);
     if (seen < 0) return -1;
 
-    // Ecrit dans l'ordre des noms.
+    // L'ordre de Pleasuredome : tri naturel des noms.
     std::vector<size_t> order(machines.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;
-    std::sort(order.begin(), order.end(),
-              [&](size_t a, size_t b) { return machines[a].name < machines[b].name; });
+    std::stable_sort(order.begin(), order.end(),
+                     [&](size_t a, size_t b) { return natural_less(machines[a].name, machines[b].name); });
 
     if (version.empty()) version = "unknown";
-    const std::string date = today_iso();
-    const std::string tag  = "MAME " + version;
+    const std::string shown = header_version(version, build);
+    const std::string date  = today_iso();
 
     // ── Ce que les generations precedentes laissent derriere elles ─────────
-    // Les deux fichiers de l'ancien format (un DAT par famille, semantique
-    // brute de -listxml) : c'est Bootcade qui les ecrivait, sous ces noms-la
-    // exactement. Et, s'ils portent notre signature, ceux d'une autre version
-    // de MAME : laisses la, « Update DAT »
-    // chargerait les memes machines une seconde fois. Un DAT depose par
+    // Les fichiers que Bootcade ecrivait avant, sous ces noms-la exactement :
+    // l'ancien format (un DAT par famille), le DAT unique « MAME <ver>.dat »,
+    // et un decoupage portant la version dans son nom. Laisses la, « Update
+    // DAT » chargerait les memes machines une seconde fois. Un DAT depose par
     // l'utilisateur ne porte pas la signature et reste en place.
     auto remove_previous = [&](const std::vector<std::string>& written) {
         for (const char* old : {"MAME_-_Arcade.dat", "MAME_-_Mechanical.dat"})
@@ -964,37 +1106,92 @@ static int convert_stream(const ListxmlFeed& feed, const std::string& dat_dir,
         }
     };
 
-    // ── Un seul DAT, fidele a -listxml ─────────────────────────────────────
-    // Chaque machine telle que MAME la decrit : ses liens (cloneof, romof), ses
-    // ROMs et ses disques, merge= compris. C'est au gestionnaire de ROMs
-    // d'appliquer le « Set style » du groupe (split, non-merged), exactement
-    // comme pour un DAT FinalBurn Neo, et comme RomVault ou clrmamepro le font
-    // avec le XML de MAME. Seul ce qui ne sert pas a verifier un set est laisse
-    // de cote (entrees, DIP, ecrans, sons...). Une machine sans ROM ni disque
-    // n'a rien a verifier et n'a pas d'entree.
-    ListxmlSets sets(machines);
-    DatWriter one;
-    if (!one.open(dat_dir, tag + ".dat", kHeader, version, date, tag)) return -1;
+    auto sorted_roms = [](std::vector<const LxRom*> v) {
+        std::stable_sort(v.begin(), v.end(),
+                         [](const LxRom* a, const LxRom* b) { return natural_less(a->name, b->name); });
+        return v;
+    };
+
+    // split : les ROMs propres de chaque machine qui en a.
+    DatWriter split;
+    if (!split.open(dat_dir, std::string(kSplit) + ".dat", kSplit, shown, date, build)) return -1;
     for (size_t i : order) {
         const LxMachine& m = machines[i];
-        if (!sets.has_entry(m)) continue;
-        one.begin_machine(m);
-        sets.roms(m, [&](const LxRom& r) { one.rom(r); });
-        sets.disks(m, [&](const LxDisk& d) { one.disk(d); });
-        sets.devices(m, [&](const std::string& dev) { one.device_ref(dev); });
-        one.end_machine();
+        std::vector<const LxRom*> own;
+        for (const auto& r : m.roms) if (!r.merged) own.push_back(&r);
+        if (own.empty()) continue;
+        split.begin_machine(m);
+        for (const auto* r : sorted_roms(own)) split.rom(*r);
+        split.end_machine();
     }
-    const int n_sets = one.machines;
-    if (!one.commit()) return -1;
+
+    // bios-devices : chaque BIOS et chaque device, avec ce qu'il emporte.
+    KitBuilder kits(machines);
+    DatWriter biosdev;
+    if (!biosdev.open(dat_dir, std::string(kBiosDev) + ".dat", kBiosDev, shown, date, build)) {
+        split.discard();
+        return -1;
+    }
+    for (size_t i : order) {
+        const LxMachine& m = machines[i];
+        if (!m.isbios && !m.isdevice) continue;
+        std::unordered_set<std::string> seen_kits, names;
+        std::vector<const LxRom*> kit;
+        kits.kit_of(m.name, seen_kits, kit, names);
+        if (kit.empty()) continue;
+        biosdev.begin_machine(m);
+        for (const auto* r : sorted_roms(kit)) biosdev.rom(*r);
+        biosdev.end_machine();
+    }
+
+    // CHDs merged : un dossier par parent, avec ses disques et ceux de ses
+    // clones, dans l'ordre des machines ; un disque merge= est deja chez le
+    // parent (ou chez le BIOS, qui a son entree a lui). Un nom deja present
+    // n'est pas repris.
+    std::map<std::string, std::vector<const LxDisk*>> chd_of;
+    std::map<std::string, std::unordered_set<std::string>> chd_names;
+    for (size_t i : order) {
+        const LxMachine& m = machines[i];
+        if (m.disks.empty()) continue;
+        const std::string home = m.cloneof.empty() ? m.name : m.cloneof;
+        for (const auto& d : m.disks) {
+            if (d.merged) continue;
+            if (chd_names[home].insert(d.name).second) chd_of[home].push_back(&d);
+        }
+    }
+    DatWriter chds;
+    if (!chds.open(dat_dir, std::string(kChds) + ".dat", kChds, shown, date, build)) {
+        split.discard();
+        biosdev.discard();
+        return -1;
+    }
+    for (size_t i : order) {
+        const LxMachine& m = machines[i];
+        auto it = chd_of.find(m.name);
+        if (it == chd_of.end() || it->second.empty()) continue;
+        std::stable_sort(it->second.begin(), it->second.end(),
+                         [](const LxDisk* x, const LxDisk* y) { return natural_less(x->name, y->name); });
+        chds.begin_machine(m);
+        for (const auto* d : it->second) chds.disk(*d);
+        chds.end_machine();
+    }
+
+    const int n_sets = split.machines + biosdev.machines + chds.machines;
+    // Les trois ensemble : un fichier remplace sans les deux autres melangerait
+    // deux versions de MAME dans le dossier.
+    if (!split.commit()) { biosdev.discard(); chds.discard(); return -1; }
+    if (!biosdev.commit()) { chds.discard(); return -1; }
+    if (!chds.commit()) return -1;
     if (result) {
-        result->version  = version;
+        result->version  = shown;
         result->sets     = n_sets;
         result->machines = (int)machines.size();
-        result->files    = {one.final_path};
+        result->files    = {split.final_path, biosdev.final_path, chds.final_path};
     }
     if (progress) progress(seen);
-    if (replace_previous) remove_previous({one.final_path});
-    return 1;
+    if (replace_previous) remove_previous(result ? result->files
+                                                 : std::vector<std::string>{split.final_path, biosdev.final_path, chds.final_path});
+    return 3;
 }
 
 int generate_dats(const std::string& mame_exe,

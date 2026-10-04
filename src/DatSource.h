@@ -217,6 +217,15 @@ struct Manifest {
     std::vector<RemoteFile> files;
 };
 
+// The Bootcade server's MAME DATs : one folder per MAME channel (release,
+// sooner, see MameSooner.h), each with its own dat-manifest.json.
+std::string mame_manifest_url(const std::string& channel);
+// The manifest a Bootcade-server group reads. A MAME group left without an
+// address, or pointing at one of the server's MAME channels, follows the
+// channel chosen in Settings : switching to Sooner switches its DATs too.
+// Any other address is the user's, used as it is.
+std::string manifest_url(const Group& g);
+
 // Fetches and parses a manifest. Refuses any schema this build does not
 // know : `error` then says which one it met. Network work : call off the
 // GTK thread.

@@ -3,6 +3,7 @@
 #include "SplashScreen.h"
 #include "DatabaseManager.h"
 #include "MameCatalog.h"
+#include "MameSooner.h"
 #include "DatSource.h"
 #include "RomAudit.h"
 #include "RomScanner.h"
@@ -314,7 +315,9 @@ int main(int argc, char *argv[]) {
     // FBNeo n'est pas touche. Sans MAME sur la machine, on passe simplement
     // notre chemin.
     try {
-        const std::string mame = MameCatalog::find_executable();
+        // Celui que le joueur utilise : le Sooner si c'est son canal, sinon
+        // celui qu'il a designe, sinon celui du systeme.
+        const std::string mame = MameSooner::resolve_executable();
         if (!mame.empty()) {
             splash.set_progress(0.72, "Reading the MAME catalog...");
             const int n = MameCatalog::sync(database, mame,
@@ -367,6 +370,19 @@ int main(int argc, char *argv[]) {
                                      std::chrono::steady_clock::now() - t0).count() / 1000.0
                               << std::endl;
                 }
+            }
+
+            // Diagnostic : installer le MAME Sooner publie (ou celui de
+            // BOOTCADE_MAME_SOONER_URL) sans passer par l'interface.
+            if (const char* so = std::getenv("BOOTCADE_MAME_SOONER"); so && *so == '1') {
+                const auto info = MameSooner::fetch_info();
+                std::string err;
+                const bool ok = info.ok && MameSooner::install(info, err);
+                std::cout << "[SOONER] info=" << (info.ok ? info.build : info.error)
+                          << " install=" << (ok ? "ok" : err)
+                          << " exe=" << MameSooner::executable()
+                          << " missing=" << MameSooner::missing_libraries(MameSooner::executable())
+                          << std::endl;
             }
 
             if (const char* want = std::getenv("BOOTCADE_MAME_AUDIT")) {

@@ -193,11 +193,22 @@ private:
     Gtk::RadioButton    m_radio_emulator, m_radio_http, m_radio_folder;
     Gtk::Box            m_url_line;   // libelle + adresse du manifeste
     Gtk::Entry          m_entry_url;
+    // Le groupe dont le champ montre l'adresse : il est partage par tous les
+    // groupes, et le quitter apres avoir change de groupe ecrivait l'adresse
+    // de l'ancien dans le nouveau.
+    std::string         m_url_group;
     Gtk::Label          m_source_hint;
     Gtk::Label          m_status;
 
     SettingsUi::Table*  m_table = nullptr;
     Gtk::Box            m_info_column{Gtk::ORIENTATION_VERTICAL, SettingsUi::kCardSpacing};
+    // Les quatre cartes de la colonne se replient comme celles des Settings
+    // (SettingsUi::fold) ; leur etat se retrouve d'une ouverture a l'autre
+    // (cle « rom_dat_sections » de config.json).
+    std::map<std::string, SettingsUi::Fold> m_folds;
+    Gtk::Widget* fold_card(const SettingsUi::Card& card, const std::string& key,
+                           std::function<std::string()> describe);
+    void         refresh_folds();
     Gtk::Grid           m_info_grid;
     std::map<std::string, Gtk::Label*> m_info_values;
     Gtk::Button*        m_btn_open_in_folder = nullptr;

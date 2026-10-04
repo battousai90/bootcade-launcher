@@ -1,17 +1,21 @@
 // src/RomDatTab.cpp
 #include "RomDatTab.h"
 
+#include "AppContext.h"
 #include "ConfirmationDialog.h"
 #include "EmulatorRegistry.h"
 #include "DatParser.h"
 #include "GenerateDAT.h"
 #include "MameCatalog.h"
+#include "MameSooner.h"
 #include "i18n.h"
 
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
+#include <nlohmann/json.hpp>
 #include <iostream>
 #include <set>
 #include <sstream>
@@ -354,6 +358,7 @@ void RomDatTab::build_source_card() {
     m_entry_url.set_hexpand(true);
     m_entry_url.set_placeholder_text(DatSource::kDefaultManifestUrl);
     auto commit_url = [this] {
+        if (group().id != m_url_group) return;
         if (m_entry_url.get_text().raw() == group().url) return;
         group().url = m_entry_url.get_text().raw();
         save_groups();
@@ -443,7 +448,9 @@ void RomDatTab::build_table() {
     m_btn_open_in_folder->set_margin_top(8);
     m_btn_open_in_folder->signal_clicked().connect(sigc::mem_fun(*this, &RomDatTab::on_open_folder));
     info.body->pack_start(*m_btn_open_in_folder, Gtk::PACK_SHRINK);
-    m_info_column.pack_start(*info.frame, Gtk::PACK_SHRINK);
+    m_info_column.pack_start(*fold_card(info, "dat_info", [this] {
+        return m_info_values["file"]->get_text().raw();
+    }), Gtk::PACK_SHRINK);
 
     // How this DAT is read : a rule of its own, never one of the group's.
     auto rule = ui::card("bc-sliders.svg", _("How this DAT is read"), "");
@@ -482,7 +489,9 @@ void RomDatTab::build_table() {
     folder_row->pack_start(m_entry_dat_folder, Gtk::PACK_EXPAND_WIDGET);
     folder_row->set_margin_top(6);
     rule.body->pack_start(*folder_row, Gtk::PACK_SHRINK);
-    m_info_column.pack_start(*rule.frame, Gtk::PACK_SHRINK);
+    m_info_column.pack_start(*fold_card(rule, "dat_rule", [this] {
+        return m_rule_values["mode"]->get_text().raw();
+    }), Gtk::PACK_SHRINK);
 
     auto src = ui::card("bc-cloud.svg", _("Source information"), "");
     m_source_grid.set_column_spacing(14);
@@ -494,7 +503,9 @@ void RomDatTab::build_table() {
                     {"shared", N_("Shared with")}, {"last_check", N_("Last check")}, {"last_update", N_("Last update")}})
         grid_row(m_source_grid, r++, _(kv.second), m_source_values, kv.first);
     src.body->pack_start(m_source_grid, Gtk::PACK_SHRINK);
-    m_info_column.pack_start(*src.frame, Gtk::PACK_SHRINK);
+    m_info_column.pack_start(*fold_card(src, "dat_source", [this] {
+        return m_source_values["kind"]->get_text().raw();
+    }), Gtk::PACK_SHRINK);
 
     auto prev = ui::card("bc-file.svg", _("File preview (header)"), "");
     m_preview_buffer = Gtk::TextBuffer::create();
@@ -510,10 +521,55 @@ void RomDatTab::build_table() {
     scroll->add(m_preview);
     scroll->set_margin_top(8);
     prev.body->pack_start(*scroll, Gtk::PACK_EXPAND_WIDGET);
-    m_info_column.pack_start(*prev.frame, Gtk::PACK_EXPAND_WIDGET);
+    // Ouverte, elle prend la hauteur qui reste ; fermee, elle n'est plus que
+    // son en-tete (refresh_folds).
+    m_info_column.pack_start(*fold_card(prev, "dat_preview", [this] {
+        return m_info_values["system"]->get_text().raw();
+    }), Gtk::PACK_EXPAND_WIDGET);
 
     middle->pack_start(m_info_column, Gtk::PACK_SHRINK);
     m_main.pack_start(*middle, Gtk::PACK_EXPAND_WIDGET);
+}
+
+Gtk::Widget* RomDatTab::fold_card(const ui::Card& card, const std::string& key,
+                                  std::function<std::string()> describe) {
+    bool open = true;
+    {
+        nlohmann::json j;
+        std::ifstream in(AppContext::get_config_path());
+        if (in) { try { in >> j; } catch (...) {} }
+        if (j.is_object() && j.contains("rom_dat_sections") && j["rom_dat_sections"].is_object()
+            && j["rom_dat_sections"].contains(key) && j["rom_dat_sections"][key].is_boolean())
+            open = j["rom_dat_sections"][key].get<bool>();
+    }
+    m_folds[key] = ui::fold(card, open, std::move(describe), [this, key] {
+        refresh_folds();
+        // Ecrit au geste : cet ecran n'a pas de bouton Enregistrer.
+        nlohmann::json j;
+        const std::string path = AppContext::get_config_path();
+        { std::ifstream in(path); if (in) { try { in >> j; } catch (...) {} } }
+        if (!j.is_object()) return;
+        j["rom_dat_sections"][key] = m_folds[key].body->get_reveal_child();
+        std::ofstream out(path);
+        if (out) out << j.dump(4);
+    });
+    return card.frame;
+}
+
+void RomDatTab::refresh_folds() {
+    for (const auto& [key, f] : m_folds) {
+        ui::refresh_fold(f);
+        // L'apercu remplit la colonne quand il est ouvert ; ferme, il rend
+        // la place, sans quoi son cadre resterait etire autour de rien.
+        if (key == "dat_preview" && f.body) {
+            auto* frame = f.body->get_parent();
+            const bool open = f.body->get_reveal_child();
+            if (frame) {
+                m_info_column.child_property_expand(*frame) = open;
+                m_info_column.child_property_fill(*frame) = open;
+            }
+        }
+    }
 }
 
 void RomDatTab::build_footer() {
@@ -568,7 +624,9 @@ const std::map<std::string, RomDatTab::Backend>& RomDatTab::backends() {
             N_("No %1 executable configured : set it in Settings › Emulator."),
         }},
         {"mame", {
-            [](RomDatTab&) { return MameCatalog::find_executable(); },
+            // Le MAME des Settings, canal compris : les DAT generes decrivent
+            // celui avec lequel on joue.
+            [](RomDatTab&) { return MameSooner::resolve_executable(); },
             [](RomDatTab& t) { t.on_generate_mame(); },
             N_("Read the machine list from the installed %1 and write its DAT files into the folder."),
             N_("%1 was not found on this system : install it, then try again."),
@@ -799,10 +857,10 @@ void RomDatTab::apply_source_ui() {
         case DatSource::Kind::Http:
             m_btn_primary->set_label(_("Download DATs"));
             m_btn_primary->set_image(*ui::image("bc-download.svg", ui::kIconButton));
-            m_btn_primary->set_sensitive(!m_busy && !g.url.empty());
+            m_btn_primary->set_sensitive(!m_busy && !DatSource::manifest_url(g).empty());
             m_btn_primary->set_tooltip_text(_("Fetch the manifest and download this group's DAT files that are missing here or differ (SHA-256), each verified before it replaces the local one."));
             m_btn_check->show();
-            m_btn_check->set_sensitive(!m_busy && !g.url.empty());
+            m_btn_check->set_sensitive(!m_busy && !DatSource::manifest_url(g).empty());
             m_btn_site->hide();
             m_url_line.show();
             m_source_hint.set_text(_("The server publishes dat-manifest.json next to the files. Changes are detected by SHA-256; version and date are informative."));
@@ -937,8 +995,8 @@ void RomDatTab::on_rescan() {
 }
 
 void RomDatTab::on_check_updates() {
-    if (m_busy || group().url.empty()) return;
-    m_job_url = group().url;
+    if (m_busy || DatSource::manifest_url(group()).empty()) return;
+    m_job_url = DatSource::manifest_url(group());
     m_job_folder = group().folder;
     m_job_group_id = group().id;
     m_job_group = group();
@@ -951,13 +1009,13 @@ void RomDatTab::on_check_updates() {
 }
 
 void RomDatTab::on_download() {
-    if (m_busy || group().url.empty()) return;
+    if (m_busy || DatSource::manifest_url(group()).empty()) return;
     if (group().folder.empty()) {
         auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
         if (top) ui::notice(*top, _("No DAT folder"), _("Choose the group's folder first."));
         return;
     }
-    m_job_url = group().url;
+    m_job_url = DatSource::manifest_url(group());
     m_job_folder = group().folder;
     m_job_group_id = group().id;
     m_job_group = group();
@@ -1018,6 +1076,8 @@ void RomDatTab::on_open_folder() {
 
 void RomDatTab::refresh() {
     if (m_busy) return;
+    // Le MAME retenu peut avoir change dans les Settings (canal Sooner).
+    m_exe_cache.clear();
     // Re-read : the groups (config.json), the folder, the database.
     std::string keep_id = m_groups.empty() ? "" : group().id;
     m_groups = DatSource::load_groups();
@@ -1030,7 +1090,12 @@ void RomDatTab::refresh() {
     const auto& g = group();
     m_group_card.title->set_text(g.name);
     m_entry_folder.set_text(g.folder);
+    m_url_group = g.id;
     m_entry_url.set_text(g.url);
+    // Un groupe MAME sans adresse suit le canal choisi dans les Settings :
+    // l'indication montre laquelle il lira.
+    m_entry_url.set_placeholder_text(g.emulator == "mame" ? DatSource::mame_manifest_url(MameSooner::channel())
+                                                          : std::string(DatSource::kDefaultManifestUrl));
     // Un groupe peut porter un emulateur que cette version ignore : mieux
     // vaut laisser le selecteur vide que lui en faire dire un autre.
     if (!m_combo_emulator.set_active_id(g.emulator)) m_combo_emulator.set_active(-1);
@@ -1156,6 +1221,7 @@ void RomDatTab::show_file_info(int index) {
         for (auto& [k, l] : m_info_values) l->set_text("");
         m_preview_buffer->set_text("");
         m_btn_open_in_folder->set_sensitive(false);
+        refresh_folds();
         return;
     }
     const auto& it = m_items[index];
@@ -1181,6 +1247,7 @@ void RomDatTab::show_file_info(int index) {
     if (it.on_disk) for (const auto& l : DatSource::read_header(it.path, 14).preview) preview += l + "\n";
     m_preview_buffer->set_text(preview);
     m_btn_open_in_folder->set_sensitive(it.on_disk);
+    refresh_folds();
 }
 
 // A merge mode, as the screen names it.
@@ -1265,8 +1332,8 @@ void RomDatTab::show_source_info() {
         }
         case DatSource::Kind::Http:
             set("kind", _("Bootcade server (dat-manifest.json)"));
-            set("where", g.url);
-            set("status", g.url.empty() ? std::string(_("No URL"))
+            set("where", DatSource::manifest_url(g));
+            set("status", DatSource::manifest_url(g).empty() ? std::string(_("No URL"))
                         : (m_last_compare_group == g.id && !m_last_manifest_generated.empty()
                            ? Glib::ustring::compose(_("Manifest generated %1"), short_date(m_last_manifest_generated)).raw()
                            : std::string(_("Not checked this session"))));
@@ -1282,12 +1349,13 @@ void RomDatTab::show_source_info() {
     std::string shared;
     for (const auto& o : m_groups) {
         if (o.id == g.id || o.folder != g.folder || o.source != g.source) continue;
-        if (g.source == DatSource::Kind::Http && o.url != g.url) continue;
+        if (g.source == DatSource::Kind::Http && DatSource::manifest_url(o) != DatSource::manifest_url(g)) continue;
         shared += (shared.empty() ? "" : ", ") + o.name;
     }
     set("shared", shared.empty() ? std::string(_("no other group")) : shared);
     set("last_check", g.last_check.empty() ? _("never") : short_date(g.last_check));
     set("last_update", g.last_update.empty() ? _("never") : short_date(g.last_update));
+    refresh_folds();
 }
 
 // ═══ Worker ═════════════════════════════════════════════════════════════════

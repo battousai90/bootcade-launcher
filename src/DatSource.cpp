@@ -3,6 +3,7 @@
 #include "DatParser.h"
 
 #include "AppContext.h"
+#include "MameSooner.h"
 #include "i18n.h"
 
 #include <archive.h>
@@ -194,6 +195,16 @@ std::string make_id(const std::string& name, const std::vector<Group>& taken) {
     return id;
 }
 
+// Un fichier d'un des sites de DAT (sites()) : meme dossier que son adresse,
+// quelle qu'en soit la version.
+static bool is_site_address(const std::string& url) {
+    if (url.empty()) return false;
+    auto dir_of = [](const std::string& u) { return u.substr(0, u.rfind('/') + 1); };
+    for (const auto& s : sites())
+        if (dir_of(s.url) == dir_of(url)) return true;
+    return false;
+}
+
 std::vector<Group> load_groups() {
     nlohmann::json j;
     std::ifstream fi(AppContext::get_config_path());
@@ -227,6 +238,13 @@ std::vector<Group> load_groups() {
             // FinalBurn Neo, et le defaut les laisse intacts.
             grp.emulator    = str(g, "emulator", "fbneo");
             grp.url         = str(g, "url", kDefaultManifestUrl);
+            // L'adresse d'un fichier publie par un site de DAT (le pack
+            // progettosnaps, un zip Pleasuredome...) n'est pas un manifeste :
+            // un ancien defaut de l'ecran l'a ecrite dans des groupes qui ne
+            // l'avaient jamais demandee. Elle repart a l'adresse du serveur
+            // Bootcade (un groupe MAME suit alors le canal des Settings).
+            if (is_site_address(grp.url))
+                grp.url = grp.emulator == "mame" ? std::string() : std::string(kDefaultManifestUrl);
             grp.set_style   = str(g, "set_style", legacy_style);
             grp.active      = flag(g, "active", true);
             grp.last_check  = str(g, "last_check");
@@ -739,6 +757,21 @@ std::string source_of(const std::string& folder, const std::string& file) {
     if (!j.is_object() || !j.contains(file) || !j[file].is_object()) return {};
     const auto& s = j[file];
     return s.value("source", "") + " — " + s.value("homepage", "");
+}
+
+std::string mame_manifest_url(const std::string& channel) {
+    // A cote du manifeste FinalBurn Neo : meme serveur, sous dat/mame/<canal>/.
+    std::string base = kDefaultManifestUrl;
+    base = base.substr(0, base.rfind('/') + 1);
+    return base + "mame/" + channel + "/dat-manifest.json";
+}
+
+std::string manifest_url(const Group& g) {
+    if (g.emulator != "mame") return g.url;
+    if (g.url.empty() || g.url == mame_manifest_url(MameSooner::kChannelRelease)
+                      || g.url == mame_manifest_url(MameSooner::kChannelSooner))
+        return mame_manifest_url(MameSooner::channel());
+    return g.url;
 }
 
 bool fetch_manifest(const std::string& url, Manifest& out, std::string& error) {
