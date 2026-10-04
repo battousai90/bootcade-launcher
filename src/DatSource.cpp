@@ -81,6 +81,8 @@ std::string sibling_url(const std::string& manifest_url, const std::string& name
 const char* kind_key(Kind k) {
     switch (k) {
         case Kind::Emulator: return "emulator";
+        case Kind::Url:      return "url";
+        case Kind::Site:     return "site";
         case Kind::Folder:   return "folder";
         default:             return "http";
     }
@@ -89,6 +91,8 @@ const char* kind_key(Kind k) {
 Kind kind_from_key(const std::string& s) {
     std::string v = lower(s);
     if (v == "emulator") return Kind::Emulator;
+    if (v == "url")      return Kind::Url;
+    if (v == "site")     return Kind::Site;
     if (v == "folder")   return Kind::Folder;
     return Kind::Http;
 }
@@ -195,16 +199,6 @@ std::string make_id(const std::string& name, const std::vector<Group>& taken) {
     return id;
 }
 
-// Un fichier d'un des sites de DAT (sites()) : meme dossier que son adresse,
-// quelle qu'en soit la version.
-static bool is_site_address(const std::string& url) {
-    if (url.empty()) return false;
-    auto dir_of = [](const std::string& u) { return u.substr(0, u.rfind('/') + 1); };
-    for (const auto& s : sites())
-        if (dir_of(s.url) == dir_of(url)) return true;
-    return false;
-}
-
 std::vector<Group> load_groups() {
     nlohmann::json j;
     std::ifstream fi(AppContext::get_config_path());
@@ -237,14 +231,15 @@ std::vector<Group> load_groups() {
             // Absent des fichiers ecrits avant MAME : ils decrivent tous
             // FinalBurn Neo, et le defaut les laisse intacts.
             grp.emulator    = str(g, "emulator", "fbneo");
-            grp.url         = str(g, "url", kDefaultManifestUrl);
-            // L'adresse d'un fichier publie par un site de DAT (le pack
-            // progettosnaps, un zip Pleasuredome...) n'est pas un manifeste :
-            // un ancien defaut de l'ecran l'a ecrite dans des groupes qui ne
-            // l'avaient jamais demandee. Elle repart a l'adresse du serveur
-            // Bootcade (un groupe MAME suit alors le canal des Settings).
-            if (is_site_address(grp.url))
-                grp.url = grp.emulator == "mame" ? std::string() : std::string(kDefaultManifestUrl);
+            // Le champ ne sert plus qu'a la source « Custom URL » : l'adresse du
+            // serveur Bootcade est dans le code. Une ancienne adresse de
+            // manifeste (le serveur lui-meme) n'a donc plus de sens ici.
+            grp.url         = str(g, "url");
+            if (grp.url.find("duckdns.org/dat/") != std::string::npos
+                && grp.url.find("dat-manifest.json") != std::string::npos)
+                grp.url.clear();
+            grp.unzip       = flag(g, "unzip", true);
+            grp.site        = str(g, "site");
             grp.set_style   = str(g, "set_style", legacy_style);
             grp.active      = flag(g, "active", true);
             grp.last_check  = str(g, "last_check");
@@ -294,12 +289,31 @@ std::vector<Group> load_groups() {
         fb.name      = "FinalBurn Neo";
         fb.folder    = str(j, "dat_path");
         fb.source    = Kind::Http;
-        fb.url       = kDefaultManifestUrl;
+        fb.url.clear();
         fb.set_style = legacy_style;
         for (const auto& f : list_folder(fb.folder)) fb.rules[f].merge = legacy_style;
         groups.push_back(std::move(fb));
     }
+    // Ecrits avant la regle, des fichiers ont deux groupes actifs pour un
+    // meme emulateur : le premier reste, et rien n'est ecrit tant que
+    // l'utilisateur ne touche pas l'ecran.
+    one_active_per_emulator(groups);
     return groups;
+}
+
+bool one_active_per_emulator(std::vector<Group>& groups, size_t keep) {
+    bool changed = false;
+    std::map<std::string, size_t> winner;   // emulator → index of its active group
+    if (keep < groups.size()) winner[groups[keep].emulator] = keep;
+    for (size_t i = 0; i < groups.size(); ++i)
+        if (groups[i].active && !winner.count(groups[i].emulator)) winner[groups[i].emulator] = i;
+    for (size_t i = 0; i < groups.size(); ++i)
+        if (!winner.count(groups[i].emulator)) winner[groups[i].emulator] = i;
+    for (size_t i = 0; i < groups.size(); ++i) {
+        const bool on = winner[groups[i].emulator] == i;
+        if (groups[i].active != on) { groups[i].active = on; changed = true; }
+    }
+    return changed;
 }
 
 bool save_groups(const std::vector<Group>& groups) {
@@ -315,6 +329,8 @@ bool save_groups(const std::vector<Group>& groups) {
         o["source"] = kind_key(g.source);
         o["emulator"] = g.emulator.empty() ? std::string("fbneo") : g.emulator;
         o["url"] = g.url;
+        o["unzip"] = g.unzip;
+        o["site"] = g.site;
         o["active"] = g.active;
         o["all_files"] = g.all_files;
         o["files"] = g.files;
@@ -418,16 +434,36 @@ std::vector<std::string> roms_paths_for(const std::string& emulator) {
 std::vector<std::string> files_to_load(const std::vector<Group>& groups, std::vector<std::string>* conflicts) {
     std::vector<std::string> out;
     std::map<std::string, std::string> seen;   // file name → folder it was taken from
+    // Deux DAT d'un meme emulateur sous le meme en-tete decrivent le meme
+    // dossier de la collection, donc les memes sets : la base n'en garde
+    // qu'un par nom (emulateur, set, systeme) et refusait le second set par
+    // set. Typiquement deux groupes actifs pour la meme chose (les DAT
+    // Pleasuredome 0.289 et ceux de Sooner) : le premier gagne, et on le dit.
+    std::map<std::string, std::string> headers;   // emulator + header → path that carries it
     for (const auto& g : groups) {
         if (!g.active) continue;
         for (const auto& f : selected_in_folder(g)) {
             auto it = seen.find(f);
-            if (it == seen.end()) {
-                seen[f] = g.folder;
-                out.push_back((fs::path(g.folder) / f).string());
-            } else if (it->second != g.folder && conflicts) {
-                conflicts->push_back(f + " (" + g.name + " : " + g.folder + " ignored, already loaded from " + it->second + ")");
+            if (it != seen.end()) {
+                if (it->second != g.folder && conflicts)
+                    conflicts->push_back(f + " (" + g.name + " : " + g.folder + " ignored, already loaded from " + it->second + ")");
+                continue;
             }
+            const std::string path = (fs::path(g.folder) / f).string();
+            const std::string header = read_header(path, 0).name;
+            if (!header.empty()) {
+                const std::string key = g.emulator + '\x1f' + header;
+                auto h = headers.find(key);
+                if (h != headers.end()) {
+                    if (conflicts)
+                        conflicts->push_back(f + " (" + g.name + ") ignored : same DAT as " + h->second
+                                             + " (\"" + header + "\"), already loaded");
+                    continue;
+                }
+                headers[key] = path;
+            }
+            seen[f] = g.folder;
+            out.push_back(path);
         }
     }
     return out;
@@ -604,7 +640,8 @@ std::string latest_url(const std::string& url, std::string& error) {
 bool fetch_direct(const std::string& url, const std::string& folder,
                   std::vector<std::string>& written, std::string& error,
                   const std::function<void(double, const std::string&)>& progress,
-                  const std::function<bool()>& cancelled) {
+                  const std::function<bool()>& cancelled,
+                  bool unpack) {
     // A folder of a GitHub repository (the FinalBurn Neo team publishes one
     // DAT per system) : every .dat / .xml it lists, each fetched on its own.
     if (url.rfind("https://api.github.com/repos/", 0) == 0 && url.find("/contents/") != std::string::npos) {
@@ -694,7 +731,7 @@ bool fetch_direct(const std::string& url, const std::string& folder,
     { std::ifstream in(tmp, std::ios::binary); in.read(reinterpret_cast<char*>(magic), sizeof(magic)); }
     const bool is_zip = magic[0] == 'P' && magic[1] == 'K';
     const bool is_7z  = magic[0] == '7' && magic[1] == 'z' && magic[2] == 0xBC && magic[3] == 0xAF;
-    if (!is_zip && !is_7z) {
+    if ((!is_zip && !is_7z) || !unpack) {
         fs::rename(tmp, fs::path(folder) / name, ec);
         if (ec) { error = "cannot replace " + name + ": " + ec.message(); fs::remove(tmp, ec); return false; }
         written.push_back(name);
@@ -760,18 +797,13 @@ std::string source_of(const std::string& folder, const std::string& file) {
 }
 
 std::string mame_manifest_url(const std::string& channel) {
-    // A cote du manifeste FinalBurn Neo : meme serveur, sous dat/mame/<canal>/.
-    std::string base = kDefaultManifestUrl;
-    base = base.substr(0, base.rfind('/') + 1);
-    return base + "mame/" + channel + "/dat-manifest.json";
+    return std::string(kServer) + "/dat/mame/" + channel + "/dat-manifest.json";
 }
 
 std::string manifest_url(const Group& g) {
-    if (g.emulator != "mame") return g.url;
-    if (g.url.empty() || g.url == mame_manifest_url(MameSooner::kChannelRelease)
-                      || g.url == mame_manifest_url(MameSooner::kChannelSooner))
-        return mame_manifest_url(MameSooner::channel());
-    return g.url;
+    if (g.emulator == "mame")  return mame_manifest_url(MameSooner::channel());
+    if (g.emulator == "fbneo") return kDefaultManifestUrl;
+    return "";
 }
 
 bool fetch_manifest(const std::string& url, Manifest& out, std::string& error) {

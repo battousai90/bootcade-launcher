@@ -2916,8 +2916,13 @@ void SettingsPanel::refresh_mame_state() {
      * alors que tout va bien, d'ou l'infobulle pour qui veut la sortie
      * exacte. */
     const std::string build = ready ? MameCatalog::installed_build(exe) : std::string();
+    // Sooner se dit en toutes lettres : « 0.289 » seul ne distinguait pas le
+    // MAME de developpement de la version publiee.
+    const std::string number = build.empty() ? std::string()
+        : MameCatalog::header_version(MameCatalog::version_number(build), build);
     m_lbl_mame_build.set_text(build.empty() ? std::string(_("Unknown"))
-                                            : MameCatalog::version_number(build));
+                              : sooner_in_use ? std::string(_("Sooner")) + " " + number.substr(0, number.find('+'))
+                                              : number);
     m_lbl_mame_build.set_tooltip_text(build);
     m_lbl_mame_path.set_text(exe.empty() ? std::string("—") : exe);
     if (!exe.empty()) m_lbl_mame_path.set_tooltip_text(exe);

@@ -63,6 +63,11 @@ LatestRelease fetch_latest_release();
 
 // Compare deux numeros facon MAME ("0.289"). Rend <0, 0 ou >0. Un numero
 // illisible rend 0 : on prefere ne rien affirmer a affirmer n'importe quoi.
+// « 0.289 », ou « 0.289-dev.1310+gce4fc166e5 » pour un MAME de developpement
+// (build « 0.289 (mame0289-1310-gce4fc166e50) ») : la version que portent nos
+// DAT, et celle que l'ecran montre pour dire qu'il ne s'agit pas de la 0.289.
+std::string header_version(const std::string& version, const std::string& build);
+
 int compare_versions(const std::string& a, const std::string& b);
 
 // La version pour laquelle le cache a ete construit, telle qu'enregistree.

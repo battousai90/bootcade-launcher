@@ -32,7 +32,7 @@ constexpr const char* kChannelSooner  = "sooner";
 
 // La fiche publiee par le serveur Bootcade.
 constexpr const char* kInfoUrl =
-    "https://files.gcourtot.duckdns.org/emulators/mame/sooner/mame-sooner.json";
+    "https://files.bootcade.duckdns.org/emulators/mame/sooner/mame-sooner.json";
 
 struct Info {
     bool          ok = false;

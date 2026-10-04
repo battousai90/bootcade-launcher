@@ -2,6 +2,7 @@
 #include "MainWindow.h"
 #include "EmulatorRegistry.h"
 #include "MameCatalog.h"
+#include "MameSooner.h"
 #include "BootcadeAuth.h"
 #include "LoginDialog.h"
 #include "IconManager.h"
@@ -2616,6 +2617,7 @@ void MainWindow::on_play_clicked() {
         }
 
         std::vector<std::string> args{mame};
+        std::cout << "[MAME] " << mame << " (" << MameCatalog::installed_build(mame) << ")" << std::endl;
         // Le reglage fait foi ; mame.ini ne sert que de secours, et seulement
         // pour les dossiers qui existent encore.
         std::vector<std::string> paths;
@@ -3597,6 +3599,7 @@ void MainWindow::run_update_dat_once(const std::string& emulator) {
     std::vector<std::string> files = DATUpdateDialog::files_for_update(emulator, &conflicts);
     for (const auto& c : conflicts) std::cerr << "[DAT] conflict: " << c << std::endl;
     DATUpdateDialog dialog(*this, m_database, dat_path, files, emulator);
+    dialog.note_conflicts(conflicts);
     dialog.start_update();
     
     int result = dialog.run();
@@ -8052,7 +8055,12 @@ void MainWindow::refresh_emu_state() {
                 cached_exe   = exe;
                 cached_build = MameCatalog::installed_build(exe);
             }
-            version = cached_build;
+            // « 0.289-dev.1310 » pour Sooner : « 0.289 » seul le confondait
+            // avec la version publiee.
+            const std::string number = MameCatalog::header_version(
+                MameCatalog::version_number(cached_build), cached_build);
+            version = number.substr(0, number.find('+'));
+            if (exe == MameSooner::executable()) label_ready = _("MAME Sooner ready");
         }
     } else {
         const std::string exe = m_settings_panel.get_fbneo_executable();

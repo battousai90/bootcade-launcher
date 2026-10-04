@@ -50,6 +50,15 @@ std::string thousands(long n) {
     return (n < 0 ? "-" : "") + out;
 }
 
+// « www.progettosnaps.net » pour une adresse : ce que l'ecran montre comme
+// source d'un fichier pris a une adresse du joueur.
+std::string host_of(const std::string& url) {
+    auto b = url.find("://");
+    b = b == std::string::npos ? 0 : b + 3;
+    const auto e = url.find('/', b);
+    return url.substr(b, e == std::string::npos ? std::string::npos : e - b);
+}
+
 std::string short_date(const std::string& iso) {
     if (iso.size() < 16) return iso;
     return iso.substr(0, 10) + " " + iso.substr(11, 5);
@@ -264,7 +273,11 @@ void RomDatTab::build_group_card() {
         std::string v = m_combo_emulator.get_active_id().raw();
         if (v.empty() || v == group().emulator) return;
         group().emulator = v;
+        // Change d'emulateur, le groupe actif y devient le seul actif ; son
+        // ancien emulateur garde (ou retrouve) le sien.
+        DatSource::one_active_per_emulator(m_groups, group().active ? m_current : DatSource::kNoGroup);
         save_groups();
+        rebuild_group_list();
         apply_source_ui();
         show_source_info();
         show_file_info(-1);
@@ -293,27 +306,7 @@ void RomDatTab::build_group_card() {
     m_more_menu.append(*open);
     m_more_menu.show_all();
     m_btn_more->set_popup(m_more_menu);
-    // Local folder : the DAT sites, fetched from their authors' own address
-    // and unpacked into the folder. Their files keep their source on screen.
-    m_btn_site = Gtk::make_managed<Gtk::MenuButton>();
-    {
-        auto* inner = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 6);
-        inner->pack_start(*ui::image("bc-download.svg", ui::kIconButton), Gtk::PACK_SHRINK);
-        inner->pack_start(*Gtk::make_managed<Gtk::Label>(_("Download from a site…")), Gtk::PACK_SHRINK);
-        m_btn_site->add(*inner);
-    }
-    m_btn_site->set_tooltip_text(_("Download DAT files from the site that publishes them, unpack them into the folder, then tick the ones this group uses."));
-    for (size_t i = 0; i < DatSource::sites().size(); ++i) {
-        auto* item = Gtk::make_managed<Gtk::MenuItem>(_(DatSource::sites()[i].label));
-        item->signal_activate().connect([this, i] { on_download_site(i); });
-        m_site_menu.append(*item);
-        m_site_items.emplace_back(item, DatSource::sites()[i].emulator);
-    }
-    m_btn_site->set_popup(m_site_menu);
-    m_btn_site->set_no_show_all(true);
-    m_btn_site->get_child()->show_all();
     m_actions.pack_start(*m_btn_check, Gtk::PACK_SHRINK);
-    m_actions.pack_start(*m_btn_site, Gtk::PACK_SHRINK);
     m_actions.pack_start(*m_btn_add, Gtk::PACK_SHRINK);
     m_actions.pack_start(*m_btn_more, Gtk::PACK_SHRINK);
     m_actions.pack_start(*m_btn_primary, Gtk::PACK_SHRINK);
@@ -337,26 +330,29 @@ void RomDatTab::build_source_card() {
     auto* body = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 6);
     body->set_margin_top(10);
     Gtk::RadioButton::Group grp;
-    m_radio_emulator.set_group(grp);
-    m_radio_http.set_group(grp);
-    m_radio_folder.set_group(grp);
+    for (auto* r : {&m_radio_emulator, &m_radio_http, &m_radio_url, &m_radio_site, &m_radio_folder})
+        r->set_group(grp);
     // Une seule ligne pour les executables : lequel lancer se lit dans
-    // l'emulateur du groupe, la source n'a pas a le redire.
+    // l'emulateur du groupe, la source n'a pas a le redire. L'adresse du
+    // serveur Bootcade est dans le code : rien a saisir.
     m_radio_emulator.set_label(_("Emulator executable — generates the DAT files from the emulator this group describes"));
     m_radio_http.set_label(_("Bootcade server — downloads the DAT files published by the Bootcade server"));
+    m_radio_url.set_label(_("Custom URL — downloads a DAT file, or an archive of DAT files, from an address you give"));
+    m_radio_site.set_label(_("DAT site — downloads the DAT files from the site that publishes them"));
     m_radio_folder.set_label(_("Local folder — you put the DAT files there yourself"));
-    for (auto* r : {&m_radio_emulator, &m_radio_http, &m_radio_folder}) {
+    for (auto* r : {&m_radio_emulator, &m_radio_http, &m_radio_url, &m_radio_site, &m_radio_folder}) {
         body->pack_start(*r, Gtk::PACK_SHRINK);
         r->signal_toggled().connect([this, r] { if (r->get_active()) on_source_changed(); });
     }
-    auto* url_line = &m_url_line;
-    url_line->set_spacing(8);
-    url_line->set_no_show_all(true);   // n'apparait que pour une source HTTP
-    auto* url_label = ui::sub_label(_("Manifest URL"));
+
+    // Custom URL : l'adresse, et si une archive doit etre decompressee.
+    m_url_line.set_spacing(8);
+    m_url_line.set_no_show_all(true);
+    auto* url_label = ui::sub_label(_("URL"));
     url_label->set_line_wrap(false);
     url_label->set_valign(Gtk::ALIGN_CENTER);
     m_entry_url.set_hexpand(true);
-    m_entry_url.set_placeholder_text(DatSource::kDefaultManifestUrl);
+    m_entry_url.set_placeholder_text(_("https://… a .dat, .xml, .zip or .7z file"));
     auto commit_url = [this] {
         if (group().id != m_url_group) return;
         if (m_entry_url.get_text().raw() == group().url) return;
@@ -367,11 +363,43 @@ void RomDatTab::build_source_card() {
     };
     m_entry_url.signal_activate().connect(commit_url);
     m_entry_url.signal_focus_out_event().connect([commit_url](GdkEventFocus*) { commit_url(); return false; });
-    url_line->pack_start(*url_label, Gtk::PACK_SHRINK);
-    url_line->pack_start(m_entry_url, Gtk::PACK_EXPAND_WIDGET);
+    m_check_unzip.set_label(_("Unzip archives"));
+    m_check_unzip.set_tooltip_text(_("Unpack the DAT files of a .zip or .7z into the folder. Unticked, the archive is kept as it is."));
+    m_check_unzip.signal_toggled().connect([this] {
+        if (m_source_filling || group().id != m_url_group) return;
+        group().unzip = m_check_unzip.get_active();
+        save_groups();
+    });
+    m_url_line.pack_start(*url_label, Gtk::PACK_SHRINK);
+    m_url_line.pack_start(m_entry_url, Gtk::PACK_EXPAND_WIDGET);
+    m_url_line.pack_start(m_check_unzip, Gtk::PACK_SHRINK);
     url_label->show();
     m_entry_url.show();
-    body->pack_start(*url_line, Gtk::PACK_SHRINK);
+    m_check_unzip.show();
+    body->pack_start(m_url_line, Gtk::PACK_SHRINK);
+
+    // DAT site : les sites qui publient les DAT de l'emulateur du groupe,
+    // pris a l'adresse de leurs auteurs (DatSource::sites()).
+    m_site_line.set_spacing(8);
+    m_site_line.set_no_show_all(true);
+    auto* site_label = ui::sub_label(_("Site"));
+    site_label->set_line_wrap(false);
+    site_label->set_valign(Gtk::ALIGN_CENTER);
+    m_combo_site.set_hexpand(true);
+    m_combo_site.signal_changed().connect([this] {
+        if (m_source_filling || group().id != m_url_group) return;
+        const std::string id = m_combo_site.get_active_id().raw();
+        if (id.empty() || id == group().site) return;
+        group().site = id;
+        save_groups();
+        show_source_info();
+        apply_source_ui();
+    });
+    m_site_line.pack_start(*site_label, Gtk::PACK_SHRINK);
+    m_site_line.pack_start(m_combo_site, Gtk::PACK_EXPAND_WIDGET);
+    site_label->show();
+    m_combo_site.show();
+    body->pack_start(m_site_line, Gtk::PACK_SHRINK);
     m_source_hint.set_xalign(0.0f);
     m_source_hint.set_line_wrap(true);
     m_source_hint.get_style_context()->add_class("set-sub");
@@ -709,7 +737,7 @@ void RomDatTab::rebuild_group_list() {
         // Deux groupes peuvent porter les memes noms de sets (mslug) : dire
         // quel emulateur chacun decrit evite de les confondre.
         sub += " · " + EmulatorRegistry::display_name(g.emulator);
-        if (!g.active) sub += " · " + std::string(_("inactive"));
+        sub = (g.active ? std::string(_("Active")) : std::string(_("Inactive"))) + " · " + sub;
         auto* state = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 6);
         auto* dot = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 0);
         dot->get_style_context()->add_class("set-dot");
@@ -717,6 +745,23 @@ void RomDatTab::rebuild_group_list() {
         dot->set_valign(Gtk::ALIGN_CENTER);
         dot->set_tooltip_text(g.active ? _("Active : its DAT files are loaded and it can be audited.")
                                        : _("Inactive : loads nothing, not offered for audit."));
+        // Un seul groupe actif par emulateur : l'interrupteur en allume un et
+        // eteint l'autre. Celui qui est allume ne s'eteint pas seul : il faut
+        // toujours un groupe pour juger la collection de cet emulateur.
+        auto* sw = Gtk::make_managed<Gtk::Switch>();
+        sw->set_active(g.active);
+        sw->set_valign(Gtk::ALIGN_CENTER);
+        sw->set_sensitive(!g.active && !m_busy);
+        sw->set_tooltip_text(g.active
+            ? Glib::ustring::compose(_("The active %1 group. Turn another %1 group on to replace it."),
+                                     EmulatorRegistry::display_name(g.emulator)).raw()
+            : Glib::ustring::compose(_("Use this group for %1 : the other %1 group is turned off."),
+                                     EmulatorRegistry::display_name(g.emulator)).raw());
+        sw->property_active().signal_changed().connect([this, i, sw] {
+            if (!sw->get_active()) return;
+            // Hors du signal : on reconstruit la liste qui porte l'interrupteur.
+            Glib::signal_idle().connect_once([this, i] { on_toggle_group_active(i); });
+        });
         state->pack_start(*dot, Gtk::PACK_SHRINK);
         auto* subl = ui::sub_label(sub);
         subl->set_line_wrap(false);
@@ -730,16 +775,14 @@ void RomDatTab::rebuild_group_list() {
         more->set_valign(Gtk::ALIGN_CENTER);
         more->get_style_context()->add_class("set-rowmenu");
         more->set_tooltip_text(_("Group actions"));
+        line->pack_start(*sw, Gtk::PACK_SHRINK);
         auto* menu = Gtk::make_managed<Gtk::Menu>();
         auto* rename = Gtk::make_managed<Gtk::MenuItem>(_("Rename…"));
         rename->signal_activate().connect([this, i] { on_rename_group(i); });
-        auto* toggle = Gtk::make_managed<Gtk::MenuItem>(g.active ? _("Disable group") : _("Enable group"));
-        toggle->signal_activate().connect([this, i] { on_toggle_group_active(i); });
         auto* del = Gtk::make_managed<Gtk::MenuItem>(_("Delete group…"));
         del->set_sensitive(m_groups.size() > 1);
         del->signal_activate().connect([this, i] { on_delete_group(i); });
         menu->append(*rename);
-        menu->append(*toggle);
         menu->append(*Gtk::make_managed<Gtk::SeparatorMenuItem>());
         menu->append(*del);
         menu->show_all();
@@ -768,13 +811,16 @@ void RomDatTab::on_add_group() {
     g.url       = group().url;
     g.rules     = group().rules;   // same folder, same DATs : each keeps its rule
     g.all_files = true;
+    // Le groupe courant reste celui de son emulateur : le nouveau nait eteint,
+    // son interrupteur le met en service.
+    g.active    = false;
     auto before = union_files();
     m_groups.push_back(std::move(g));
     save_groups();
     m_current = m_groups.size() - 1;
     refresh();
     m_sig_groups.emit();
-    flash(Glib::ustring::compose(_("Group \"%1\" created : untick the DAT files it should not use."), name));
+    flash(Glib::ustring::compose(_("Group \"%1\" created, turned off : set it up, then turn it on to use it instead of the current one."), name));
     // Every file of the source : a file no other group loaded joins the
     // database.
     reload_if_union_changed(before, group().emulator);
@@ -804,6 +850,8 @@ void RomDatTab::on_delete_group(size_t index) {
     m_groups.erase(m_groups.begin() + (long)index);
     if (m_current >= m_groups.size()) m_current = m_groups.size() - 1;
     else if (index < m_current) --m_current;
+    // Le groupe actif supprime : un autre du meme emulateur prend le relais.
+    DatSource::one_active_per_emulator(m_groups);
     save_groups();
     refresh();
     m_sig_groups.emit();
@@ -811,20 +859,21 @@ void RomDatTab::on_delete_group(size_t index) {
 }
 
 void RomDatTab::on_toggle_group_active(size_t index) {
-    if (index >= m_groups.size()) return;
+    if (index >= m_groups.size() || m_groups[index].active) return;
     auto before = union_files();
-    m_groups[index].active = !m_groups[index].active;
+    std::string replaced;
+    for (const auto& g : m_groups)
+        if (g.active && g.emulator == m_groups[index].emulator) replaced = g.name;
+    DatSource::one_active_per_emulator(m_groups, index);
     save_groups();
-    if (index == m_current) refresh();
+    refresh();
     groups_changed();
     const bool reloads = reload_if_union_changed(before, m_groups[index].emulator);
     const auto& name = m_groups[index].name;
-    if (m_groups[index].active)
-        flash(reloads ? Glib::ustring::compose(_("\"%1\" is active again. The database reloads in a moment…"), name)
-                      : Glib::ustring::compose(_("\"%1\" is active again : its files were already loaded by another group."), name));
-    else
-        flash(reloads ? Glib::ustring::compose(_("\"%1\" is inactive : the files no other group uses leave the database in a moment…"), name)
-                      : Glib::ustring::compose(_("\"%1\" is inactive : its files stay loaded for the other groups."), name));
+    flash(replaced.empty()
+        ? Glib::ustring::compose(_("\"%1\" is active."), name)
+        : reloads ? Glib::ustring::compose(_("\"%1\" is active, \"%2\" is turned off. The database reloads in a moment…"), name, replaced)
+                  : Glib::ustring::compose(_("\"%1\" is active, \"%2\" is turned off."), name, replaced));
 }
 
 // ═══ Source ═════════════════════════════════════════════════════════════════
@@ -848,42 +897,69 @@ void RomDatTab::apply_source_ui() {
             m_btn_primary->set_tooltip_text(exe.empty() ? unavailable
                                                         : Glib::ustring::compose(_(b->ready), name));
             m_btn_check->hide();
-            m_btn_site->hide();
             m_url_line.hide();
+            m_site_line.hide();
             m_source_hint.set_text(exe.empty() ? unavailable
                                                : Glib::ustring::compose(_("Executable: %1"), exe));
             break;
         }
-        case DatSource::Kind::Http:
+        case DatSource::Kind::Http: {
+            const std::string url = DatSource::manifest_url(g);
             m_btn_primary->set_label(_("Download DATs"));
             m_btn_primary->set_image(*ui::image("bc-download.svg", ui::kIconButton));
-            m_btn_primary->set_sensitive(!m_busy && !DatSource::manifest_url(g).empty());
+            m_btn_primary->set_sensitive(!m_busy && !url.empty());
             m_btn_primary->set_tooltip_text(_("Fetch the manifest and download this group's DAT files that are missing here or differ (SHA-256), each verified before it replaces the local one."));
             m_btn_check->show();
-            m_btn_check->set_sensitive(!m_busy && !DatSource::manifest_url(g).empty());
-            m_btn_site->hide();
-            m_url_line.show();
-            m_source_hint.set_text(_("The server publishes dat-manifest.json next to the files. Changes are detected by SHA-256; version and date are informative."));
+            m_btn_check->set_sensitive(!m_busy && !url.empty());
+            m_url_line.hide();
+            m_site_line.hide();
+            m_source_hint.set_text(url.empty()
+                ? Glib::ustring::compose(_("The Bootcade server publishes no DAT files for %1."),
+                                         EmulatorRegistry::display_name(g.emulator)).raw()
+                : g.emulator == "mame"
+                ? std::string(_("The MAME DAT files of the version chosen in Settings › Emulator (official release or Sooner). Changes are detected by SHA-256."))
+                : std::string(_("The server publishes dat-manifest.json next to the files. Changes are detected by SHA-256; version and date are informative.")));
             break;
+        }
+        case DatSource::Kind::Url:
+            m_btn_primary->set_label(_("Download"));
+            m_btn_primary->set_image(*ui::image("bc-download.svg", ui::kIconButton));
+            m_btn_primary->set_sensitive(!m_busy && !g.url.empty() && !g.folder.empty());
+            m_btn_primary->set_tooltip_text(_("Download the file at this address into the folder, then tick the DAT files this group uses."));
+            m_btn_check->hide();
+            m_url_line.show();
+            m_site_line.hide();
+            m_source_hint.set_text(_("A DAT file is saved as it is. An archive is unpacked when Unzip archives is ticked."));
+            break;
+        case DatSource::Kind::Site: {
+            // Seuls les sites qui publient des DAT pour l'emulateur du groupe.
+            m_source_filling = true;
+            m_combo_site.remove_all();
+            for (const auto& site : DatSource::sites())
+                if (g.emulator == site.emulator) m_combo_site.append(site.label, _(site.label));
+            if (!m_combo_site.set_active_id(g.site)) m_combo_site.set_active(-1);
+            m_source_filling = false;
+            const bool chosen = !m_combo_site.get_active_id().empty();
+            m_btn_primary->set_label(_("Download"));
+            m_btn_primary->set_image(*ui::image("bc-download.svg", ui::kIconButton));
+            m_btn_primary->set_sensitive(!m_busy && chosen && !g.folder.empty());
+            m_btn_primary->set_tooltip_text(_("Download DAT files from the site that publishes them, unpack them into the folder, then tick the ones this group uses."));
+            m_btn_check->hide();
+            m_url_line.hide();
+            m_site_line.show();
+            m_source_hint.set_text(chosen ? _("Fetched from the author's own address, at its newest version. Each file keeps its source on screen.")
+                                          : _("Choose the site to download from."));
+            break;
+        }
         default:
             m_btn_primary->set_label(_("Rescan folder"));
             m_btn_primary->set_image(*ui::image("bc-sync.svg", ui::kIconButton));
             m_btn_primary->set_sensitive(!m_busy);
             m_btn_primary->set_tooltip_text(_("Re-read the folder and reload the database from the DAT files it holds."));
             m_btn_check->hide();
-            {
-                // Only the sites that publish DATs for this group's emulator.
-                bool any = false;
-                for (auto& [item, emu] : m_site_items) {
-                    item->set_visible(emu == g.emulator);
-                    any = any || emu == g.emulator;
-                }
-                m_btn_site->set_visible(any);
-                m_source_hint.set_text(any ? _("Put DAT files in the folder yourself, use Add DAT files…, or Download from a site…, then rescan.")
-                                           : _("Put DAT files in the folder yourself, or use Add DAT files…, then rescan."));
-            }
-            m_btn_site->set_sensitive(!m_busy && !g.folder.empty());
             m_url_line.hide();
+            m_site_line.hide();
+            m_source_hint.set_text(_("Put DAT files in the folder yourself, or use Add DAT files…, then rescan."));
             break;
     }
     m_btn_primary->set_always_show_image(true);
@@ -892,6 +968,8 @@ void RomDatTab::apply_source_ui() {
 void RomDatTab::on_source_changed() {
     DatSource::Kind kind = m_radio_emulator.get_active() ? DatSource::Kind::Emulator
                          : m_radio_http.get_active()     ? DatSource::Kind::Http
+                         : m_radio_url.get_active()      ? DatSource::Kind::Url
+                         : m_radio_site.get_active()     ? DatSource::Kind::Site
                                                          : DatSource::Kind::Folder;
     if (kind == group().source) return;
     group().source = kind;
@@ -966,6 +1044,12 @@ void RomDatTab::on_primary_action() {
             if (const Backend* b = backend()) b->generate(*this);
             break;
         case DatSource::Kind::Http:     on_download(); break;
+        case DatSource::Kind::Url:      on_download_url(); break;
+        case DatSource::Kind::Site:
+            for (size_t i = 0; i < DatSource::sites().size(); ++i)
+                if (group().site == DatSource::sites()[i].label && group().emulator == DatSource::sites()[i].emulator)
+                    on_download_site(i);
+            break;
         default:                        on_rescan(); break;
     }
 }
@@ -1091,11 +1175,10 @@ void RomDatTab::refresh() {
     m_group_card.title->set_text(g.name);
     m_entry_folder.set_text(g.folder);
     m_url_group = g.id;
+    m_source_filling = true;
     m_entry_url.set_text(g.url);
-    // Un groupe MAME sans adresse suit le canal choisi dans les Settings :
-    // l'indication montre laquelle il lira.
-    m_entry_url.set_placeholder_text(g.emulator == "mame" ? DatSource::mame_manifest_url(MameSooner::channel())
-                                                          : std::string(DatSource::kDefaultManifestUrl));
+    m_check_unzip.set_active(g.unzip);
+    m_source_filling = false;
     // Un groupe peut porter un emulateur que cette version ignore : mieux
     // vaut laisser le selecteur vide que lui en faire dire un autre.
     if (!m_combo_emulator.set_active_id(g.emulator)) m_combo_emulator.set_active(-1);
@@ -1103,6 +1186,8 @@ void RomDatTab::refresh() {
     switch (g.source) {
         case DatSource::Kind::Emulator: m_radio_emulator.set_active(true); break;
         case DatSource::Kind::Http:     m_radio_http.set_active(true); break;
+        case DatSource::Kind::Url:      m_radio_url.set_active(true); break;
+        case DatSource::Kind::Site:     m_radio_site.set_active(true); break;
         default:                        m_radio_folder.set_active(true); break;
     }
 
@@ -1338,6 +1423,17 @@ void RomDatTab::show_source_info() {
                            ? Glib::ustring::compose(_("Manifest generated %1"), short_date(m_last_manifest_generated)).raw()
                            : std::string(_("Not checked this session"))));
             break;
+        case DatSource::Kind::Url:
+            set("kind", _("Custom URL"));
+            set("where", g.url);
+            set("status", g.url.empty() ? std::string(_("No URL"))
+                        : g.unzip ? std::string(_("Archives unzipped")) : std::string(_("Archives kept as they are")));
+            break;
+        case DatSource::Kind::Site:
+            set("kind", _("DAT site"));
+            set("where", g.site.empty() ? std::string(_("No site chosen")) : std::string(_(g.site.c_str())));
+            set("status", g.site.empty() ? std::string(_("Not available")) : std::string(_("Available")));
+            break;
         default:
             set("kind", _("Local folder"));
             set("where", g.folder);
@@ -1424,8 +1520,14 @@ void RomDatTab::worker_download() {
     m_finished_dispatcher();
 }
 
+// Custom URL : le meme travail qu'un site, a l'adresse du joueur.
+void RomDatTab::on_download_url() {
+    if (m_busy || group().url.empty()) return;
+    on_download_site(kCustomUrl);
+}
+
 void RomDatTab::on_download_site(size_t site) {
-    if (m_busy || site >= DatSource::sites().size()) return;
+    if (m_busy || (site != kCustomUrl && site >= DatSource::sites().size())) return;
     if (group().folder.empty()) {
         auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
         if (top) ui::notice(*top, _("No DAT folder"), _("Choose the group's folder first."));
@@ -1440,23 +1542,30 @@ void RomDatTab::on_download_site(size_t site) {
     m_job_error.clear();
     m_cancelled = false;
     m_job = Job::Site;
+    m_job_custom_url = site == kCustomUrl ? group().url : std::string();
+    m_job_unzip = site == kCustomUrl ? group().unzip : true;
     set_busy(true);
-    m_progress_label.set_text(Glib::ustring::compose(_("Downloading from %1…"), DatSource::sites()[site].source));
+    m_progress_label.set_text(Glib::ustring::compose(_("Downloading from %1…"),
+        site == kCustomUrl ? host_of(m_job_custom_url) : std::string(DatSource::sites()[site].source)));
     m_worker = std::thread(&RomDatTab::worker_site, this);
 }
 
 void RomDatTab::worker_site() {
-    const auto& site = DatSource::sites()[m_job_site];
-    push_progress(2.0, _("Looking for the newest version…"));
-    std::string err;
-    // A site that cannot be read keeps the address the menu knows.
-    const std::string url = DatSource::latest_url(site.url, err);
-    if (!err.empty()) push_log(std::string("newest version unknown (") + err + "), trying " + url);
+    std::string err, url;
+    if (m_job_site == kCustomUrl) {
+        url = m_job_custom_url;
+    } else {
+        const auto& site = DatSource::sites()[m_job_site];
+        push_progress(2.0, _("Looking for the newest version…"));
+        // A site that cannot be read keeps the address the menu knows.
+        url = DatSource::latest_url(site.url, err);
+        if (!err.empty()) push_log(std::string("newest version unknown (") + err + "), trying " + url);
+    }
     std::vector<std::string> written;
     err.clear();
     const bool ok = DatSource::fetch_direct(url, m_job_folder, written, err,
         [this](double p, const std::string& n) { push_progress(5.0 + 0.9 * p, n); },
-        [this] { return m_cancelled.load(); });
+        [this] { return m_cancelled.load(); }, m_job_unzip);
     if (!ok) m_job_error = err;
     m_job_url = url;
     m_job_written = std::move(written);
@@ -1500,7 +1609,10 @@ void RomDatTab::on_worker_finished() {
     set_busy(false);
 
     if (job == Job::Site) {
-        const auto& site = DatSource::sites()[m_job_site];
+        // Une adresse du joueur se note comme un site : son hote est la source.
+        const std::string host = host_of(m_job_url);
+        const DatSource::Site custom{"", "Custom URL", host.c_str(), m_job_url.c_str(), m_job_url.c_str()};
+        const DatSource::Site& site = m_job_site == kCustomUrl ? custom : DatSource::sites()[m_job_site];
         if (!m_job_written.empty()) DatSource::record_source(m_job_folder, m_job_written, site, m_job_url);
         if (!m_job_error.empty()) {
             refresh();
@@ -1580,7 +1692,8 @@ void RomDatTab::set_busy(bool busy) {
     m_busy = busy;
     for (auto* w : std::vector<Gtk::Widget*>{m_btn_browse, m_btn_add, m_btn_more, m_btn_add_group, &m_group_list,
                                              &m_entry_folder, &m_combo_emulator,
-                                             &m_radio_emulator, &m_radio_http, &m_radio_folder})
+                                             &m_radio_emulator, &m_radio_http, &m_radio_url, &m_radio_site,
+                                             &m_radio_folder, &m_entry_url, &m_check_unzip, &m_combo_site})
         w->set_sensitive(!busy);
     if (busy) { m_progress.set_fraction(0.0); m_progress.show(); m_progress_label.show(); m_btn_cancel->show(); }
     else      { m_progress.hide(); m_progress_label.hide(); m_btn_cancel->hide(); }

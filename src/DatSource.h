@@ -9,8 +9,9 @@
 // player narrows what "complete" means for them.
 //
 // A DAT SOURCE is where files come from : the emulator itself (fbneo -dat),
-// an HTTP location publishing a dat-manifest.json, or a folder filled by
-// hand. The files of a source live in one folder on disk. Several groups may
+// the Bootcade server (its dat-manifest.json, at an address this code knows),
+// an address the user gives (a DAT, or an archive of DATs), one of the sites
+// that publish DATs (sites()), or a folder filled by hand. The files of a source live in one folder on disk. Several groups may
 // share the same source and folder : each keeps its own selection, the
 // files are stored once, and the database loads the union of what active
 // groups select, each file once.
@@ -36,13 +37,17 @@
 
 namespace DatSource {
 
-enum class Kind { Emulator, Http, Folder };
-const char* kind_key(Kind k);          // "emulator" | "http" | "folder"
+// Http is the Bootcade server : the key stays "http" for the groups already
+// written in config.json.
+enum class Kind { Emulator, Http, Url, Site, Folder };
+const char* kind_key(Kind k);          // "emulator" | "http" | "url" | "site" | "folder"
 Kind        kind_from_key(const std::string& s);
 
 constexpr int kManifestSchema = 1;
-// The Bootcade file server : what a fresh install points at.
-constexpr const char* kDefaultManifestUrl = "https://files.gcourtot.duckdns.org/dat/dat-manifest.json";
+// The Bootcade file server. Its addresses live here and nowhere else : the
+// user never types them.
+constexpr const char* kServer = "https://files.bootcade.duckdns.org";
+constexpr const char* kDefaultManifestUrl = "https://files.bootcade.duckdns.org/dat/fbneo/dat-manifest.json";
 
 // ── How one DAT is read ─────────────────────────────────────────────────────
 //
@@ -91,7 +96,9 @@ struct Group {
     // 'fbneo' : les groupes deja ecrits dans config.json ne portent pas ce
     // champ et decrivent tous FinalBurn Neo.
     std::string emulator = "fbneo";  // "fbneo" | "mame"
-    std::string url;                // manifest URL, Kind::Http
+    std::string url;                // Kind::Url : the DAT, or archive of DATs, to download
+    bool        unzip = true;       // Kind::Url : unpack an archive's DATs into the folder
+    std::string site;               // Kind::Site : the label of the chosen site (sites())
     // Before merge modes were per DAT, the group had one. Read only to give
     // each of the group's DATs that mode once (load_groups) ; never written.
     std::string set_style = "non-merged";
@@ -110,6 +117,15 @@ struct Group {
     // needs the list of what the source provides right now.
     void set_selected(const std::string& file, bool on, const std::vector<std::string>& provided);
 };
+
+// One active group per emulator, always : two active groups of the same
+// emulator describe the same collection twice (the database keeps one row
+// per set and refused the other's sets one by one). The group at `keep`
+// (when given) becomes the active one of its emulator ; otherwise the first
+// active one stays ; an emulator left with none gets its first group.
+// True when anything changed.
+constexpr size_t kNoGroup = (size_t)-1;
+bool one_active_per_emulator(std::vector<Group>& groups, size_t keep = kNoGroup);
 
 // config.json ⇄ groups. A config with no dat_groups yet gets one group built
 // from the legacy keys (dat_path), so nothing changes for an existing user
@@ -189,10 +205,12 @@ std::string latest_url(const std::string& url, std::string& error);
 // name the address carries. Every file goes through a hidden temporary name,
 // so an interrupted transfer never leaves half a DAT. `written` receives the
 // file names.
+// With `unpack` false, an archive is kept as it is, under its own name.
 bool fetch_direct(const std::string& url, const std::string& folder,
                   std::vector<std::string>& written, std::string& error,
                   const std::function<void(double pct, const std::string& message)>& progress = nullptr,
-                  const std::function<bool()>& cancelled = nullptr);
+                  const std::function<bool()>& cancelled = nullptr,
+                  bool unpack = true);
 
 // Where each DAT of a folder came from, kept next to them in
 // ".bootcade-sources.json" : the credit follows the files, whatever group
@@ -220,10 +238,9 @@ struct Manifest {
 // The Bootcade server's MAME DATs : one folder per MAME channel (release,
 // sooner, see MameSooner.h), each with its own dat-manifest.json.
 std::string mame_manifest_url(const std::string& channel);
-// The manifest a Bootcade-server group reads. A MAME group left without an
-// address, or pointing at one of the server's MAME channels, follows the
-// channel chosen in Settings : switching to Sooner switches its DATs too.
-// Any other address is the user's, used as it is.
+// The manifest a Bootcade-server group reads : FinalBurn Neo's, or the MAME
+// one of the channel chosen in Settings (switching to Sooner switches its
+// DATs too). Empty for an emulator the server has no DATs for.
 std::string manifest_url(const Group& g);
 
 // Fetches and parses a manifest. Refuses any schema this build does not

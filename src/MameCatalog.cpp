@@ -979,7 +979,7 @@ struct ListxmlSets {
 // s'annonce « 0.289 (mame0289-1306-g8aeb28649e1) » : sa version, c'est la
 // version publiee la plus proche plus son ecart, pour que l'en-tete dise
 // d'un coup d'oeil qu'il ne s'agit pas de la 0.289.
-static std::string header_version(const std::string& version, const std::string& build) {
+std::string header_version(const std::string& version, const std::string& build) {
     const auto p = build.find("(mame");
     if (p == std::string::npos) return version;
     const auto d1 = build.find('-', p);
