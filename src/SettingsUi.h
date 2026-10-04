@@ -406,4 +406,37 @@ private:
     Gtk::Widget*        m_content = nullptr;
 };
 
+/* Une liste de choix qui s'ouvre SOUS son bouton.
+ *
+ * Gtk::ComboBoxText pose l'element choisi pile sur le bouton : sur une
+ * longue liste (35 filtres d'image) dont on a choisi le dernier, le menu
+ * remonte au-dessus de l'ecran, coupe, avec du vide en haut et en bas. Ici,
+ * la liste tombe sous le bouton dans une bulle de hauteur bornee qui defile,
+ * et revient d'elle-meme sur l'element choisi. Memes appels que ComboBoxText
+ * pour ce que les reglages en utilisent. */
+class Choice : public Gtk::MenuButton {
+public:
+    explicit Choice(int max_height = 360);
+
+    void        append(const std::string& id, const std::string& label);
+    void        remove_all();
+    // Rend false, sans rien changer, si l'identifiant n'est pas dans la liste.
+    bool        set_active_id(const std::string& id);
+    void        set_active(int index);
+    std::string get_active_id() const;
+    size_t      size() const { return m_items.size(); }
+    sigc::signal<void>& signal_changed() { return m_changed; }
+
+private:
+    void choose(int index, bool emit);
+    std::vector<std::pair<std::string, std::string>> m_items;
+    int                 m_active = -1;
+    Gtk::Box            m_face{Gtk::ORIENTATION_HORIZONTAL, 8};
+    Gtk::Label          m_label;
+    Gtk::Popover        m_popover;
+    Gtk::ScrolledWindow m_scroll;
+    Gtk::ListBox        m_list;
+    sigc::signal<void>  m_changed;
+};
+
 }  // namespace SettingsUi

@@ -1,5 +1,7 @@
 // src/SettingsUi.cpp
 #include "SettingsUi.h"
+
+#include <algorithm>
 #include <iostream>
 #include <cstdlib>
 
@@ -814,6 +816,90 @@ void DetailPanel::show_placeholder(const std::string& message) {
     l->set_valign(Gtk::ALIGN_CENTER);
     l->set_margin_top(18);
     set_content(l);
+}
+
+Choice::Choice(int max_height) {
+    get_style_context()->add_class("set-choice");
+    m_label.set_xalign(0.0f);
+    m_label.set_ellipsize(Pango::ELLIPSIZE_END);
+    m_face.pack_start(m_label, Gtk::PACK_EXPAND_WIDGET);
+    m_face.pack_end(*image("bc-chevron-down.svg", 16), Gtk::PACK_SHRINK);
+    add(m_face);
+    m_face.show_all();
+
+    m_list.set_selection_mode(Gtk::SELECTION_SINGLE);
+    m_list.set_activate_on_single_click(true);
+    m_list.signal_row_activated().connect([this](Gtk::ListBoxRow* row) {
+        if (!row) return;
+        m_popover.popdown();
+        choose(row->get_index(), true);
+    });
+    m_scroll.set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+    m_scroll.set_propagate_natural_height(true);
+    m_scroll.set_max_content_height(max_height);
+    m_scroll.add(m_list);
+    m_scroll.show_all();
+    m_popover.get_style_context()->add_class("set-choice-pop");
+    m_popover.set_position(Gtk::POS_BOTTOM);
+    m_popover.add(m_scroll);
+    set_popover(m_popover);
+    // La bulle se rouvre sur l'element choisi, pas en haut de la liste.
+    m_popover.signal_show().connect([this] {
+        if (m_active < 0) return;
+        if (auto* row = m_list.get_row_at_index(m_active)) {
+            m_list.select_row(*row);
+            row->grab_focus();
+        }
+        // Les rangees n'ont leur place qu'une fois la bulle dessinee : le
+        // defilement jusqu'a l'element choisi attend donc ce premier passage.
+        Glib::signal_idle().connect_once([this] {
+            auto* row = m_active >= 0 ? m_list.get_row_at_index(m_active) : nullptr;
+            if (!row) return;
+            auto adj = m_scroll.get_vadjustment();
+            const auto a = row->get_allocation();
+            const double target = a.get_y() - (adj->get_page_size() - a.get_height()) / 2.0;
+            adj->set_value(std::clamp(target, adj->get_lower(),
+                                      adj->get_upper() - adj->get_page_size()));
+        });
+    });
+}
+
+void Choice::append(const std::string& id, const std::string& label) {
+    m_items.emplace_back(id, label);
+    auto* l = Gtk::make_managed<Gtk::Label>(label);
+    l->set_xalign(0.0f);
+    auto* row = Gtk::make_managed<Gtk::ListBoxRow>();
+    row->add(*l);
+    row->show_all();
+    m_list.append(*row);
+}
+
+void Choice::remove_all() {
+    destroy_children(m_list);
+    m_items.clear();
+    m_active = -1;
+    m_label.set_text("");
+}
+
+bool Choice::set_active_id(const std::string& id) {
+    for (size_t i = 0; i < m_items.size(); ++i)
+        if (m_items[i].first == id) { choose(static_cast<int>(i), true); return true; }
+    return false;
+}
+
+void Choice::set_active(int index) {
+    if (index >= 0 && index < static_cast<int>(m_items.size())) choose(index, true);
+}
+
+std::string Choice::get_active_id() const {
+    return m_active >= 0 ? m_items[static_cast<size_t>(m_active)].first : std::string();
+}
+
+void Choice::choose(int index, bool emit) {
+    if (index == m_active) return;
+    m_active = index;
+    m_label.set_text(m_items[static_cast<size_t>(index)].second);
+    if (emit) m_changed.emit();
 }
 
 }  // namespace SettingsUi

@@ -39,6 +39,7 @@
 #include <iomanip>
 #include <random>
 #include <thread>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace {
@@ -434,6 +435,21 @@ void SettingsPanel::build_shell() {
         else
             set_update_state(Glib::ustring::compose(_("Bootcade %1 is available"), tag),
                              "warn");
+    });
+    m_fbneo_caps_done.connect([this] {
+        std::string key;
+        FbneoVideo::Capabilities caps;
+        {
+            std::lock_guard<std::mutex> lock(m_fbneo_caps_mutex);
+            key  = m_fbneo_caps_pending_key;
+            caps = m_fbneo_caps_pending;
+        }
+        // La reponse d'un binaire qu'on a remplace entre-temps ne dit rien
+        // de celui qui est configure maintenant.
+        if (key != m_fbneo_caps_key) return;
+        m_fbneo_caps = std::move(caps);
+        fbneo_video_fill();
+        refresh_sections();
     });
     m_emu_update_done.connect([this] {
         std::string msg, tone;
@@ -1679,6 +1695,22 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     m_emu_mame_frame = mame_col;
     right->pack_start(*mame_col, Gtk::PACK_SHRINK);
 
+    // ── Affichage de FinalBurn Neo ───────────────────────────────────────
+    /* Une carte a part plutot que six lignes de plus dans « Options » : ce
+     * sont des effets d'image, qu'on regle ensemble et qu'on compare entre
+     * eux, et la carte Options melangerait sinon fenetre, image et ligne de
+     * commande. Propre a FinalBurn Neo : MAME a ses propres pilotes. */
+    auto display = ui::card("bc-image.svg", _("Display"),
+                            _("Filters and picture effects applied by FinalBurn Neo."));
+    display.body->pack_start(*build_fbneo_video(), Gtk::PACK_SHRINK);
+    m_emu_video_fbneo = collapsible(display, "emulator.fbneo_video", true, [this] {
+        if (!m_fbneo_caps.ok) return std::string(_("Not available with this build"));
+        const int on = m_fbneo_video.active_count(m_fbneo_caps);
+        return Glib::ustring::compose(on == 1 ? _("%1 option on")
+                                              : _("%1 options on"), on).raw();
+    });
+    right->pack_start(*m_emu_video_fbneo, Gtk::PACK_SHRINK);
+
     // ── Options propres a l'emulateur ────────────────────────────────────
     /* Elles vivent ICI et non dans General : ce sont des options de
      * l'emulateur, pas de Bootcade. Le plein ecran et la mise a l'echelle
@@ -2185,6 +2217,224 @@ void SettingsPanel::save_mame_options(nlohmann::json& j) const {
     j["mame_options"] = o;
 }
 
+/* ── L'affichage de FinalBurn Neo ───────────────────────────────────────
+ *
+ * Meme grammaire que les options de MAME : un interrupteur par option, et
+ * pour celles qui ont plusieurs valeurs un selecteur, grise tant que
+ * l'interrupteur est eteint. Les listes sont vides a la construction : elles
+ * se remplissent quand le binaire a repondu (fbneo_video_fill).
+ */
+Gtk::Widget* SettingsPanel::build_fbneo_video() {
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
+
+    // Le binaire ne repond pas a -list-video-json : on le dit, et les lignes
+    // restent visibles mais grisees, pour qu'on sache ce qu'une mise a jour
+    // apporterait.
+    m_lbl_fx_note.set_text(_("This FinalBurn Neo build does not offer these options. "
+                             "Update it from the Executable card to use them."));
+    m_lbl_fx_note.set_line_wrap(true);
+    m_lbl_fx_note.set_xalign(0.0f);
+    m_lbl_fx_note.set_margin_bottom(8);
+    m_lbl_fx_note.get_style_context()->add_class("set-sub");
+    box->pack_start(m_lbl_fx_note, Gtk::PACK_SHRINK);
+
+    auto* rows = ui::rows();
+    m_cb_fx_softfx.set_size_request(kValueSlot, -1);
+    m_cb_fx_softfx.set_tooltip_text(
+        _("Some filters only exist for 16-bit or 32-bit games. When a filter does "
+          "not fit the game, FinalBurn Neo shows the plain picture."));
+    ui::add_row(rows, *option_row("bc-brush.svg", _("Picture filter"),
+                                  _("Smooths or reshapes the pixels before display (SoftFX)."),
+                                  m_sw_fx_softfx, &m_cb_fx_softfx));
+
+    m_sc_fx_scanint.set_digits(0);
+    m_sc_fx_scanint.set_increments(1, 16);
+    m_sc_fx_scanint.set_draw_value(true);
+    m_sc_fx_scanint.set_value_pos(Gtk::POS_RIGHT);
+    m_sc_fx_scanint.set_size_request(kValueSlot, -1);
+    m_sc_fx_scanint.set_tooltip_text(_("How dark the scanlines are."));
+    // FinalBurn Neo compte de 0 a 255 ; un pourcentage se lit mieux.
+    m_sc_fx_scanint.signal_format_value().connect([](double v) {
+        return Glib::ustring(std::to_string(static_cast<int>(v * 100.0 / 255.0 + 0.5)) + " %");
+    });
+    ui::add_row(rows, *option_row("bc-sliders.svg", _("Scanlines"),
+                                  _("Darkens every other line, like an arcade monitor."),
+                                  m_sw_fx_scanlines, &m_sc_fx_scanint));
+
+    m_cb_fx_rgbmask.set_size_request(kValueSlot, -1);
+    m_cb_fx_rgbmask.set_tooltip_text(
+        _("The pattern multiplies the picture: it can look darker."));
+    ui::add_row(rows, *option_row("bc-palette.svg", _("RGB mask"),
+                                  _("Draws the red, green and blue dots of a CRT screen."),
+                                  m_sw_fx_rgbmask, &m_cb_fx_rgbmask));
+
+    ui::add_row(rows, *option_row("filter-aspect.svg", _("Stretch to window"),
+                                  _("Fills the whole window, without keeping the aspect ratio. "
+                                    "Not applied to rotated games."),
+                                  m_sw_fx_stretch));
+
+    m_cb_fx_internalres.set_size_request(kValueSlot, -1);
+    ui::add_row(rows, *option_row("bc-image.svg", _("Internal resolution"),
+                                  _("Draws the picture larger before fitting it to the window. "
+                                    "Not applied to rotated games."),
+                                  m_sw_fx_internalres, &m_cb_fx_internalres));
+
+    m_cb_fx_renderer.set_size_request(kValueSlot, -1);
+    ui::add_row(rows, *option_row("bc-system.svg", _("Rendering backend"),
+                                  _("How the picture reaches the screen. Left off, SDL picks "
+                                    "one itself."),
+                                  m_sw_fx_renderer, &m_cb_fx_renderer));
+    box->pack_start(*rows, Gtk::PACK_SHRINK);
+
+    for (auto* sw : {&m_sw_fx_softfx, &m_sw_fx_scanlines, &m_sw_fx_rgbmask,
+                     &m_sw_fx_stretch, &m_sw_fx_internalres, &m_sw_fx_renderer})
+        sw->property_active().signal_changed().connect([this] { fbneo_video_read(); });
+    // Des SettingsUi::Choice et non des ComboBoxText : la liste des filtres
+    // est longue, et elle doit tomber sous le selecteur (voir Choice).
+    for (auto* cb : {&m_cb_fx_softfx, &m_cb_fx_rgbmask, &m_cb_fx_internalres, &m_cb_fx_renderer})
+        cb->signal_changed().connect([this] { fbneo_video_read(); });
+    m_sc_fx_scanint.signal_value_changed().connect([this] { fbneo_video_read(); });
+
+    fbneo_video_fill();
+    return box;
+}
+
+void SettingsPanel::fbneo_video_fill() {
+    m_fx_syncing = true;
+    const FbneoVideo::Capabilities& caps = m_fbneo_caps;
+    const FbneoVideo::Options& o = m_fbneo_video;
+
+    // Un identifiant absent de la liste (filtre retire du build) laisse le
+    // selecteur sur son premier element, sans toucher au choix enregistre.
+    auto pick = [](SettingsUi::Choice& combo, const std::string& id) {
+        if (!combo.set_active_id(id)) combo.set_active(0);
+    };
+
+    m_cb_fx_softfx.remove_all();
+    for (const auto& f : caps.softfx) {
+        if (!f.available || f.index == caps.softfx_range.def) continue;
+        m_cb_fx_softfx.append(std::to_string(f.index),
+                              f.name + " (x" + std::to_string(f.zoom) + ")");
+    }
+    pick(m_cb_fx_softfx, std::to_string(o.softfx));
+
+    m_cb_fx_rgbmask.remove_all();
+    for (const auto& m : caps.rgbmask) {
+        if (m.index == caps.rgbmask_range.def) continue;
+        m_cb_fx_rgbmask.append(std::to_string(m.index), m.name);
+    }
+    pick(m_cb_fx_rgbmask, std::to_string(o.rgbmask));
+
+    m_cb_fx_internalres.remove_all();
+    for (int n = caps.internalres_range.min; n <= caps.internalres_range.max; ++n) {
+        if (n == caps.internalres_range.def) continue;
+        m_cb_fx_internalres.append(std::to_string(n), std::to_string(n) + "×");
+    }
+    pick(m_cb_fx_internalres, std::to_string(o.internalres));
+
+    m_cb_fx_renderer.remove_all();
+    for (const auto& r : caps.renderers) {
+        std::string label = r;
+        if (r == "opengl")         label = _("OpenGL");
+        else if (r == "opengles2") label = _("OpenGL ES 2");
+        else if (r == "software")  label = _("Software");
+        m_cb_fx_renderer.append(r, label);
+    }
+    pick(m_cb_fx_renderer, o.renderer);
+
+    const auto& si = caps.scanintensity_range;
+    m_sc_fx_scanint.set_range(si.min, si.max > si.min ? si.max : si.min + 1);
+    m_sc_fx_scanint.set_value(std::clamp(o.scanintensity, si.min, si.max));
+
+    m_sw_fx_softfx.set_active(o.softfx_on);
+    m_sw_fx_scanlines.set_active(o.scanlines);
+    m_sw_fx_rgbmask.set_active(o.rgbmask_on);
+    m_sw_fx_stretch.set_active(o.stretch);
+    m_sw_fx_internalres.set_active(o.internalres_on);
+    m_sw_fx_renderer.set_active(o.renderer_on);
+
+    // La note ne s'affiche que si le binaire est la et ne repond pas : sans
+    // binaire du tout, c'est la carte de l'executable qui parle.
+    const std::string exe = get_fbneo_executable();
+    const bool runnable = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+    m_lbl_fx_note.set_no_show_all(true);
+    m_lbl_fx_note.set_visible(runnable && !caps.ok && !m_fbneo_caps_key.empty());
+    sync_fbneo_video_sensitivity();
+    m_fx_syncing = false;
+}
+
+void SettingsPanel::fbneo_video_read() {
+    if (m_fx_syncing) return;
+    FbneoVideo::Options& o = m_fbneo_video;
+    auto id_int = [](const SettingsUi::Choice& combo, int fallback) {
+        const std::string id = combo.get_active_id();
+        try { return id.empty() ? fallback : std::stoi(id); } catch (...) { return fallback; }
+    };
+    o.softfx_on      = m_sw_fx_softfx.get_active();
+    o.softfx         = id_int(m_cb_fx_softfx, o.softfx);
+    o.scanlines      = m_sw_fx_scanlines.get_active();
+    o.scanintensity  = static_cast<int>(m_sc_fx_scanint.get_value() + 0.5);
+    o.rgbmask_on     = m_sw_fx_rgbmask.get_active();
+    o.rgbmask        = id_int(m_cb_fx_rgbmask, o.rgbmask);
+    o.stretch        = m_sw_fx_stretch.get_active();
+    o.internalres_on = m_sw_fx_internalres.get_active();
+    o.internalres    = id_int(m_cb_fx_internalres, o.internalres);
+    o.renderer_on    = m_sw_fx_renderer.get_active();
+    if (!m_cb_fx_renderer.get_active_id().empty())
+        o.renderer = m_cb_fx_renderer.get_active_id();
+    sync_fbneo_video_sensitivity();
+    refresh_sections();
+}
+
+void SettingsPanel::sync_fbneo_video_sensitivity() {
+    const bool ok = m_fbneo_caps.ok;
+    auto pair = [ok](Gtk::Switch& sw, Gtk::Widget& value, bool has_values) {
+        sw.set_sensitive(ok && has_values);
+        value.set_sensitive(ok && has_values && sw.get_active());
+    };
+    pair(m_sw_fx_softfx,      m_cb_fx_softfx,      m_cb_fx_softfx.size() > 0);
+    pair(m_sw_fx_scanlines,   m_sc_fx_scanint,     true);
+    pair(m_sw_fx_rgbmask,     m_cb_fx_rgbmask,     m_cb_fx_rgbmask.size() > 0);
+    pair(m_sw_fx_internalres, m_cb_fx_internalres, m_cb_fx_internalres.size() > 0);
+    pair(m_sw_fx_renderer,    m_cb_fx_renderer,    m_cb_fx_renderer.size() > 0);
+    m_sw_fx_stretch.set_sensitive(ok);
+}
+
+/* Une sonde par binaire, hors du fil de l'interface.
+ *
+ * La cle porte la date du fichier : un FinalBurn Neo mis a jour sur place
+ * par le bouton de telechargement garde son chemin, mais pas ses filtres. */
+void SettingsPanel::probe_fbneo_video_async() {
+    const std::string exe = get_fbneo_executable();
+    struct stat st{};
+    const bool present = !exe.empty() && ::stat(exe.c_str(), &st) == 0;
+    const std::string key = present ? exe + ":" + std::to_string(static_cast<long long>(st.st_mtime))
+                                    : std::string();
+    if (key == m_fbneo_caps_key) return;
+    m_fbneo_caps_key = key;
+    if (key.empty()) {
+        m_fbneo_caps = FbneoVideo::Capabilities{};
+        fbneo_video_fill();
+        return;
+    }
+    std::thread([this, alive = m_alive, exe, key] {
+        FbneoVideo::Capabilities caps = FbneoVideo::probe(exe);
+        {
+            std::lock_guard<std::mutex> lock(m_fbneo_caps_mutex);
+            m_fbneo_caps_pending_key = key;
+            m_fbneo_caps_pending     = std::move(caps);
+        }
+        std::lock_guard<std::mutex> live(alive->mutex);
+        if (alive->alive) m_fbneo_caps_done.emit();
+    }).detach();
+}
+
+std::vector<std::string> SettingsPanel::fbneo_video_args(const std::string& exe) const {
+    // La sonde est en cache des que l'ecran l'a faite : ici, elle ne coute
+    // rien. Elle n'est relancee que si le binaire a change depuis.
+    return m_fbneo_video.launch_args(FbneoVideo::probe(exe));
+}
+
 /* Le panneau de droite suit la ligne choisie a gauche.
  *
  * Les deux emulateurs ne se configurent pas de la meme facon : FBNeo est un
@@ -2231,6 +2481,7 @@ void SettingsPanel::show_emulator_page(size_t index) {
     // La carte « Options » reste, son contenu change : les reglages de FBNeo
     // s'affichaient jusqu'ici sous MAME, ou ils ne commandaient rien.
     reveal(m_emu_opt_fbneo,  fbneo);
+    reveal(m_emu_video_fbneo, fbneo);
     reveal(m_emu_opt_mame,  !fbneo);
     // La pastille du bandeau est unique : elle ne peut dire l'etat du bon
     // emulateur que si on lui dit lequel est a l'ecran. Pour MAME, c'est
@@ -2836,6 +3087,7 @@ void SettingsPanel::fit_to_page() {
 void SettingsPanel::refresh_emulator_state() {
     const std::string exe = get_fbneo_executable();
     const bool ready = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+    probe_fbneo_video_async();
 
     m_emu_status_text.set_text(ready ? _("Active") : _("Not configured"));
     refresh_emulator_pill();
@@ -3246,6 +3498,8 @@ void SettingsPanel::apply_defaults() {
     m_switch_fullscreen.set_active(false);
     m_switch_integerscale.set_active(false);
     m_entry_emu_args.set_text("");
+    m_fbneo_video = FbneoVideo::Options{};
+    fbneo_video_fill();
     // Les options MAME repartent sur le comportement par defaut de MAME
     // lui-meme : l'objet vide suffit a le dire, load_mame_options connait
     // deja ces valeurs. Le chemin de l'executable n'en fait pas partie : ce
@@ -3878,6 +4132,8 @@ bool SettingsPanel::load_from_file(const std::string& filename) {
         set_launch_flags(j.value("launch_fullscreen", false),
                          j.value("launch_integerscale", false));
         m_entry_emu_args.set_text(j.value("fbneo_extra_args", std::string()));
+        m_fbneo_video.load(j.contains("fbneo_video") ? j["fbneo_video"] : nlohmann::json());
+        fbneo_video_fill();
         m_switch_mechanical.set_active(j.value("mame_show_mechanical", false));
         // Le binaire choisi a la main : vide veut dire « detecte-le », et non
         // « MAME est absent ». La sonde gardee est donc oubliee, sans quoi un
@@ -4020,6 +4276,7 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
     j["launch_fullscreen"]      = m_switch_fullscreen.get_active();
     j["launch_integerscale"]    = m_switch_integerscale.get_active();
     j["fbneo_extra_args"]       = get_emulator_extra_args();
+    m_fbneo_video.save(j["fbneo_video"]);
     j["mame_show_mechanical"]   = m_switch_mechanical.get_active();
     // Meme raison que les cles a plat : un binaire plus ancien lit encore
     // celle-ci pour savoir ou MAME range ses ROMs.
