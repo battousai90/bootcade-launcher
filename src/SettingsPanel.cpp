@@ -2289,6 +2289,8 @@ Gtk::Widget* SettingsPanel::build_fbneo_video() {
     for (auto* sw : {&m_sw_fx_softfx, &m_sw_fx_scanlines, &m_sw_fx_rgbmask,
                      &m_sw_fx_stretch, &m_sw_fx_internalres, &m_sw_fx_renderer})
         sw->property_active().signal_changed().connect([this] { fbneo_video_read(); });
+    // Des SettingsUi::Choice et non des ComboBoxText : la liste des filtres
+    // est longue, et elle doit tomber sous le selecteur (voir Choice).
     for (auto* cb : {&m_cb_fx_softfx, &m_cb_fx_rgbmask, &m_cb_fx_internalres, &m_cb_fx_renderer})
         cb->signal_changed().connect([this] { fbneo_video_read(); });
     m_sc_fx_scanint.signal_value_changed().connect([this] { fbneo_video_read(); });
@@ -2304,7 +2306,7 @@ void SettingsPanel::fbneo_video_fill() {
 
     // Un identifiant absent de la liste (filtre retire du build) laisse le
     // selecteur sur son premier element, sans toucher au choix enregistre.
-    auto pick = [](Gtk::ComboBoxText& combo, const std::string& id) {
+    auto pick = [](SettingsUi::Choice& combo, const std::string& id) {
         if (!combo.set_active_id(id)) combo.set_active(0);
     };
 
@@ -2364,7 +2366,7 @@ void SettingsPanel::fbneo_video_fill() {
 void SettingsPanel::fbneo_video_read() {
     if (m_fx_syncing) return;
     FbneoVideo::Options& o = m_fbneo_video;
-    auto id_int = [](const Gtk::ComboBoxText& combo, int fallback) {
+    auto id_int = [](const SettingsUi::Choice& combo, int fallback) {
         const std::string id = combo.get_active_id();
         try { return id.empty() ? fallback : std::stoi(id); } catch (...) { return fallback; }
     };
@@ -2390,11 +2392,11 @@ void SettingsPanel::sync_fbneo_video_sensitivity() {
         sw.set_sensitive(ok && has_values);
         value.set_sensitive(ok && has_values && sw.get_active());
     };
-    pair(m_sw_fx_softfx,      m_cb_fx_softfx,      m_cb_fx_softfx.get_model()->children().size() > 0);
+    pair(m_sw_fx_softfx,      m_cb_fx_softfx,      m_cb_fx_softfx.size() > 0);
     pair(m_sw_fx_scanlines,   m_sc_fx_scanint,     true);
-    pair(m_sw_fx_rgbmask,     m_cb_fx_rgbmask,     m_cb_fx_rgbmask.get_model()->children().size() > 0);
-    pair(m_sw_fx_internalres, m_cb_fx_internalres, m_cb_fx_internalres.get_model()->children().size() > 0);
-    pair(m_sw_fx_renderer,    m_cb_fx_renderer,    m_cb_fx_renderer.get_model()->children().size() > 0);
+    pair(m_sw_fx_rgbmask,     m_cb_fx_rgbmask,     m_cb_fx_rgbmask.size() > 0);
+    pair(m_sw_fx_internalres, m_cb_fx_internalres, m_cb_fx_internalres.size() > 0);
+    pair(m_sw_fx_renderer,    m_cb_fx_renderer,    m_cb_fx_renderer.size() > 0);
     m_sw_fx_stretch.set_sensitive(ok);
 }
 

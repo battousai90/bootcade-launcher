@@ -54,6 +54,24 @@ menu menuitem:hover {
 }
 menu menuitem:disabled { color: @text_disabled; }
 menu separator { background-color: @border; }
+/* La liste qui tombe sous son bouton (SettingsUi::Choice) : meme dessin
+   qu'un menu, rangees comprises. */
+popover.set-choice-pop {
+  background-color: @surface_elevated;
+  color: @text;
+  border: 1px solid @border;
+  border-radius: 8px;
+  padding: 4px;
+}
+popover.set-choice-pop list { background-color: transparent; }
+popover.set-choice-pop row {
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: @text;
+}
+popover.set-choice-pop row:hover { background-color: alpha(@accent, 0.22); }
+popover.set-choice-pop row:selected,
+popover.set-choice-pop row:selected label { background-color: alpha(@accent, 0.34); color: @text; }
 tooltip, tooltip.background {
   background-color: @surface_elevated;
   color: @text;
