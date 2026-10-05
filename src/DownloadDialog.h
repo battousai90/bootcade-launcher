@@ -14,6 +14,14 @@ public:
     DownloadDialog(Gtk::Window& parent, const std::string& url, const std::string& destination);
     virtual ~DownloadDialog();
 
+    /* Ou installer FinalBurn Neo. `ask` ouvre le choix de dossier, place sur
+     * le dossier de `current_exe`, ou sur ~/Bootcade/FBNeo pour une premiere
+     * installation ; sans `ask`, une mise a jour reprend le dossier actuel.
+     * Vide si le joueur annule. Jamais le dossier personnel lui-meme :
+     * l'archive y etait videe en vrac. */
+    static std::string choose_fbneo_folder(Gtk::Window& parent, const std::string& current_exe,
+                                           bool ask);
+
     // Set settings entry to update automatically on success
     void set_settings_entry(Gtk::Entry* entry);
     

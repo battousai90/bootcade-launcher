@@ -5,6 +5,9 @@
 #include "IconManager.h"
 #include "AppContext.h"
 #include "MameCatalog.h"
+#include "GameListSetup.h"
+#include "DatSource.h"
+#include "HostLibraries.h"
 #include <atomic>
 #include <thread>
 #include <filesystem>
@@ -90,13 +93,20 @@ static void patch_fbneo_ini_dat_path(const std::string& path) {
     for (const auto& line : lines) out << line << "\n";
 }
 
-void GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executable,
-                           const std::string& dat_path, Gtk::Entry* dat_entry) {
+bool GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executable,
+                           const std::string& dat_path, Gtk::Entry* dat_entry, bool quiet) {
     if (fbneo_executable.empty()) {
         SettingsUi::notice(parent, _("FBNeo executable missing"),
                            _("Please configure the FBNeo executable path first."),
                            "bc-error.svg");
-        return;
+        return false;
+    }
+    // Sans ses bibliotheques, FBNeo meurt avant d'ecrire quoi que ce soit, et
+    // « executable invalide » envoyait chercher un probleme qui n'existe pas.
+    if (const auto libs = HostLibraries::missing(fbneo_executable); !libs.empty()) {
+        SettingsUi::notice(parent, _("FinalBurn Neo cannot start"),
+                           HostLibraries::explain(libs), "bc-error.svg");
+        return false;
     }
 
     // The configured DAT path is the single source of truth: tell FBNeo to
@@ -104,18 +114,17 @@ void GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executab
     // it might decide to write on its own : that guess broke outright the
     // moment FBNeo's own default changed upstream. Only fall back to FBNeo's
     // documented default when nothing is configured yet (first-ever run).
-    std::string dat_output_dir = dat_path;
-    if (dat_output_dir.empty()) {
-        const char* home_env = std::getenv("HOME");
-        dat_output_dir = std::string(home_env ? home_env : ".") + "/.local/share/fbneo/support/lists/dat";
-    }
+    // Rien de configure (premiere fois) : le dossier de Bootcade, retenu pour
+    // le groupe FinalBurn Neo et pour Update DAT, au lieu de celui de FBNeo
+    // que personne ne relisait ensuite.
+    std::string dat_output_dir = dat_path.empty() ? GameListSetup::adopt_fbneo_folder() : dat_path;
     try {
         std::filesystem::create_directories(dat_output_dir);
     } catch (const std::exception& e) {
         SettingsUi::notice(parent, _("Directory creation failed"),
                            _("Failed to create directory: ") + dat_output_dir + "\n\n" + std::string(e.what()),
                            "bc-error.svg");
-        return;
+        return false;
     }
     
     // La fenetre de progression, dans le langage visuel de l'application :
@@ -153,12 +162,27 @@ void GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executab
     progress_dialog.hide();
     
     if (result == 0) {
-        show_success_dialog(parent, dat_output_dir, dat_entry);
-    } else {
-        SettingsUi::notice(parent, _("DAT generation failed"),
-                           _("Failed to generate DAT files.\n\nMake sure the FBNeo executable is valid and accessible."),
-                           "bc-error.svg");
+        // Sans fbneo.ini (FBNeo n'a encore jamais tourne), la consigne de
+        // dossier ne peut pas etre posee : FBNeo ecrit alors dans le sien.
+        // On les reprend la, faute de quoi le dossier configure restait vide.
+        const char* home_env = std::getenv("HOME");
+        const std::filesystem::path own = std::filesystem::path(home_env ? home_env : ".")
+                                        / ".local/share/fbneo/support/lists/dat";
+        std::error_code ec;
+        if (DatSource::list_folder(dat_output_dir).empty()
+            && !std::filesystem::equivalent(own, dat_output_dir, ec)) {
+            for (const auto& f : DatSource::list_folder(own.string()))
+                std::filesystem::copy_file(own / f, std::filesystem::path(dat_output_dir) / f,
+                                           std::filesystem::copy_options::overwrite_existing, ec);
+        }
+        if (dat_entry) dat_entry->set_text(dat_output_dir);
+        if (!quiet) show_success_dialog(parent, dat_output_dir, dat_entry);
+        return true;
     }
+    SettingsUi::notice(parent, _("DAT generation failed"),
+                       _("Failed to generate DAT files.\n\nMake sure the FBNeo executable is valid and accessible."),
+                       "bc-error.svg");
+    return false;
 }
 
 void GenerateDAT::execute_mame(Gtk::Window& parent, const std::string& mame_executable,
@@ -273,33 +297,10 @@ void GenerateDAT::execute_mame(Gtk::Window& parent, const std::string& mame_exec
 }
 
 void GenerateDAT::show_success_dialog(Gtk::Window& parent, const std::string& dat_path, Gtk::Entry* dat_entry) {
-    // La boite de la charte, avec un seul geste propose a cote de « OK ».
-    const bool set_path = SettingsUi::offer(parent, _("DAT generation complete"),
-        _("DAT files have been generated successfully."),
-        _("Set as DAT Path"), "bc-check.svg", "bc-folder.svg");
-
-    if (set_path && dat_entry) {
-        // Update DAT entry
-        dat_entry->set_text(dat_path);
-
-        // Save to config. Read-modify-write on the real config path: writing a
-        // bare "config.json" targeted the current working directory and replaced
-        // the whole file with this single key.
-        const std::string config_path = AppContext::get_config_path();
-        nlohmann::json j;
-        {
-            std::ifstream in(config_path);
-            if (in) { try { in >> j; } catch (...) { j = nlohmann::json{}; } }
-        }
-        j["dat_path"] = dat_path;
-        std::ofstream config(config_path);
-        if (config.is_open()) {
-            config << j.dump(4);
-            config.close();
-        }
-
-        SettingsUi::notice(parent, _("Path updated"),
-                           _("The DAT folder is now:") + std::string("\n") + dat_path,
-                           "bc-check.svg");
-    }
+    // Le dossier est deja celui que Bootcade lit : on l'a ecrit la parce
+    // qu'il est configure. Proposer de « le definir » ne laissait qu'un OK
+    // qui ne faisait rien.
+    if (dat_entry) dat_entry->set_text(dat_path);
+    SettingsUi::notice(parent, _("DAT generation complete"),
+                       _("The DAT files are in:") + std::string("\n") + dat_path, "bc-check.svg");
 }

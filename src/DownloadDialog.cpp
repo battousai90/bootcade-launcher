@@ -4,6 +4,7 @@
 #include "SettingsUi.h"
 #include "IconManager.h"
 #include "AppContext.h"
+#include "HostLibraries.h"
 #include <curl/curl.h>
 #include <zip.h>
 #include <fstream>
@@ -28,6 +29,49 @@ int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_
     // Non-zero aborts the transfer : Cancel (and the dialog's destructor,
     // which joins this thread) used to wait for the whole download.
     return dialog->cancel_requested() ? 1 : 0;
+}
+
+std::string DownloadDialog::choose_fbneo_folder(Gtk::Window& parent, const std::string& current_exe,
+                                                bool ask) {
+    const char* home_env = std::getenv("HOME");
+    const fs::path home = home_env ? fs::path(home_env) : fs::current_path();
+
+    std::error_code ec;
+    fs::path folder;
+    if (!current_exe.empty() && fs::exists(current_exe, ec))
+        folder = fs::path(current_exe).parent_path();
+    // Les versions precedentes l'installaient a la racine du dossier
+    // personnel : on n'y reinstalle pas, on propose un vrai dossier.
+    if (folder.empty() || fs::equivalent(folder, home, ec))
+        folder = home / "Bootcade" / "FBNeo";
+    else if (!ask)
+        return folder.string();
+
+    // Le selecteur ne s'ouvre que sur un dossier qui existe. Cree pour
+    // l'occasion, il disparait si le joueur annule.
+    fs::path created;
+    if (!fs::exists(folder, ec)) {
+        for (fs::path p = folder; !p.empty() && !fs::exists(p, ec); p = p.parent_path()) created = p;
+        fs::create_directories(folder, ec);
+    }
+
+    Gtk::FileChooserDialog dialog(parent, _("Install FinalBurn Neo in"),
+                                  Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+    dialog.add_button(_("Install here"), Gtk::RESPONSE_OK);
+    dialog.set_current_folder(folder.string());
+    const bool ok = dialog.run() == Gtk::RESPONSE_OK;
+    std::string chosen = ok ? dialog.get_filename() : std::string();
+    if (ok && chosen.empty()) chosen = dialog.get_current_folder();
+
+    if (!created.empty() && (chosen.empty() || fs::path(chosen) != folder)) {
+        // Seulement ce qui est reste vide : remove, pas remove_all.
+        for (fs::path p = folder; ; p = p.parent_path()) {
+            fs::remove(p, ec);
+            if (p == created || p.empty()) break;
+        }
+    }
+    return chosen;
 }
 
 DownloadDialog::DownloadDialog(Gtk::Window& parent, const std::string& url, const std::string& destination)
@@ -91,40 +135,31 @@ DownloadDialog::DownloadDialog(Gtk::Window& parent, const std::string& url, cons
         namespace ui = SettingsUi;
         if (m_shared_data.success.load()) {
             // Built from the actual extraction destination, not a hardcoded
-            // "./fbneo" : that relative literal was disconnected from
-            // m_destination entirely, so "Set as FBNeo Path" below could still
-            // write a relative path into config.json even after the caller
-            // fixed where the archive actually gets extracted to.
+            // "./fbneo" : a relative literal would land in config.json and
+            // break as soon as Bootcade starts from another directory.
             std::string fbneo_path = (std::filesystem::path(m_destination) / "fbneo").string();
 
-            const bool set_path = ui::offer(*this, _("Download complete"),
-                _("FBNeo has been downloaded and extracted successfully."),
-                _("Set as FBNeo Path"), "bc-check.svg", "bc-file.svg");
-
-            if (set_path && m_settings_entry) {
-                // Update settings entry
-                m_settings_entry->set_text(fbneo_path);
-
-                // Save settings. Read-modify-write on the real config path: writing
-                // a bare "config.json" targeted the current working directory and
-                // replaced the whole file with this single key.
-                const std::string config_path = AppContext::get_config_path();
-                nlohmann::json j;
-                {
-                    std::ifstream in(config_path);
-                    if (in) { try { in >> j; } catch (...) { j = nlohmann::json{}; } }
-                }
-                j["fbneo_executable"] = fbneo_path;
-                std::ofstream config(config_path);
-                if (config.is_open()) {
-                    config << j.dump(4);
-                    config.close();
-                }
-
-                ui::notice(*this, _("Path updated"),
-                           _("The FBNeo executable is now:") + std::string("\n") + fbneo_path,
-                           "bc-check.svg");
+            // On vient de le telecharger POUR s'en servir : il devient
+            // l'emulateur, sans question. La demander ne servait qu'a
+            // laisser un premier lancement sans emulateur sur un « OK ».
+            if (m_settings_entry) m_settings_entry->set_text(fbneo_path);
+            // Read-modify-write on the real config path : the other keys stay.
+            const std::string config_path = AppContext::get_config_path();
+            nlohmann::json j;
+            {
+                std::ifstream in(config_path);
+                if (in) { try { in >> j; } catch (...) { j = nlohmann::json{}; } }
             }
+            j["fbneo_executable"] = fbneo_path;
+            std::ofstream config(config_path);
+            if (config.is_open()) config << j.dump(4);
+
+            // Le dire tout de suite : sinon le joueur ne l'apprend qu'au
+            // premier jeu, par une fenetre qui ne s'ouvre pas.
+            const auto libs = HostLibraries::missing(fbneo_path);
+            if (!libs.empty())
+                ui::notice(*this, _("FinalBurn Neo cannot start yet"),
+                           HostLibraries::explain(libs), "bc-error.svg");
 
             response(Gtk::RESPONSE_OK);
         } else {

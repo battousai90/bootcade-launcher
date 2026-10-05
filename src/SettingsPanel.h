@@ -31,6 +31,8 @@ public:
     std::vector<std::string> get_roms_paths() const;
     void set_roms_paths(const std::vector<std::string>& paths);
     void add_roms_path(const std::string& path);
+    // Ajoute un dossier a la bibliotheque de `emulator`, affichee ou non.
+    void add_roms_path_for(const std::string& emulator, const std::string& path);
     void remove_roms_path(int index);
 
     std::string get_dat_path() const;
@@ -117,6 +119,9 @@ public:
     Gtk::HeaderBar&     header_bar()             { return m_headerbar; }
     sigc::signal<void>& signal_close_requested() { return m_sig_close; }
     sigc::signal<void>& signal_save_requested()  { return m_sig_save; }
+    // Un FinalBurn Neo vient d'etre telecharge et retenu : la fenetre
+    // principale prepare sa liste des jeux dans la foulee.
+    sigc::signal<void>& signal_fbneo_installed() { return m_sig_fbneo_installed; }
     // A appeler quand la fenetre s'ouvre : relit ce qui a pu changer dehors
     // (compte, emulateur present ou non) et relance la sonde reseau.
     void on_window_shown();
@@ -333,6 +338,7 @@ private:
     bool m_tab_switching{false};
     sigc::signal<void> m_sig_close;
     sigc::signal<void> m_sig_save;
+    sigc::signal<void> m_sig_fbneo_installed;
 
     /* Quel jeu montrer au demarrage.
      *

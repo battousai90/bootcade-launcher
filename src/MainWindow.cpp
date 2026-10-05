@@ -13,6 +13,8 @@
 #include "SettingsPanel.h"
 #include "SettingsUi.h"
 #include "DownloadDialog.h"
+#include "HostLibraries.h"
+#include "GameListSetup.h"
 #include "GenerateDAT.h"
 #include "FbneoUpdateCheck.h"
 #include "ScreenshotAssignDialog.h"
@@ -128,6 +130,8 @@ static std::string mame_cfg_dir() {
     const char* home = std::getenv("HOME");
     return std::string(home ? home : ".") + "/.mame/cfg";
 }
+
+static bool fbneo_can_start(const std::string& exe);
 
 // `env` : variables « NOM=valeur » pour ce seul processus. Sous Flatpak elles
 // doivent traverser flatpak-spawn, qui ne transmet pas notre environnement.
@@ -587,6 +591,11 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // suite dans la barre : sans ca le joueur verrait deux etats contradictoires
     // a l'ecran en meme temps.
     // "Manage DATs in ROM Management" : the ROM window, on its DAT tab.
+    // FinalBurn Neo vient d'etre installe depuis Settings : sa liste des jeux
+    // suit, la fenetre de progression posee sur Settings, encore ouverte.
+    m_settings_panel.signal_fbneo_installed().connect([this] {
+        prepare_game_list(m_settings_win);
+    });
     m_settings_panel.signal_open_rom_manager().connect([this] {
         on_rom_manager();
         if (m_rom_manager) m_rom_manager->show_tab("dat");
@@ -1509,6 +1518,8 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_center_foot.set_margin_bottom(4);
     // La vue defile, le pied non : le curseur de taille reste atteignable
     // quelle que soit la taille des cartes et la position du defilement.
+    build_setup_guide();
+    m_center_box.pack_start(m_setup_guide, Gtk::PACK_EXPAND_WIDGET);
     m_center_box.pack_start(m_view_stack,  Gtk::PACK_EXPAND_WIDGET);
     m_center_box.pack_start(m_center_foot, Gtk::PACK_SHRINK);
     // Le volet de droite recoit plus de largeur : dans le mockup il a une
@@ -1912,8 +1923,8 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
         
         if (db_games.empty()) {
             std::cout << "[INFO] Database is empty - use 'Update DAT' button to load games" << std::endl;
-            m_status_label.set_text(_("Database empty - use 'Update DAT' button to load games"));
-            m_status_label.show();
+            // Le guide de demarrage, au centre, dit quoi faire et le fait.
+            m_status_label.set_text("");
         } else {
             std::cout << "[INFO] Database loaded - " << db_games.size() << " games available" << std::endl;
         }
@@ -2862,6 +2873,13 @@ void MainWindow::on_play_clicked() {
                                "bc-error.svg");
             return;
         }
+        // Sinon FBNeo meurt au chargement, et le clic sur Play ne fait rien.
+        const auto libs = HostLibraries::missing(fbneo_executable);
+        if (!libs.empty()) {
+            SettingsUi::notice(*this, _("FinalBurn Neo cannot start"),
+                               HostLibraries::explain(libs), "bc-error.svg");
+            return;
+        }
     }
 
     if (roms_paths.empty()) {
@@ -3461,7 +3479,11 @@ void MainWindow::scan_fbneo_library() {
         std::cout << "[INFO] ROM scan cancelled by user" << std::endl;
         return;
     }
-    
+    run_fbneo_scan();
+}
+
+void MainWindow::run_fbneo_scan() {
+    m_scan_done_once = true;
     // Prevent multiple scans from running
     if (m_scan_in_progress) {
         std::cout << "[WARNING] Scan already in progress" << std::endl;
@@ -3485,11 +3507,13 @@ void MainWindow::scan_fbneo_library() {
     // The whole table, both emulators : what is asked is "was any DAT ever
     // loaded", and reloading them on top of MAME rows would only collide.
     if (m_database->getGameCount(/*every emulator*/ "") == 0) {
-        std::string dat_path = m_settings_panel.get_dat_path();
-        if (dat_path.empty()) {
-            m_status_label.set_text(_("Error: No DAT path defined"));
-            m_status_label.show();
-            return;
+        if (m_settings_panel.get_dat_path().empty()) {
+            prepare_game_list();
+            if (m_database->getGameCount("") == 0) {
+                m_status_label.set_text(_("Error: No DAT path defined"));
+                m_status_label.show();
+                return;
+            }
         }
         
         std::cout << "[INFO] Reloading DAT files to database..." << std::endl;
@@ -3587,10 +3611,13 @@ void MainWindow::do_update_dat(const std::string& emulator) {
 void MainWindow::run_update_dat_once(const std::string& emulator) {
     std::string dat_path = m_settings_panel.get_dat_path();
     if (dat_path.empty()) {
-        SettingsUi::notice(*this, _("Error"),
-                           _("No DAT path configured. Please configure the path in settings."),
-                           "bc-error.svg");
-        return;
+        // Premiere fois : le dossier de Bootcade, et sa liste des jeux s'il
+        // est vide, plutot qu'une erreur qui laissait la fenetre vide.
+        dat_path = GameListSetup::adopt_fbneo_folder();
+        m_settings_panel.set_dat_path(dat_path);
+        if (!GameListSetup::has_dats(dat_path)
+            && !GameListSetup::fill(*this, dat_path, m_settings_panel.get_fbneo_executable()))
+            return;
     }
     
     // The database is the union of what the active DAT groups select : a
@@ -3618,8 +3645,9 @@ void MainWindow::run_update_dat_once(const std::string& emulator) {
         m_filter_cache = FilterCache::generate_from_games(m_cached_games);
         save_filter_cache();
         m_filter_cache_loaded = true; // Mark as loaded with new data
-        
-        // Filter cache updated - will be used by future MAMEUI-style filter panel
+        // La colonne de gauche se construit sur ce cache : partie d'une base
+        // vide, elle le restait jusqu'au premier scan.
+        populate_filter_tree();
         std::cout << "[INFO] Filter cache updated with new DAT data" << std::endl;
         
         // Refresh display
@@ -3656,14 +3684,186 @@ void MainWindow::check_emulators_ready() {
     const std::string fbneo = m_settings_panel.get_fbneo_executable();
     const bool fbneo_ok = !fbneo.empty() && ::access(fbneo.c_str(), X_OK) == 0;
     const bool mame_ok  = MameCatalog::is_runnable(m_settings_panel.mame_executable());
-    if (fbneo_ok || mame_ok) return;
-    emulator_problem("fbneo", _("No emulator is ready yet"),
-        _("Bootcade plays games with FinalBurn Neo or MAME, and neither is ready on this "
-          "system. One of them is enough:\n\n"
-          "• FinalBurn Neo: Settings › Emulator › FinalBurn Neo, then Download.\n"
-          "• MAME: install it with your package manager, or Settings › Emulator › MAME, "
-          "choose Sooner, then Download.\n\n"
-          "Then add the folders that hold your ROMs in Settings › Library."));
+    refresh_setup_guide();
+    if (fbneo_ok) {
+        const auto libs = HostLibraries::missing(fbneo);
+        if (libs.empty()) { prepare_game_list(); return; }
+        if (mame_ok) return;
+        emulator_problem("fbneo", _("FinalBurn Neo cannot start"), HostLibraries::explain(libs));
+        return;
+    }
+    // Aucun emulateur : le guide de demarrage, au centre, le dit et propose
+    // le bouton. Une fenetre par-dessus repetait la meme chose.
+}
+
+void MainWindow::prepare_game_list(Gtk::Window* parent, bool asked) {
+    if (m_preparing_game_list || m_dat_update_running) return;
+    const std::string exe = m_settings_panel.get_fbneo_executable();
+    // Tout seul, seulement pour qui joue avec FinalBurn Neo : un joueur MAME
+    // n'a pas a recevoir 28 Mo de DAT qu'il n'a pas demandes. Le bouton du
+    // guide, lui, n'a pas besoin de FBNeo : le serveur suffit.
+    if (!asked && !fbneo_can_start(exe)) return;
+    if (m_database->getGameCount("fbneo") > 0) return;
+
+    m_preparing_game_list = true;
+    refresh_setup_guide();
+    const std::string folder = GameListSetup::adopt_fbneo_folder();
+    // Le panneau reecrit dat_path a chaque enregistrement : il doit le savoir.
+    m_settings_panel.set_dat_path(folder);
+    const bool ready = GameListSetup::has_dats(folder)
+                    || GameListSetup::fill(parent ? *parent : *this, folder, exe);
+    m_preparing_game_list = false;
+    if (ready) do_update_dat("fbneo");
+    refresh_setup_guide();
+}
+
+void MainWindow::build_setup_guide() {
+    m_setup_guide.get_style_context()->add_class("cc-window");
+    m_setup_guide.get_style_context()->add_class("set-window");
+    m_setup_guide.set_no_show_all(true);
+
+    auto* column = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 14);
+    column->set_halign(Gtk::ALIGN_CENTER);
+    column->set_valign(Gtk::ALIGN_START);
+    column->set_margin_top(48);
+    column->set_margin_start(24);
+    column->set_margin_end(24);
+    column->set_size_request(640, -1);
+
+    auto card = SettingsUi::card("bc-start.svg", _("Let's get you playing"),
+                                 _("Four steps, once. Each one has its button below."));
+    m_setup_steps = SettingsUi::rows();
+    card.body->pack_start(*m_setup_steps, Gtk::PACK_SHRINK);
+    column->pack_start(*card.frame, Gtk::PACK_SHRINK);
+
+    auto* skip = SettingsUi::button(_("Show the game list"));
+    skip->set_halign(Gtk::ALIGN_CENTER);
+    skip->signal_clicked().connect([this] {
+        m_setup_dismissed = true;
+        refresh_setup_guide();
+    });
+    column->pack_start(*skip, Gtk::PACK_SHRINK);
+
+    m_setup_guide.pack_start(*column, Gtk::PACK_EXPAND_WIDGET);
+    column->show_all();
+}
+
+/* Visible tant que rien n'est jouable. Les etapes se relisent a chaque
+ * appel : l'etat vient des reglages et de la base, jamais d'un drapeau qui
+ * pourrait mentir. */
+void MainWindow::refresh_setup_guide() {
+    if (!m_setup_steps) return;
+
+    size_t playable = 0;
+    for (const auto& g : m_cached_games) if (g.status == "available") ++playable;
+    const bool show = !m_setup_dismissed && playable == 0;
+    m_setup_guide.set_visible(show);
+    m_view_stack.set_visible(!show);
+    if (!show) return;
+
+    const std::string fbneo = m_settings_panel.get_fbneo_executable();
+    const bool fbneo_ok  = fbneo_can_start(fbneo);
+    const bool fbneo_set = !fbneo.empty() && ::access(fbneo.c_str(), X_OK) == 0;
+    const bool mame_ok   = MameCatalog::is_runnable(m_settings_panel.mame_executable());
+    const bool emu_ok    = fbneo_ok || mame_ok;
+    const bool list_ok   = !m_cached_games.empty();
+    std::vector<std::string> folders = m_settings_panel.get_roms_paths("fbneo");
+    if (!fbneo_ok) for (const auto& f : m_settings_panel.get_roms_paths("mame")) folders.push_back(f);
+    const bool roms_ok   = !folders.empty();
+
+    namespace ui = SettingsUi;
+    ui::destroy_children(*m_setup_steps);
+    auto done = [] { return ui::status_dot(_("Done"), ui::State::Ok); };
+    // Un seul bouton violet : celui de la premiere etape qui reste a faire.
+    bool accent_given = false;
+    auto action = [&accent_given](const std::string& label, const std::string& icon, bool enabled,
+                                  std::function<void()> fn) {
+        const bool accent = enabled && !accent_given;
+        accent_given = accent_given || accent;
+        auto* b = ui::button(label, icon, accent ? ui::Tone::Accent : ui::Tone::Normal);
+        b->set_sensitive(enabled);
+        b->signal_clicked().connect(fn);
+        return b;
+    };
+
+    // 1. L'emulateur
+    std::string sub;
+    Gtk::Widget* end = nullptr;
+    if (emu_ok) {
+        sub = fbneo_ok ? _("FinalBurn Neo is installed and starts.") : _("MAME is installed and starts.");
+        end = done();
+    } else if (fbneo_set) {
+        sub = _("FinalBurn Neo is installed but cannot start: libraries are missing on this computer.");
+        end = action(_("See what is missing"), "bc-info.svg", true,
+                     [this] { open_emulator_settings("fbneo"); });
+    } else {
+        sub = _("FinalBurn Neo plays the games. One click downloads and installs it.");
+        end = action(_("Set up FinalBurn Neo"), "bc-download.svg", true,
+                     [this] { open_emulator_settings("fbneo"); });
+    }
+    ui::add_row(m_setup_steps, *ui::row("bc-arcade.svg", _("1. Emulator"), sub, end));
+
+    // 2. La liste des jeux
+    if (list_ok) {
+        sub = Glib::ustring::compose(_("%1 games known."), m_cached_games.size());
+        end = done();
+    } else if (m_preparing_game_list || m_dat_update_running) {
+        sub = _("Bootcade is getting the list of the games FinalBurn Neo runs...");
+        end = ui::status_dot(_("In progress"), ui::State::Muted);
+    } else {
+        sub = _("The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.");
+        end = action(_("Get the game list"), "bc-generate-dat.svg", true,
+                     [this] { prepare_game_list(nullptr, true); });
+    }
+    ui::add_row(m_setup_steps, *ui::row("bc-generate-dat.svg", _("2. Game list"), sub, end));
+
+    // 3. Le dossier de ROMs
+    if (roms_ok) {
+        sub = folders.front();
+        end = done();
+    } else {
+        sub = _("The folder that holds your ROM archives (.zip files).");
+        end = action(_("Choose folder..."), "bc-folder.svg", true,
+                     [this] { on_guide_choose_roms(); });
+    }
+    ui::add_row(m_setup_steps, *ui::row("bc-folder.svg", _("3. ROM folder"), sub, end));
+
+    // 4. Le scan
+    if (m_scan_in_progress) {
+        sub = _("Bootcade is checking which games your ROMs can play...");
+        end = ui::status_dot(_("In progress"), ui::State::Muted);
+    } else {
+        sub = m_scan_done_once
+            ? _("No playable game was found. Check that the folder holds FinalBurn Neo ROM archives.")
+            : _("Bootcade checks which games your ROMs can play.");
+        end = action(m_scan_done_once ? _("Scan again") : _("Scan now"), "bc-search.svg",
+                     emu_ok && list_ok && roms_ok,
+                     [this] { if (m_active_emulator == "mame") on_start_scan_clicked(); else run_fbneo_scan(); });
+    }
+    ui::add_row(m_setup_steps, *ui::row("bc-search.svg", _("4. Scan"), sub, end));
+    m_setup_steps->show_all();
+}
+
+void MainWindow::on_guide_choose_roms() {
+    Gtk::FileChooserDialog dialog(*this, _("Select ROMs Directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+    dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
+    if (const char* home = std::getenv("HOME")) dialog.set_current_folder(home);
+    if (dialog.run() != Gtk::RESPONSE_OK) return;
+    const std::string folder = dialog.get_filename();
+    dialog.hide();
+    // Un chemin tape a la main peut ne mener nulle part.
+    std::error_code ec;
+    if (folder.empty() || !std::filesystem::is_directory(folder, ec)) return;
+
+    const bool fbneo = fbneo_can_start(m_settings_panel.get_fbneo_executable());
+    m_settings_panel.add_roms_path_for(fbneo ? "fbneo" : "mame", folder);
+    m_settings_panel.save_to_file(AppContext::get_config_path());
+    refresh_setup_guide();
+    // Le joueur vient de dire ou sont ses jeux : la suite logique est de les
+    // chercher, pas de lui reposer la question.
+    if (fbneo) run_fbneo_scan();
+    else       on_start_scan_clicked();
 }
 
 void MainWindow::on_settings_clicked() {
@@ -3737,6 +3937,12 @@ void MainWindow::on_settings_clicked() {
         refresh_emu_state();
         m_settings_win = nullptr;
         delete dialog;
+        // Un FinalBurn Neo choisi a la main (Browse) merite la meme suite
+        // qu'un telechargement : sa liste des jeux, sans passer par un menu.
+        Glib::signal_idle().connect_once([this] {
+            prepare_game_list();
+            refresh_setup_guide();
+        });
     });
     dialog->show_all();
     dialog->present();
@@ -3808,6 +4014,9 @@ void MainWindow::update_status_bar_stats() {
                                Glib::Markup::escape_text(_("available")) +
                                " / <b>" + std::to_string(total) + "</b>");
     m_summary_label.show();
+    // Chaque changement de la liste (DAT charges, scan fini) peut faire
+    // avancer le guide de demarrage, ou le retirer.
+    refresh_setup_guide();
 }
 
 // Removed all ComboBox filter handlers - will implement MAMEUI-style filtering
@@ -6265,16 +6474,17 @@ void MainWindow::on_fbneo_update_infobar_response(int response_id) {
 void MainWindow::on_download_latest_fbneo() {
     m_fbneo_update_infobar.hide();
 
-    // $HOME, not current_path(): the working directory a launch happens to start
-    // in is not stable across a desktop icon vs. a terminal vs. a dev checkout,
-    // so this could silently extract into a different folder each time.
-    const char* home_env = std::getenv("HOME");
+    // Une mise a jour remplace FinalBurn Neo la ou il est deja ; le dossier
+    // ne se demande que s'il n'y en a pas encore.
+    const std::string folder = DownloadDialog::choose_fbneo_folder(
+        *this, m_settings_panel.get_fbneo_executable(), false);
+    if (folder.empty()) return;
     auto download_dialog = std::make_unique<DownloadDialog>(
         *this,
         // See SettingsPanel::on_download_fbneo_clicked for why this points at our
         // own fork instead of finalburnneo/FBNeo directly.
         "https://github.com/battousai90/FBNeo/releases/download/latest/linux-sdl2-x86_64.zip",
-        home_env ? std::string(home_env) : std::filesystem::current_path().string()
+        folder
     );
 
     download_dialog->set_settings_entry(&m_settings_panel.m_entry_fbneo);
@@ -6313,6 +6523,9 @@ void MainWindow::on_download_latest_fbneo() {
 
     if (result != Gtk::RESPONSE_OK) return; // download failed or was cancelled
 
+    // Premiere installation : pas de question, la liste des jeux se prepare.
+    if (m_database->getGameCount("fbneo") == 0) { prepare_game_list(); return; }
+
     // A new build usually means new/changed game definitions : offer to chain
     // straight into DAT generation and the database update so the user ends
     // up with a working, up-to-date library in one flow instead of having to
@@ -6323,6 +6536,8 @@ void MainWindow::on_download_latest_fbneo() {
         "bc-generate-dat.svg");
     if (!confirm_dialog.show_and_confirm()) return;
 
+    if (m_settings_panel.get_dat_path().empty())
+        m_settings_panel.set_dat_path(GameListSetup::adopt_fbneo_folder());
     GenerateDAT::execute(*this, m_settings_panel.get_fbneo_executable(), m_settings_panel.get_dat_path());
     // Not on_update_dat_clicked(): that shows its own "continue?" confirmation,
     // which : coming right after this dialog's own confirm and GenerateDAT's
@@ -6335,6 +6550,8 @@ void MainWindow::on_download_latest_fbneo() {
 }
 
 void MainWindow::on_generate_dat_files() {
+    if (m_settings_panel.get_dat_path().empty())
+        m_settings_panel.set_dat_path(GameListSetup::adopt_fbneo_folder());
     GenerateDAT::execute(*this, m_settings_panel.get_fbneo_executable(), m_settings_panel.get_dat_path());
 }
 
@@ -6610,6 +6827,7 @@ void MainWindow::on_scan_dialog_complete() {
 
     m_scan_in_progress = false;
     m_button_scan.set_sensitive(true);
+    refresh_setup_guide();   // l'etape « Scan » n'est plus en cours
 
     // Replace progress bar with a brief "done" (or "cancelled") message then hide after 4 s
     const std::string scanned = m_scan_dialog ? m_scan_dialog->emulator() : std::string("fbneo");
@@ -8033,6 +8251,26 @@ void MainWindow::refresh_account_button() {
 }
 
 
+/* FinalBurn Neo est pret s'il est executable ET que la machine a ses
+ * bibliotheques : sur une installation neuve, il manque souvent SDL2_image et
+ * il meurt avant d'ouvrir une fenetre. Cet indicateur se rafraichit a chaque
+ * changement de portee : la reponse de ldd est gardee quelques secondes,
+ * assez pour ne pas relancer un processus a chaque clic, assez peu pour voir
+ * le resultat d'un « apt install » sans redemarrer. */
+static bool fbneo_can_start(const std::string& exe) {
+    if (exe.empty() || ::access(exe.c_str(), X_OK) != 0) return false;
+    static std::string cached_exe;
+    static bool cached_ok = false;
+    static std::chrono::steady_clock::time_point cached_at;
+    const auto now = std::chrono::steady_clock::now();
+    if (exe != cached_exe || now - cached_at > std::chrono::seconds(10)) {
+        cached_exe = exe;
+        cached_ok  = HostLibraries::missing(exe).empty();
+        cached_at  = now;
+    }
+    return cached_ok;
+}
+
 /* L'etat de l'emulateur, en clair et en permanence.
  *
  * Un chemin renseigne ne suffit pas : le binaire peut avoir ete deplace ou
@@ -8056,8 +8294,7 @@ void MainWindow::refresh_emu_state() {
             if (e.id == "mame") {
                 if (!m_settings_panel.mame_executable().empty()) ++up;
             } else {
-                const std::string exe = m_settings_panel.get_fbneo_executable();
-                if (!exe.empty() && ::access(exe.c_str(), X_OK) == 0) ++up;
+                if (fbneo_can_start(m_settings_panel.get_fbneo_executable())) ++up;
             }
         }
         const bool all_up = (up == total);
@@ -8096,7 +8333,7 @@ void MainWindow::refresh_emu_state() {
         }
     } else {
         const std::string exe = m_settings_panel.get_fbneo_executable();
-        ready         = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+        ready         = fbneo_can_start(exe);
         label_ready   = _("FBNeo ready");
         label_missing = _("FBNeo not set");
         // La meme identite de version que la page Reglages > Emulator :
