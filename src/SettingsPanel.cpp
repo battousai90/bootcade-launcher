@@ -23,6 +23,7 @@
 #include "GenerateDAT.h"
 #include "FbneoUpdateCheck.h"
 #include "HiscoreClient.h"
+#include "HostLibraries.h"
 #include "MameCatalog.h"
 #include "MameSooner.h"
 #include "ThumbnailDownloader.h"
@@ -40,9 +41,11 @@
 #include <iomanip>
 #include <random>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace {
@@ -1504,14 +1507,41 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
         // Le vrai test, c'est de le LANCER : un fichier executable qui refuse
         // de demarrer (bibliotheque manquante, architecture) passe tous les
         // controles de permissions et echoue quand meme au premier jeu.
+        const auto libs = HostLibraries::missing(path);
+        if (!libs.empty()) {
+            refresh_emulator_state();
+            if (win)
+                ui::notice(*win, _("FinalBurn Neo cannot start"), HostLibraries::explain(libs),
+                           "bc-error.svg");
+            return;
+        }
+        // -menu : son ecran de choix de jeux. Sans argument, FinalBurn Neo
+        // ecrit son mode d'emploi et s'arrete aussitot, sans aucune fenetre.
+        Glib::Pid pid = 0;
         try {
-            Glib::spawn_async("", AppContext::host_command({path}),
-                              Glib::SPAWN_SEARCH_PATH | Glib::SPAWN_DO_NOT_REAP_CHILD);
-            m_exe_state_text.set_text(_("Emulator started. Close its window to come back."));
+            Glib::spawn_async("", AppContext::host_command({path, "-menu"}),
+                              Glib::SPAWN_SEARCH_PATH | Glib::SPAWN_DO_NOT_REAP_CHILD,
+                              Glib::SlotSpawnChildSetup(), &pid);
         } catch (const Glib::Error& e) {
             m_exe_state_text.set_text(
                 Glib::ustring::compose(_("Could not start the emulator: %1"), e.what()));
+            return;
         }
+        m_exe_state_text.set_text(_("Emulator started. Close its window to come back."));
+        // Une sortie en erreur dans les premieres secondes, c'est un
+        // demarrage rate, pas un joueur qui ferme la fenetre.
+        const auto started = std::chrono::steady_clock::now();
+        Glib::signal_child_watch().connect([this, started](Glib::Pid child, int status) {
+            Glib::spawn_close_pid(child);
+            const bool quick = std::chrono::steady_clock::now() - started < std::chrono::seconds(5);
+            if (quick && !(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+                m_exe_state_text.set_text(
+                    _("The emulator stopped right away. Start it from a terminal to read its error."));
+                m_exe_state_text.get_style_context()->remove_class("set-ok");
+                m_exe_state_text.get_style_context()->add_class("set-err");
+            } else
+                refresh_emulator_state();
+        }, pid);
     });
     exe_foot->pack_start(m_btn_test_emu, Gtk::PACK_SHRINK);
     exe.body->pack_start(*exe_foot, Gtk::PACK_SHRINK);
@@ -2974,7 +3004,8 @@ void SettingsPanel::refresh_emulator_pill() {
         ready = MameCatalog::is_runnable(exe);
     } else {
         const std::string exe = get_fbneo_executable();
-        ready = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+        ready = !exe.empty() && ::access(exe.c_str(), X_OK) == 0
+             && HostLibraries::missing(exe).empty();
     }
     // « Not installed » plutot que « Not configured » : MAME ne se regle pas
     // dans Bootcade, et envoyer chercher un reglage qui n'existe pas ferait
@@ -3241,7 +3272,11 @@ void SettingsPanel::fit_to_page() {
 
 void SettingsPanel::refresh_emulator_state() {
     const std::string exe = get_fbneo_executable();
-    const bool ready = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+    const bool executable = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
+    // Executable ne veut pas dire qu'il demarre : sur une machine neuve, il
+    // lui manque souvent SDL2_image, et il meurt avant d'ouvrir une fenetre.
+    const bool libs_ok = !executable || HostLibraries::missing(exe).empty();
+    const bool ready = executable && libs_ok;
     probe_fbneo_video_async();
 
     m_emu_status_text.set_text(ready ? _("Active") : _("Not configured"));
@@ -3262,9 +3297,9 @@ void SettingsPanel::refresh_emulator_state() {
         m_exe_state_text.get_style_context()->add_class("set-ok");
     } else {
         m_exe_state_icon.set_file("bc-info.svg");
-        m_exe_state_text.set_text(exe.empty()
-            ? std::string(_("No executable selected yet."))
-            : std::string(_("This path is not an executable Bootcade can run.")));
+        m_exe_state_text.set_text(exe.empty()      ? std::string(_("No executable selected yet."))
+                                : !libs_ok         ? std::string(_("Libraries are missing: click Test Emulator for details."))
+                                                   : std::string(_("This path is not an executable Bootcade can run.")));
         m_exe_state_text.get_style_context()->remove_class("set-ok");
         m_exe_state_text.get_style_context()->add_class("set-err");
     }
@@ -4128,6 +4163,11 @@ void SettingsPanel::add_roms_path(const std::string& path) {
     refresh_roms_list();
 }
 
+void SettingsPanel::add_roms_path_for(const std::string& emulator, const std::string& path) {
+    if (emulator == m_library_emu) { add_roms_path(path); return; }
+    m_library[emulator].roms_paths.push_back(path);
+}
+
 void SettingsPanel::remove_roms_path(int index) {
     if (index >= 0 && index < static_cast<int>(m_roms_paths.size())) {
         m_roms_paths.erase(m_roms_paths.begin() + index);
@@ -4522,22 +4562,21 @@ void SettingsPanel::on_download_fbneo_clicked() {
     auto parent_window = dynamic_cast<Gtk::Window*>(get_toplevel());
     if (!parent_window) return;
 
-    // $HOME, not current_path(): the working directory a launch happens to
-    // start in is not stable across a desktop icon vs. a terminal vs. a dev
-    // checkout, so this could silently extract into a different folder each time.
-    const char* home_env = std::getenv("HOME");
+    const std::string folder =
+        DownloadDialog::choose_fbneo_folder(*parent_window, m_entry_fbneo.get_text(), true);
+    if (folder.empty()) return;
     auto download_dialog = std::make_unique<DownloadDialog>(
         *parent_window,
         // finalburnneo/FBNeo stopped maintaining the SDL/Linux build (missing DAT
         // export calls for several systems, upstream declined the fix) : this fork
         // tracks their master daily and carries just that fix. See website FAQ.
         "https://github.com/battousai90/FBNeo/releases/download/latest/linux-sdl2-x86_64.zip",
-        home_env ? std::string(home_env) : std::filesystem::current_path().string()
+        folder
     );
 
     download_dialog->set_settings_entry(&m_entry_fbneo);
     download_dialog->start_download();
-    download_dialog->run();
+    const bool installed = download_dialog->run() == Gtk::RESPONSE_OK;
     // run() rend la main sans fermer la fenetre : elle restait affichee
     // pendant la lecture de la release qui suit.
     download_dialog.reset();
@@ -4554,6 +4593,7 @@ void SettingsPanel::on_download_fbneo_clicked() {
         if (fo) fo << j.dump(4);
     }
     refresh_emulator_state();
+    if (installed) m_sig_fbneo_installed.emit();
 }
 
 

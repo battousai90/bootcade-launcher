@@ -37,6 +37,12 @@ public:
     // Aucun emulateur pret : dire au joueur quoi faire, une fois la fenetre
     // affichee (au demarrage).
     void check_emulators_ready();
+    /* La liste des jeux de FinalBurn Neo, preparee sans rien demander : des
+     * que FBNeo peut demarrer et que la base n'a aucun de ses jeux, le dossier
+     * DAT se fixe, se remplit (serveur Bootcade, sinon FBNeo) et la base se
+     * charge. `parent` porte la fenetre de progression (Settings quand le
+     * telechargement vient de la). */
+    void prepare_game_list(Gtk::Window* parent = nullptr, bool asked = false);
     /* Ouverture directe d'une fenetre, pour l'automatisation.
      *
      * Sans elle, photographier « Controller Configuration » demandait de
@@ -133,6 +139,15 @@ private:
     void on_library_scan_requested(const std::string& emulator);
     // The FinalBurn Neo per-file scan, after its confirmation.
     void scan_fbneo_library();
+    // Le meme scan, sans sa confirmation : le guide de demarrage le lance
+    // juste apres que le joueur a choisi son dossier.
+    void run_fbneo_scan();
+    /* Le guide de demarrage, a la place de la liste tant que rien n'est
+     * jouable : emulateur, liste des jeux, dossier de ROMs, scan. Chaque etape
+     * a son bouton ; on ne cherche plus « Update DAT » dans un menu. */
+    void build_setup_guide();
+    void refresh_setup_guide();
+    void on_guide_choose_roms();
     void on_scan_dialog_complete();
     void on_scan_go_background();
     void set_scan_status(const Glib::ustring& text, SettingsUi::State state);
@@ -732,6 +747,11 @@ private:
      * qui repond a une autre question.
      */
     Gtk::Box            m_center_box{Gtk::ORIENTATION_VERTICAL, 0};
+    Gtk::Box            m_setup_guide{Gtk::ORIENTATION_VERTICAL, 0};
+    Gtk::Box*           m_setup_steps = nullptr;
+    bool                m_setup_dismissed = false;   // « Show the game list » : pour cette session
+    bool                m_preparing_game_list = false;
+    bool                m_scan_done_once = false;     // le guide distingue « pas encore » de « rien trouve »
     Gtk::Box            m_center_foot{Gtk::ORIENTATION_HORIZONTAL, 8};
     Gtk::Label          m_center_count;
     // m_hdr_emu ne parait qu'en portee « tous » : ailleurs la colonne

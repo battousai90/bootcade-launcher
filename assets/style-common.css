@@ -28,6 +28,51 @@ window, .background {
   color: @text;
 }
 
+/* ═══ Barre de titre et cadre des fenetres ════════════════════════════════
+   Bootcade dessine lui-meme sa barre de titre (HeaderBar) et donc aussi le
+   cadre de la fenetre. Sans ces regles, les deux prennent le gris du theme
+   du bureau : la barre en gris neutre, et, quand le bureau ne sait pas
+   peindre d'ombre transparente (machine virtuelle, session sans
+   compositeur), un cadre plein de 4 px gris clair tout autour. */
+headerbar {
+  background-image: none;
+  background-color: @surface;
+  border-bottom: 1px solid @border;
+  box-shadow: none;
+  color: @text;
+}
+headerbar:backdrop {
+  background-color: @surface;
+  color: @text_muted;
+}
+headerbar button.titlebutton {
+  text-shadow: none;
+  -gtk-icon-shadow: none;
+  color: @text;
+}
+
+window.csd:not(.popup) > decoration {
+  box-shadow: 0 3px 9px 1px @shadow, 0 0 0 1px @border;
+}
+window.csd:not(.popup) > decoration:backdrop {
+  box-shadow: 0 2px 6px 2px alpha(@shadow, 0.5), 0 0 0 1px @border;
+}
+window.csd.maximized > decoration,
+window.csd.fullscreen > decoration { box-shadow: none; }
+window.csd.tiled > decoration,
+window.csd.tiled-top > decoration,
+window.csd.tiled-right > decoration,
+window.csd.tiled-bottom > decoration,
+window.csd.tiled-left > decoration { box-shadow: 0 0 0 1px @border; }
+/* Sans ombre possible, GTK garde une bande pleine pour saisir le bord et
+   redimensionner : elle prend la couleur de la barre, filetee du trait. */
+window.solid-csd > decoration,
+window.solid-csd > decoration:backdrop {
+  background-color: @surface;
+  border-color: @border;
+  box-shadow: none;
+}
+
 menubar {
   background-color: @surface;
   color: @text;
@@ -654,20 +699,8 @@ expander > title { min-height: 0; padding: 2px 0; }
 }
 
 /* ── Barre de titre : la marque, comme dans la fenetre principale ──────
- * Le fond est celui de nos barres, pas celui du bureau : sans cette regle,
- * la barre prenait le gris du theme GTK et le titre blanc y devenait
- * illisible des que le bureau tournait en clair. */
-.cc-window headerbar {
-  padding-left: 12px; padding-right: 6px;
-  background-image: none;
-  background-color: @surface;
-  border-bottom: 1px solid @border;
-  color: @text;
-}
-.cc-window headerbar:backdrop {
-  background-color: @surface;
-  color: @text_muted;
-}
+ * Fond et trait viennent de la regle commune « headerbar », en tete. */
+.cc-window headerbar { padding-left: 12px; padding-right: 6px; }
 .cc-window .cc-title { font-size: 1.06em; }
 .cc-window .cc-sub   { font-size: 0.85em; color: @text_muted; }
 

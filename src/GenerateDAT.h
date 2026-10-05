@@ -12,8 +12,12 @@ public:
     // write on its own. Pass empty to fall back to FBNeo's own default
     // (~/.local/share/fbneo/support/lists/dat) for a first-ever run with
     // nothing configured yet.
-    static void execute(Gtk::Window& parent, const std::string& fbneo_executable,
-                         const std::string& dat_path, Gtk::Entry* dat_entry = nullptr);
+    // `quiet` : pas de message de reussite, pour un appelant qui enchaine
+    // (la premiere liste des jeux). Les echecs, eux, se disent toujours.
+    // Vrai quand FBNeo a ecrit ses DAT.
+    static bool execute(Gtk::Window& parent, const std::string& fbneo_executable,
+                        const std::string& dat_path, Gtk::Entry* dat_entry = nullptr,
+                        bool quiet = false);
 
     // Le meme geste, pour MAME. Rien n'est lance ici : MAME n'ecrit pas de
     // DAT, c'est MameCatalog::generate_dats qui convertit sa sortie -listxml
