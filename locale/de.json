@@ -1838,5 +1838,16 @@
   "Download page": "Download-Seite",
   "Updating to Bootcade %1. Bootcade restarts on its own when it is done.": "Aktualisierung auf Bootcade %1. Bootcade startet danach von selbst neu.",
   "Bootcade %1 is installed. Restarting...": "Bootcade %1 ist installiert. Neustart...",
-  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "Bootcade %1 konnte nicht automatisch installiert werden. Sie können es erneut versuchen oder es von der Download-Seite holen."
+  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "Bootcade %1 konnte nicht automatisch installiert werden. Sie können es erneut versuchen oder es von der Download-Seite holen.",
+  "Missing artwork": "Fehlende Bilder",
+  "Downloads the previews and titles not yet in your folders, for every emulator that has a source. Images already there are kept.": "Lädt die Vorschau- und Titelbilder herunter, die in Ihren Ordnern noch fehlen, für jeden Emulator mit einer Quelle. Vorhandene Bilder bleiben erhalten.",
+  "Download missing artwork": "Fehlende Bilder herunterladen",
+  "Artwork downloaded.": "Bilder heruntergeladen.",
+  "No artwork found for this game in your sources.": "In Ihren Quellen wurde kein Bild für dieses Spiel gefunden.",
+  "All artwork is already there.": "Alle Bilder sind bereits vorhanden.",
+  "Artwork: %1 downloaded, %2 not found in any source.": "Bilder: %1 heruntergeladen, %2 in keiner Quelle gefunden.",
+  "Downloading artwork for %1...": "Bilder für %1 werden heruntergeladen...",
+  "Looking for missing artwork...": "Fehlende Bilder werden gesucht...",
+  "Downloading: %1 (%2/%3)": "Herunterladen: %1 (%2/%3)",
+  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "Der Reihe nach versucht, bis ein Bild gefunden wird. Eine Adresse ist entweder ein Basisordner mit previews/ und titles/ oder ein Muster mit {rom}, {desc} und {snaps|titles}."
 }

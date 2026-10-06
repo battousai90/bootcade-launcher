@@ -134,11 +134,9 @@ public:
     // Public method for menu access
     void on_download_fbneo_clicked();
 
-    // Public access to download previews button
-    Gtk::Button& get_download_previews_button() { return m_button_download_previews; }
-
-    // Public access to download titles button
-    Gtk::Button& get_download_titles_button() { return m_button_download_titles; }
+    // « Download missing artwork » : branche par la fenetre principale, qui
+    // connait les jeux et affiche la progression.
+    Gtk::Button& get_download_missing_button() { return m_button_download_missing; }
 
     // Public access to entry for menu
     Gtk::Entry m_entry_fbneo;
@@ -306,8 +304,6 @@ private:
     void on_add_roms_path_clicked();
     void on_remove_roms_path_clicked();
     void refresh_roms_list();
-    void on_download_previews_clicked();
-    void on_download_titles_clicked();
 
     // ── Coquille ─────────────────────────────────────────────────────────
     void         build_shell();
@@ -404,9 +400,8 @@ private:
 
     // Boutons
     Gtk::Button m_button_browse_previews;
-    Gtk::Button m_button_download_previews;
     Gtk::Button m_button_browse_titles;
-    Gtk::Button m_button_download_titles;
+    Gtk::Button m_button_download_missing;
     Gtk::Button m_button_browse_fbneo;
     Gtk::Button m_button_download_fbneo;
     // Scan options widgets

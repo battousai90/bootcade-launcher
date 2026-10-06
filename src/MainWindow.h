@@ -156,8 +156,11 @@ private:
     // Artwork download methods
     void show_download_progress(const std::string& filename, int current, int total, double percentage);
     void hide_download_progress();
-    void on_download_previews_clicked();
-    void on_download_titles_clicked();
+    void on_download_missing_artwork();
+    // Les images d'UN jeu, en arriere-plan : le dock se rafraichit a l'arrivee.
+    Glib::Dispatcher m_single_art_dispatcher;
+    std::atomic<bool> m_single_art_running{false};
+    bool             m_single_art_found = false;
     void on_download_cancel_clicked();
     
     // Settings dialog management
@@ -320,6 +323,7 @@ private:
     Gtk::CheckMenuItem m_menu_item_fullscreen_mode;
     Gtk::CheckMenuItem m_menu_item_integerscale_mode;
     Gtk::MenuItem m_menu_item_download_latest_fbneo;
+    Gtk::MenuItem m_menu_item_download_missing_art;
     Gtk::MenuItem m_menu_item_generate_dat_files;
     
     // Filter Menu

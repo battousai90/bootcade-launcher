@@ -1838,5 +1838,16 @@
   "Download page": "Página de download",
   "Updating to Bootcade %1. Bootcade restarts on its own when it is done.": "Atualizando para o Bootcade %1. O Bootcade reinicia sozinho quando terminar.",
   "Bootcade %1 is installed. Restarting...": "Bootcade %1 está instalado. Reiniciando...",
-  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "Não foi possível instalar o Bootcade %1 automaticamente. Você pode tentar novamente ou obtê-lo na página de download."
+  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "Não foi possível instalar o Bootcade %1 automaticamente. Você pode tentar novamente ou obtê-lo na página de download.",
+  "Missing artwork": "Imagens em falta",
+  "Downloads the previews and titles not yet in your folders, for every emulator that has a source. Images already there are kept.": "Baixa as capturas e telas de título que faltam nas suas pastas, para cada emulador que tenha uma fonte. As imagens já presentes são mantidas.",
+  "Download missing artwork": "Baixar imagens em falta",
+  "Artwork downloaded.": "Imagens baixadas.",
+  "No artwork found for this game in your sources.": "Nenhuma imagem encontrada para este jogo nas suas fontes.",
+  "All artwork is already there.": "Todas as imagens já estão presentes.",
+  "Artwork: %1 downloaded, %2 not found in any source.": "Imagens: %1 baixadas, %2 não encontradas em nenhuma fonte.",
+  "Downloading artwork for %1...": "Baixando as imagens de %1...",
+  "Looking for missing artwork...": "Procurando imagens em falta...",
+  "Downloading: %1 (%2/%3)": "Baixando: %1 (%2/%3)",
+  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "Testadas em ordem até encontrar uma imagem. Um endereço é uma pasta base com previews/ e titles/, ou um modelo com {rom}, {desc} e {snaps|titles}."
 }

@@ -709,6 +709,11 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_menu_item_download_latest_fbneo.set_label(_("Download Latest FBNeo Release"));
     m_menu_item_download_latest_fbneo.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_download_latest_fbneo));
     m_submenu_emulator.append(m_menu_item_download_latest_fbneo);
+
+    m_menu_item_download_missing_art.set_label(_("Download missing artwork"));
+    m_menu_item_download_missing_art.signal_activate().connect(
+        sigc::mem_fun(*this, &MainWindow::on_download_missing_artwork));
+    m_submenu_emulator.append(m_menu_item_download_missing_art);
     
     m_menu_item_generate_dat_files.set_label(_("Generate DAT Files"));
     m_menu_item_generate_dat_files.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_generate_dat_files));
@@ -2009,14 +2014,23 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_button_update_dat.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_update_dat_clicked));
     m_download_cancel_button.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_download_cancel_clicked));
     
-    // Connect preview and titles download buttons from settings panel
-    m_settings_panel.get_download_previews_button().signal_clicked().connect(
-        sigc::mem_fun(*this, &MainWindow::on_download_previews_clicked));
-    m_settings_panel.get_download_titles_button().signal_clicked().connect(
-        sigc::mem_fun(*this, &MainWindow::on_download_titles_clicked));
+    // « Download missing artwork » des reglages : meme action que le menu.
+    m_settings_panel.get_download_missing_button().signal_clicked().connect(
+        sigc::mem_fun(*this, &MainWindow::on_download_missing_artwork));
+    m_single_art_dispatcher.connect([this] {
+        m_single_art_running = false;
+        m_status_label.set_text(m_single_art_found ? _("Artwork downloaded.")
+                                                   : _("No artwork found for this game in your sources."));
+        auto sel = m_treeview_games.get_selection();
+        if (sel) { if (auto it = sel->get_selected()) show_game_details(*it); }
+        refresh_active_view();
+    });
     
     // Connect thumbnail download dispatchers
     m_download_progress_dispatcher.connect([this]() {
+        // Une progression emise juste avant l'annulation arrive apres elle :
+        // sans ce garde, elle reaffichait la barre que Cancel venait de fermer.
+        if (!m_thumbnail_downloader.is_downloading()) return;
         // Snapshot under the lock : the worker keeps writing while we draw.
         std::string file; int index, total; double pct;
         {
@@ -2029,16 +2043,23 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     
     m_download_finished_dispatcher.connect([this]() {
         hide_download_progress();
-        std::cout << "[INFO] All artwork downloaded!" << std::endl;
-        
-        // Update status bar with completion message instead of popup
-        m_status_label.set_text(_("Download completed successfully!"));
-        
-        // Hide the completion message after 5 seconds
+        // Le bilan : ce qui a ete trouve, et ce qu'aucune source n'a. Un
+        // simple « termine » laissait croire que tout etait arrive.
+        const auto sum = m_thumbnail_downloader.last_summary();
+        if (sum.downloaded == 0 && sum.not_found == 0)
+            m_status_label.set_text(_("All artwork is already there."));
+        else
+            m_status_label.set_text(Glib::ustring::compose(
+                _("Artwork: %1 downloaded, %2 not found in any source."),
+                sum.downloaded, sum.not_found));
+        // Les vignettes et le dock relisent leurs images.
+        refresh_active_view();
+        auto sel = m_treeview_games.get_selection();
+        if (sel) { if (auto it = sel->get_selected()) show_game_details(*it); }
         Glib::signal_timeout().connect([this]() {
             m_status_label.set_text("");
-            return false; // Don't repeat the timeout
-        }, 5000);
+            return false;
+        }, 10000);
     });
     
     // Connect ROM scan dispatchers
@@ -3237,29 +3258,32 @@ void MainWindow::on_download_art_clicked() {
         return;
     }
     
-    std::cout << "[INFO] Downloading artwork for: " << game_title << std::endl;
-    
-    // Create callback to update status label for single downloads
-    auto single_download_callback = [this](const std::string& status, int current, int total, double percentage) {
-        m_status_label.set_text(status);
-    };
-    
-    // Download preview first if directory is configured - use ROM name and system
-    if (!previews_dir.empty()) {
-        std::cout << "[INFO] Downloading preview for: " << game_title << " (ROM: " << game_name << ", System: " << game_system << ")" << std::endl;
-        m_status_label.set_text(_("Downloading preview for ") + game_title + "...");
-        m_thumbnail_downloader.download_single_artwork(game_name, game_system, previews_dir, ThumbnailDownloader::ArtworkType::Previews, single_download_callback, emulator);
-        
-        // Wait a moment before downloading title
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-    
-    // Download title if directory is configured - use ROM name and system
-    if (!titles_dir.empty() && !m_thumbnail_downloader.is_downloading()) {
-        std::cout << "[INFO] Downloading title for: " << game_title << " (ROM: " << game_name << ", System: " << game_system << ")" << std::endl;
-        m_status_label.set_text(_("Downloading title for ") + game_title + "...");
-        m_thumbnail_downloader.download_single_artwork(game_name, game_system, titles_dir, ThumbnailDownloader::ArtworkType::Titles, single_download_callback, emulator);
-    }
+    if (m_single_art_running) return;
+    m_single_art_running = true;
+    m_status_label.set_text(Glib::ustring::compose(_("Downloading artwork for %1..."), game_title));
+    /* Hors du fil graphique : le telechargement figeait la fenetre le temps
+     * de chercher l'image dans chaque source, puis d'une pause d'une
+     * demi-seconde entre les deux types d'image. */
+    std::thread([this, alive = m_alive_token, game_name, game_title, game_system, emulator,
+                 previews_dir, titles_dir]() {
+        ThumbnailDownloader one;
+        auto exists = [&](const std::string& dir) {
+            std::error_code ec;
+            const std::string p = dir + "/" + get_fbneo_system_prefix(game_system) + game_name + ".png";
+            return !dir.empty() && std::filesystem::exists(p, ec) && std::filesystem::file_size(p, ec) > 0;
+        };
+        if (!previews_dir.empty())
+            one.download_single_artwork(game_name, game_title, game_system, previews_dir,
+                                        ThumbnailDownloader::ArtworkType::Previews, nullptr, emulator);
+        if (!titles_dir.empty())
+            one.download_single_artwork(game_name, game_title, game_system, titles_dir,
+                                        ThumbnailDownloader::ArtworkType::Titles, nullptr, emulator);
+        const bool found = exists(previews_dir) || exists(titles_dir);
+        std::lock_guard<std::mutex> live(alive->mutex);
+        if (!alive->alive) return;
+        m_single_art_found = found;
+        m_single_art_dispatcher.emit();
+    }).detach();
 }
 
 void MainWindow::update_fbneo_config(const std::vector<std::string>& roms_paths) {
@@ -6667,9 +6691,13 @@ void MainWindow::show_download_progress(const std::string& filename, int current
     m_download_progress_bar.set_text(std::to_string(static_cast<int>(percentage)) + "%");
     
     // Update status label with filename and count
-    std::string status_text = "Downloading: " + filename + " (" + 
-                             std::to_string(current) + "/" + std::to_string(total) + ")";
-    m_download_status_label.set_text(status_text);
+    // Avant le premier telechargement, le total n'est pas encore connu : on
+    // dit ce qui se passe plutot qu'un « (0/0) ».
+    if (total > 0)
+        m_download_status_label.set_text(Glib::ustring::compose(
+            _("Downloading: %1 (%2/%3)"), filename, current, total));
+    else
+        m_download_status_label.set_text(filename);
     
     // Show the download progress box if not visible
     if (!m_download_progress_box.get_visible()) {
@@ -6691,136 +6719,54 @@ void MainWindow::hide_download_progress() {
     update_status_bar_stats();
 }
 
-void MainWindow::on_download_previews_clicked() {
-    std::string previews_dir = m_settings_panel.get_previews_path();
-    
-    // Vérifier que le répertoire de previews est configuré
-    if (previews_dir.empty()) {
-        SettingsUi::notice(*this, _("Previews Directory Not Set"),
-                           _("Please set the previews directory in Settings before downloading."),
+/* Toutes les images qui manquent, des deux types, pour tous les emulateurs.
+ *
+ * Chaque emulateur garde ses dossiers et ses sources : un jeu MAME ne finit
+ * plus dans le dossier de FinalBurn Neo. Rien de deja present n'est
+ * retelecharge ; le bilan dit ensuite ce qu'aucune source n'avait. */
+void MainWindow::on_download_missing_artwork() {
+    std::map<std::string, ThumbnailDownloader::Folders> folders;
+    for (const char* emu : {"fbneo", "mame"}) {
+        ThumbnailDownloader::Folders f{m_settings_panel.get_previews_path(emu),
+                                       m_settings_panel.get_titles_path(emu)};
+        if (!f.previews.empty() || !f.titles.empty()) folders[emu] = f;
+    }
+    if (folders.empty()) {
+        SettingsUi::notice(*this, _("Artwork Directories Not Set"),
+                           _("Please set the previews and/or titles directories in Settings before downloading."),
                            "bc-warning.svg");
         return;
     }
-    
-    // Vérifier qu'il y a des jeux chargés
     if (m_cached_games.empty()) {
         SettingsUi::notice(*this, _("No Games Loaded"),
                            _("Please load or scan games before downloading previews."),
                            "bc-warning.svg");
         return;
     }
-    
-    // Vérifier si un téléchargement est déjà en cours
     if (m_thumbnail_downloader.is_downloading()) {
         SettingsUi::notice(*this, _("Download In Progress"),
-                           _("Preview download is already in progress."),
+                           _("Artwork download is already in progress."),
                            "bc-info.svg");
         return;
     }
-    
-    // Demander confirmation à l'utilisateur
-    ConfirmationDialog confirm_dialog(*this, _("Download Previews"),
-        _("This will download previews for ") + std::to_string(m_cached_games.size())
-            + " games from FBNeo-extras.\n\nContinue?",
-        "bc-image.svg", /*destructive=*/false,
-        _("This may take several minutes."));
 
-    if (!confirm_dialog.show_and_confirm()) return;
-    
-    // Close settings dialog if it's open
+    // Les reglages se ferment (et s'enregistrent) : la progression s'affiche
+    // en bas de la fenetre principale.
     m_close_settings_signal.emit();
-    
-    std::cout << "[INFO] Starting previews download for " << m_cached_games.size() << " games" << std::endl;
-    
-    // Créer le callback de progression
-    auto progress_callback = [this](const std::string& filename, int current, int total, double percentage) {
-        std::cout << "[DEBUG] Progress callback called: " << filename << " - " << percentage << "%" << std::endl;
-        
-        // Mettre à jour les variables partagées (lues par le fil GTK)
+    show_download_progress(_("Looking for missing artwork..."), 0, 0, 0.0);
+
+    auto progress_callback = [this](const std::string& name, int current, int total, double percentage) {
         {
             std::lock_guard<std::mutex> lk(m_download_progress_mutex);
-            m_current_download_file = filename;
+            m_current_download_file = name;
             m_current_download_index = current;
             m_total_download_count = total;
             m_download_percentage = percentage;
         }
-        
-        // Déclencher le dispatcher approprié
-        if (percentage >= 100.0) {
-            m_download_finished_dispatcher.emit();
-        } else {
-            m_download_progress_dispatcher.emit();
-        }
+        if (percentage >= 100.0) m_download_finished_dispatcher.emit();
+        else                     m_download_progress_dispatcher.emit();
     };
-    
-    // Démarrer le téléchargement
-    m_thumbnail_downloader.start_download(m_cached_games, previews_dir, ThumbnailDownloader::ArtworkType::Previews, progress_callback);
-}
-
-void MainWindow::on_download_titles_clicked() {
-    std::string titles_dir = m_settings_panel.get_titles_path();
-    
-    // Vérifier que le répertoire de titles est configuré
-    if (titles_dir.empty()) {
-        SettingsUi::notice(*this, _("Titles Directory Not Set"),
-                           _("Please set the titles directory in Settings before downloading."),
-                           "bc-warning.svg");
-        return;
-    }
-    
-    // Vérifier qu'il y a des jeux chargés
-    if (m_cached_games.empty()) {
-        SettingsUi::notice(*this, _("No Games Loaded"),
-                           _("Please load or scan games before downloading titles."),
-                           "bc-warning.svg");
-        return;
-    }
-    
-    // Vérifier si un téléchargement est déjà en cours
-    if (m_thumbnail_downloader.is_downloading()) {
-        SettingsUi::notice(*this, _("Download In Progress"),
-                           _("Titles download is already in progress."),
-                           "bc-info.svg");
-        return;
-    }
-    
-    // Demander confirmation à l'utilisateur
-    ConfirmationDialog confirm_dialog(*this, _("Download Titles"),
-        _("This will download titles for ") + std::to_string(m_cached_games.size())
-            + " games from FBNeo-extras.\n\nContinue?",
-        "bc-image.svg", /*destructive=*/false,
-        _("This may take several minutes."));
-
-    if (!confirm_dialog.show_and_confirm()) return;
-    
-    // Close settings dialog if it's open
-    m_close_settings_signal.emit();
-    
-    std::cout << "[INFO] Starting titles download for " << m_cached_games.size() << " games" << std::endl;
-    
-    // Créer le callback de progression
-    auto progress_callback = [this](const std::string& filename, int current, int total, double percentage) {
-        std::cout << "[DEBUG] Progress callback called: " << filename << " - " << percentage << "%" << std::endl;
-        
-        // Mettre à jour les variables partagées (lues par le fil GTK)
-        {
-            std::lock_guard<std::mutex> lk(m_download_progress_mutex);
-            m_current_download_file = filename;
-            m_current_download_index = current;
-            m_total_download_count = total;
-            m_download_percentage = percentage;
-        }
-        
-        // Déclencher le dispatcher approprié
-        if (percentage >= 100.0) {
-            m_download_finished_dispatcher.emit();
-        } else {
-            m_download_progress_dispatcher.emit();
-        }
-    };
-    
-    // Démarrer le téléchargement
-    m_thumbnail_downloader.start_download(m_cached_games, titles_dir, ThumbnailDownloader::ArtworkType::Titles, progress_callback);
+    m_thumbnail_downloader.start_missing_download(m_cached_games, folders, progress_callback);
 }
 
 void MainWindow::on_download_cancel_clicked() {
