@@ -1,5 +1,6 @@
 // src/main.cpp
 #include "MainWindow.h"
+#include "DefaultFolders.h"
 #include "SplashScreen.h"
 #include "DatabaseManager.h"
 #include "MameCatalog.h"
@@ -108,6 +109,9 @@ int main(int argc, char *argv[]) {
     // une exception sur un document vide. Le launcher plantait ainsi des le
     // premier lancement d'un nouveau joueur.
     AppContext::ensure_config();
+    // Le dossier Bootcade et ses sous-dossiers, une fois : avant que quoi que
+    // ce soit ne lise les chemins, pour que tous trouvent les leurs.
+    DefaultFolders::apply();
 
     // Initialize translations before any UI string is built. Use the language saved
     // in settings if any; otherwise auto-detect the system language (English fallback).

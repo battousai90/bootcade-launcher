@@ -194,6 +194,7 @@ add_executable(bootcade
     src/GenerateDAT.cpp
     src/FbneoUpdateCheck.cpp
     src/AppUpdater.cpp
+    src/DefaultFolders.cpp
     src/FbneoVideo.cpp
     src/HiscoreClient.cpp
     src/BootcadeAuth.cpp

@@ -9,6 +9,7 @@
 // lecture de la configuration, le balayage des ROMs ou la connexion au compte
 // ne se debogue plus, parce qu'on ne sait plus ce qui a change.
 #include "SettingsPanel.h"
+#include "DefaultFolders.h"
 #include "BootcadeAuth.h"
 #include "IconManager.h"
 #include "LoginDialog.h"
@@ -2745,8 +2746,9 @@ void SettingsPanel::download_catver_clicked() {
     m_lbl_catver_state.set_text(_("Downloading catver.ini..."));
     while (Gtk::Main::events_pending()) Gtk::Main::iteration(false);
 
-    const auto dl = MameCatalog::download_catver(
-        url, AppContext::get_user_config_dir());
+    const std::string catver_dir = DefaultFolders::sub("Support/Catver/Mame");
+    { std::error_code ec; std::filesystem::create_directories(catver_dir, ec); }
+    const auto dl = MameCatalog::download_catver(url, catver_dir);
 
     if (!dl.ok) {
         refresh_catver_state();
