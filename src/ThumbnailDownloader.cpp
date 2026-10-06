@@ -16,7 +16,12 @@ namespace ArtworkSources {
 
 /* Les sources proposees d'office.
  *
- * FBNeo-extras d'abord : c'est le depot du projet FinalBurn Neo, il couvre
+ * Le serveur Bootcade d'abord : la collection de l'auteur, la plus complete,
+ * enrichie de ses propres captures. FinalBurn Neo y est range comme
+ * FBNeo-extras (previews/, titles/), MAME comme progettoSNAPS (snap/,
+ * titles/, nom court du jeu).
+ *
+ * FBNeo-extras ensuite : c'est le depot du projet FinalBurn Neo, il couvre
  * aussi les consoles, sous le nom court du jeu. libretro-thumbnails ensuite :
  * des depots GitHub publics, maintenus par la communaute libretro, rangees
  * sous le titre complet du jeu ; ils comblent les trous du premier et
@@ -27,14 +32,16 @@ namespace ArtworkSources {
  * est precisement ce qu'il refuse. */
 std::vector<std::string> defaults_for(const std::string& emulator) {
     if (emulator.empty() || emulator == "fbneo")
-        return {"https://raw.githubusercontent.com/finalburnneo/FBNeo-extras/main/",
+        return {"https://files.bootcade.duckdns.org/artwork/fbneo/",
+                "https://raw.githubusercontent.com/finalburnneo/FBNeo-extras/main/",
                 "https://raw.githubusercontent.com/libretro-thumbnails/FBNeo_-_Arcade_Games/master/"
                 "{Named_Snaps|Named_Titles}/{desc}.png"};
     // MAME et FinalBurn Neo donnent le MEME nom court a un jeu d'arcade :
     // FBNeo-extras comble donc aussi les trous de libretro pour MAME, dont
     // les noms de fichiers suivent parfois un ancien titre du jeu.
     if (emulator == "mame")
-        return {"https://raw.githubusercontent.com/libretro-thumbnails/MAME/master/"
+        return {"https://files.bootcade.duckdns.org/artwork/mame/{snap|titles}/{rom}.png",
+                "https://raw.githubusercontent.com/libretro-thumbnails/MAME/master/"
                 "{Named_Snaps|Named_Titles}/{desc}.png",
                 "https://raw.githubusercontent.com/finalburnneo/FBNeo-extras/main/"};
     return {};
@@ -44,8 +51,20 @@ std::vector<std::string> with_new_defaults(std::vector<std::string> list,
                                            const std::string& emulator,
                                            int seen_version) {
     if (seen_version >= kDefaultsVersion) return list;
-    for (const auto& d : defaults_for(emulator))
-        if (std::find(list.begin(), list.end(), d) == list.end()) list.push_back(d);
+    // Chaque source nouvelle prend sa place dans l'ordre des valeurs par
+    // defaut, pas la derniere : le serveur Bootcade passe ainsi devant
+    // FBNeo-extras. Les sources du joueur gardent leur ordre entre elles.
+    const auto defaults = defaults_for(emulator);
+    size_t at = 0;
+    for (const auto& d : defaults) {
+        auto it = std::find(list.begin(), list.end(), d);
+        if (it == list.end()) {
+            list.insert(list.begin() + std::min(at, list.size()), d);
+            ++at;
+        } else {
+            at = static_cast<size_t>(it - list.begin()) + 1;
+        }
+    }
     return list;
 }
 
