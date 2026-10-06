@@ -1852,5 +1852,13 @@
   "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "Se prueban en orden hasta encontrar una imagen. Una dirección es una carpeta base con previews/ y titles/, o un patrón con {rom}, {desc} y {snaps|titles}.",
   "Select all / none": "Seleccionar todo / nada",
   "Could not open a browser.": "No se pudo abrir un navegador.",
-  "Could not open the folder.": "No se pudo abrir la carpeta."
+  "Could not open the folder.": "No se pudo abrir la carpeta.",
+  "%1 set(s) downloaded into the import folder:\n%2": "%1 juego(s) descargado(s) en la carpeta de importación:\n%2",
+  "%1 set(s) could not be downloaded:": "No se pudieron descargar %1 juego(s):",
+  "…and %1 more, listed in the Import log.": "…y %1 más, en el registro de Importación.",
+  "The download was cancelled.": "La descarga se canceló.",
+  "Nothing was downloaded.": "No se descargó nada.",
+  "Open import folder": "Abrir la carpeta de importación",
+  "the Bootcade server could not send the file": "el servidor de Bootcade no pudo enviar el archivo",
+  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "El servidor de Bootcade no pudo enviar los archivos: las descargas se detuvieron. Inténtelo más tarde."
 }

@@ -1852,5 +1852,13 @@
   "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "ลองตามลำดับจนกว่าจะพบภาพ ที่อยู่เป็นได้ทั้งโฟลเดอร์หลักที่มี previews/ และ titles/ หรือรูปแบบที่ใช้ {rom}, {desc} และ {snaps|titles}",
   "Select all / none": "เลือกทั้งหมด / ไม่เลือก",
   "Could not open a browser.": "ไม่สามารถเปิดเบราว์เซอร์ได้",
-  "Could not open the folder.": "ไม่สามารถเปิดโฟลเดอร์ได้"
+  "Could not open the folder.": "ไม่สามารถเปิดโฟลเดอร์ได้",
+  "%1 set(s) downloaded into the import folder:\n%2": "ดาวน์โหลด %1 ชุดไปยังโฟลเดอร์นำเข้าแล้ว:\n%2",
+  "%1 set(s) could not be downloaded:": "ดาวน์โหลดไม่ได้ %1 ชุด:",
+  "…and %1 more, listed in the Import log.": "…และอีก %1 รายการ ดูได้ในบันทึกการนำเข้า",
+  "The download was cancelled.": "ยกเลิกการดาวน์โหลดแล้ว",
+  "Nothing was downloaded.": "ไม่มีการดาวน์โหลดใด ๆ",
+  "Open import folder": "เปิดโฟลเดอร์นำเข้า",
+  "the Bootcade server could not send the file": "เซิร์ฟเวอร์ Bootcade ส่งไฟล์ไม่ได้",
+  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "เซิร์ฟเวอร์ Bootcade ส่งไฟล์ไม่ได้ จึงหยุดการดาวน์โหลด โปรดลองอีกครั้งภายหลัง"
 }

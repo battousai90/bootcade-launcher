@@ -1852,5 +1852,13 @@
   "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "画像が見つかるまで順に試します。アドレスは previews/ と titles/ を含むベースフォルダー、または {rom}、{desc}、{snaps|titles} を使うパターンです。",
   "Select all / none": "すべて選択 / 選択解除",
   "Could not open a browser.": "ブラウザーを開けませんでした。",
-  "Could not open the folder.": "フォルダーを開けませんでした。"
+  "Could not open the folder.": "フォルダーを開けませんでした。",
+  "%1 set(s) downloaded into the import folder:\n%2": "%1 件をインポートフォルダーにダウンロードしました:\n%2",
+  "%1 set(s) could not be downloaded:": "%1 件をダウンロードできませんでした:",
+  "…and %1 more, listed in the Import log.": "…ほか %1 件はインポートログに記載されています。",
+  "The download was cancelled.": "ダウンロードはキャンセルされました。",
+  "Nothing was downloaded.": "何もダウンロードされませんでした。",
+  "Open import folder": "インポートフォルダーを開く",
+  "the Bootcade server could not send the file": "Bootcade サーバーがファイルを送信できませんでした",
+  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "Bootcade サーバーがファイルを送信できなかったため、ダウンロードを停止しました。後でもう一度お試しください。"
 }

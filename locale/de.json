@@ -1852,5 +1852,13 @@
   "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "Der Reihe nach versucht, bis ein Bild gefunden wird. Eine Adresse ist entweder ein Basisordner mit previews/ und titles/ oder ein Muster mit {rom}, {desc} und {snaps|titles}.",
   "Select all / none": "Alle auswählen / keine",
   "Could not open a browser.": "Es konnte kein Browser geöffnet werden.",
-  "Could not open the folder.": "Der Ordner konnte nicht geöffnet werden."
+  "Could not open the folder.": "Der Ordner konnte nicht geöffnet werden.",
+  "%1 set(s) downloaded into the import folder:\n%2": "%1 Satz/Sätze in den Importordner heruntergeladen:\n%2",
+  "%1 set(s) could not be downloaded:": "%1 Satz/Sätze konnten nicht heruntergeladen werden:",
+  "…and %1 more, listed in the Import log.": "…und %1 weitere, im Import-Protokoll aufgeführt.",
+  "The download was cancelled.": "Der Download wurde abgebrochen.",
+  "Nothing was downloaded.": "Es wurde nichts heruntergeladen.",
+  "Open import folder": "Importordner öffnen",
+  "the Bootcade server could not send the file": "der Bootcade-Server konnte die Datei nicht senden",
+  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "Der Bootcade-Server konnte die Dateien nicht senden: Die Downloads wurden gestoppt. Bitte später erneut versuchen."
 }
