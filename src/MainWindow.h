@@ -72,6 +72,8 @@ private:
     void on_game_selected();
     void show_game_details(const Gtk::TreeModel::Row& row); // populate the detail dock
     void on_play_clicked();
+    std::string missing_dependencies(const std::string& name, const std::string& system,
+                                     const std::string& emulator) const;
     void on_download_art_clicked();
     /* Reglages et manettes : de VRAIES fenetres, pas des boites attachees.
      *

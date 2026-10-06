@@ -83,8 +83,13 @@ struct RomVerdict {
 };
 
 struct Verdict {
-    std::string status;               // "available" | "incorrect" | "missing" | "" (no ROMs)
+    // "available" | "incorrect" | "missing" | "" (no ROMs) | "incomplete" :
+    // l'archive du jeu est la et complete, mais des ROMs qu'il herite de son
+    // BIOS ou de son parent manquent, parce que CEUX-LA manquent. Le jeu ne
+    // peut pas tourner, et le joueur doit savoir que c'est pour ca.
+    std::string status;
     std::vector<RomVerdict> roms;     // every non-nodump ROM, in DAT order
+    std::vector<std::string> missing_sets;   // les ancetres absents (BIOS, parent)
 };
 
 // Whether the emulator can load `game` : `own` is the set's own archive
@@ -259,7 +264,7 @@ struct CacheResolveResult {
     // CHDs are evaluated too, by their headers (evaluate_disks) : no cache
     // holds them. A set with both a zip and CHDs (single-folder MAME DAT) gets
     // one verdict for the two (combine_status). They count in the totals.
-    int evaluated = 0, available = 0, incorrect = 0, missing = 0;
+    int evaluated = 0, available = 0, incorrect = 0, missing = 0, incomplete = 0;
     int changed = 0;
     bool cancelled = false;
 };

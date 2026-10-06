@@ -1860,5 +1860,14 @@
   "Nothing was downloaded.": "Nada foi baixado.",
   "Open import folder": "Abrir a pasta de importação",
   "the Bootcade server could not send the file": "o servidor Bootcade não conseguiu enviar o arquivo",
-  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "O servidor Bootcade não conseguiu enviar os arquivos: os downloads foram interrompidos. Tente novamente mais tarde."
+  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "O servidor Bootcade não conseguiu enviar os arquivos: os downloads foram interrompidos. Tente novamente mais tarde.",
+  "⚠ cannot run : %1 is missing": "⚠ não pode iniciar: falta %1",
+  "This game cannot start yet": "Este jogo ainda não pode iniciar",
+  "%1 is in your library, but it needs %2, which is not.\n\nGet it with ROM Manager › Download from Bootcade, then play.": "%1 está na sua biblioteca, mas precisa de %2, que não está.\n\nObtenha-o com ROM Manager › Download from Bootcade e depois jogue.",
+  "its BIOS or parent game": "o seu BIOS ou jogo pai",
+  "BIOS or parent missing": "Falta o BIOS ou o pai",
+  "Missing: ": "Falta: ",
+  "missing ": "falta ",
+  "BIOS ": "BIOS ",
+  "parent game ": "jogo pai "
 }

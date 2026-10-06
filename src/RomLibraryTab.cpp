@@ -588,6 +588,11 @@ void RomLibraryTab::populate() {
         if (g.has_disks && disks_not_right(g)) bits.push_back(_("Fix not available for CHDs"));
         if (g.ignored) bits.insert(bits.begin(), _("ignored"));
         if (g.is_bios) bits.insert(bits.begin(), _("BIOS"));
+        // En TETE : la colonne est tronquee, et c'est la seule information
+        // qui dit au joueur quoi faire pour que le jeu demarre.
+        if (!g.missing_dependency.empty() && g.status != "missing")
+            bits.insert(bits.begin(), Glib::ustring::compose(_("\u26A0 cannot run : %1 is missing"),
+                                                            g.missing_dependency).raw());
 
         const std::string key = status_key_of(g);
         row[m_cols.status]     = g.ignored ? Glib::ustring(_("Ignored")) : Glib::ustring(_(status_label_of(key)));
@@ -700,8 +705,10 @@ void RomLibraryTab::update_summary() {
         std::vector<std::string> parts;
         for (const auto& b : m_audit.missing_bios)
             parts.push_back(Glib::ustring::compose(_("%1 (%2) : %3 dependent set(s)"), b.name, b.system, b.dependents).raw());
-        m_bios_line.set_text(Glib::ustring::compose(_("BIOS not available : %1. In a split collection those sets cannot run."), join(parts, "; ", 4)));
-        m_bios_line.show();
+        // Plus de paragraphe : chaque ligne concernee le dit elle-meme
+        // (colonne Details, « cannot run : BIOS msx.zip is missing »).
+        (void)parts;
+        m_bios_line.hide();
     }
 }
 

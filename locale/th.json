@@ -1860,5 +1860,14 @@
   "Nothing was downloaded.": "ไม่มีการดาวน์โหลดใด ๆ",
   "Open import folder": "เปิดโฟลเดอร์นำเข้า",
   "the Bootcade server could not send the file": "เซิร์ฟเวอร์ Bootcade ส่งไฟล์ไม่ได้",
-  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "เซิร์ฟเวอร์ Bootcade ส่งไฟล์ไม่ได้ จึงหยุดการดาวน์โหลด โปรดลองอีกครั้งภายหลัง"
+  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "เซิร์ฟเวอร์ Bootcade ส่งไฟล์ไม่ได้ จึงหยุดการดาวน์โหลด โปรดลองอีกครั้งภายหลัง",
+  "⚠ cannot run : %1 is missing": "⚠ เริ่มไม่ได้: ขาด %1",
+  "This game cannot start yet": "เกมนี้ยังเริ่มไม่ได้",
+  "%1 is in your library, but it needs %2, which is not.\n\nGet it with ROM Manager › Download from Bootcade, then play.": "%1 อยู่ในคลังของคุณ แต่ต้องใช้ %2 ซึ่งไม่มี\n\nดาวน์โหลดผ่าน ROM Manager › Download from Bootcade แล้วจึงเล่น",
+  "its BIOS or parent game": "BIOS หรือเกมหลักของมัน",
+  "BIOS or parent missing": "ขาด BIOS หรือเกมหลัก",
+  "Missing: ": "ขาด: ",
+  "missing ": "ขาด ",
+  "BIOS ": "BIOS ",
+  "parent game ": "เกมหลัก "
 }

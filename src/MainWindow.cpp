@@ -2446,6 +2446,12 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     } else if (status == "incorrect") {
         add_pill("● " + _("Incorrect"), "pill-warn");
         add_pill(_("CRC mismatch"), nullptr);
+    } else if (status == "incomplete") {
+        // Le jeu est la ; ce qui manque est nomme, en toutes lettres.
+        add_pill("\u26A0 " + _("Incomplete"), "pill-warn");
+        const std::string what = missing_dependencies(name, system,
+                                     Glib::ustring(row[m_columns.m_col_emulator]).raw());
+        add_pill(what.empty() ? _("BIOS or parent missing") : _("Missing: ") + what, "pill-warn");
     } else {
         add_pill("● " + _("Missing"), "pill-muted");
     }
@@ -2636,6 +2642,34 @@ void MainWindow::set_dock_position(const std::string& pos) {
     save_launch_prefs();
 }
 
+/* Ce qui manque a un jeu « incomplete » : son BIOS, son parent.
+ *
+ * Remonte la chaine romof dans la liste chargee et nomme chaque ancetre
+ * absent, en clair : « BIOS msx.zip ». C'est ce que le joueur doit aller
+ * chercher ; un statut seul ne lui dit pas quoi faire. */
+std::string MainWindow::missing_dependencies(const std::string& name, const std::string& system,
+                                             const std::string& emulator) const {
+    auto find = [&](const std::string& n) -> const Game* {
+        for (const auto& g : m_cached_games)
+            if (g.name == n && g.system == system && g.emulator == emulator) return &g;
+        return nullptr;
+    };
+    const Game* g = find(name);
+    std::vector<std::string> parts;
+    std::string up = g ? g->romof : std::string();
+    for (int depth = 0; depth < 8 && !up.empty(); ++depth) {
+        const Game* a = find(up);
+        if (!a) break;
+        if (a->status != "available" && a->status != "incorrect" && a->status != "incomplete")
+            parts.push_back((a->is_bios ? _("BIOS ") : _("parent game ")) + a->name + ".zip");
+        if (a->romof == up) break;
+        up = a->romof;
+    }
+    std::string out;
+    for (const auto& p : parts) out += (out.empty() ? "" : ", ") + p;
+    return out;
+}
+
 void MainWindow::on_play_clicked() {
     /* Le jeu a lancer est celui que le volet de details MONTRE.
      *
@@ -2661,6 +2695,24 @@ void MainWindow::on_play_clicked() {
         emulator_id = m_last_selected_emulator;
     }
     if (rom_name.empty()) return;   // vraiment aucun jeu a lancer
+
+    // Un jeu dont il manque le BIOS ou le parent ne demarrera pas : le dire,
+    // nommement, plutot que lancer un emulateur qui se ferme sans un mot.
+    for (const auto& g : m_cached_games) {
+        if (g.name != rom_name || g.system != game_system || g.emulator != (emulator_id.empty() ? "fbneo" : emulator_id))
+            continue;
+        if (g.status == "incomplete") {
+            const std::string what = missing_dependencies(g.name, g.system, g.emulator);
+            SettingsUi::notice(*this, _("This game cannot start yet"),
+                Glib::ustring::compose(_("%1 is in your library, but it needs %2, which is not.\n\n"
+                                         "Get it with ROM Manager › Download from Bootcade, then play."),
+                                       g.description.empty() ? g.name : g.description,
+                                       what.empty() ? std::string(_("its BIOS or parent game")) : what).raw(),
+                "bc-warning.svg");
+            return;
+        }
+        break;
+    }
     
     // === Jeu MAME : autre emulateur, autre chemin ===
     //
@@ -4062,7 +4114,7 @@ void MainWindow::on_quit() {
 }
 
 void MainWindow::update_status_bar_stats() {
-    int total = 0, available = 0, incorrect = 0, missing = 0, error = 0;
+    int total = 0, available = 0, incorrect = 0, missing = 0, incomplete = 0, error = 0;
 
     // Count stats from filtered games (much faster than re-filtering)
     std::lock_guard<std::mutex> lock(m_filter_mutex);
@@ -4070,6 +4122,7 @@ void MainWindow::update_status_bar_stats() {
         total++;
         if (game->status == "available") available++;
         else if (game->status == "incorrect") incorrect++;
+        else if (game->status == "incomplete") incomplete++;
         else if (game->status == "missing") missing++;
         else error++;
     }
@@ -4087,6 +4140,8 @@ void MainWindow::update_status_bar_stats() {
     };
     add_stat(SettingsUi::tone_hex(*this, "success").c_str(), available, _("Available"));
     add_stat(SettingsUi::tone_hex(*this, "warning").c_str(), incorrect, _("Incorrect"));
+    if (incomplete > 0)
+        add_stat(SettingsUi::tone_hex(*this, "warning").c_str(), incomplete, _("Incomplete"));
     add_stat(SettingsUi::tone_hex(*this, "muted").c_str(),   missing,   _("Missing"));
     if (error > 0) add_stat(SettingsUi::tone_hex(*this, "error").c_str(), error, _("Error"));
 
@@ -4316,7 +4371,7 @@ Gtk::Widget* MainWindow::make_game_card(const Gtk::TreeModel::Row& row) {
 
     const std::string dot = SettingsUi::tone_hex(*this,
                               status == "available" ? "success"
-                            : status == "incorrect" ? "warning"
+                            : (status == "incorrect" || status == "incomplete") ? "warning"
                             : status == "missing"   ? "disabled" : "muted");
 
     auto* card = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
@@ -4363,7 +4418,7 @@ Gtk::Widget* MainWindow::make_game_card(const Gtk::TreeModel::Row& row) {
     auto* slbl = Gtk::make_managed<Gtk::Label>();
     // The ◆ rides on the system line rather than getting a row of its own: a
     // card is 176 px wide, and a second line would push the title out.
-    slbl->set_markup("<span foreground=\"" + std::string(dot) + "\">●</span> " +
+    slbl->set_markup("<span foreground=\"" + std::string(dot) + "\">" + (status == "incomplete" ? "\u26A0" : "●") + "</span> " +
                      Glib::Markup::escape_text(system) +
                      (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
                         ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "info") + "\">◆</span>") : ""));
@@ -4554,13 +4609,20 @@ Gtk::Widget* MainWindow::make_list_row(const Gtk::TreeModel::Row& row) {
 
     const std::string dot = SettingsUi::tone_hex(*this,
                               status == "available" ? "success"
-                            : status == "incorrect" ? "warning"
+                            : (status == "incorrect" || status == "incomplete") ? "warning"
                             : status == "missing"   ? "disabled" : "muted");
     const char* pill_cls = status == "available" ? "pill-ok"
                          : status == "incorrect" ? "pill-warn" : "pill-muted";
     std::string status_txt = status == "available" ? _("Available")
                            : status == "incorrect" ? _("Incorrect")
                            : status == "missing"   ? _("Missing") : status;
+    // Incomplet : un panneau, pas une pastille, et l'infobulle nomme ce qui
+    // manque. C'est le seul etat ou le joueur a quelque chose a faire.
+    const bool incomplete = status == "incomplete";
+    if (incomplete) {
+        const std::string what = missing_dependencies(name, system, Glib::ustring(row[m_columns.m_col_emulator]).raw());
+        status_txt = _("Incomplete") + std::string(" : ") + (what.empty() ? _("BIOS or parent missing") : _("missing ") + what);
+    }
 
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
     box->get_style_context()->add_class("mlist-row");
@@ -4645,7 +4707,7 @@ Gtk::Widget* MainWindow::make_list_row(const Gtk::TreeModel::Row& row) {
      * s'appelle STATUS, et l'infobulle donne le mot pour qui en doute.
      */
     auto* pill = Gtk::make_managed<Gtk::Label>();
-    pill->set_markup("<span foreground=\"" + dot + "\">\u25CF</span>");
+    pill->set_markup("<span foreground=\"" + dot + "\">" + (incomplete ? "\u26A0" : "\u25CF") + "</span>");
     pill->set_size_request(kColStatus, -1);
     pill->set_valign(Gtk::ALIGN_CENTER);
     pill->set_tooltip_text(status_txt);
@@ -7457,7 +7519,7 @@ void MainWindow::populate_filter_tree() {
     for (const auto& [status, count] : status_counts) {
         const std::string color = SettingsUi::tone_hex(*this,
                                     status == "available" ? "success"
-                                  : status == "incorrect" ? "warning"
+                                  : (status == "incorrect" || status == "incomplete") ? "warning"
                                   : status == "missing"   ? "disabled" : "muted");
         auto child = m_model_filters->append(status_root->children());
         (*child)[m_filter_columns.m_col_icon] = status_dot(color);

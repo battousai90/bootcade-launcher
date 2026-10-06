@@ -1860,5 +1860,14 @@
   "Nothing was downloaded.": "何もダウンロードされませんでした。",
   "Open import folder": "インポートフォルダーを開く",
   "the Bootcade server could not send the file": "Bootcade サーバーがファイルを送信できませんでした",
-  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "Bootcade サーバーがファイルを送信できなかったため、ダウンロードを停止しました。後でもう一度お試しください。"
+  "The Bootcade server could not send the files : downloads were stopped. Please try again later.": "Bootcade サーバーがファイルを送信できなかったため、ダウンロードを停止しました。後でもう一度お試しください。",
+  "⚠ cannot run : %1 is missing": "⚠ 起動できません：%1 がありません",
+  "This game cannot start yet": "このゲームはまだ起動できません",
+  "%1 is in your library, but it needs %2, which is not.\n\nGet it with ROM Manager › Download from Bootcade, then play.": "%1 はライブラリにありますが、%2 が必要で、それがありません。\n\nROM Manager › Download from Bootcade で入手してからプレイしてください。",
+  "its BIOS or parent game": "BIOS または親ゲーム",
+  "BIOS or parent missing": "BIOS または親がありません",
+  "Missing: ": "不足: ",
+  "missing ": "不足 ",
+  "BIOS ": "BIOS ",
+  "parent game ": "親ゲーム "
 }

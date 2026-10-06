@@ -370,6 +370,26 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         }
         std::sort(rep.missing_bios.begin(), rep.missing_bios.end(),
                   [](const BiosGap& a, const BiosGap& b) { return a.dependents > b.dependents; });
+
+        // Chaque set dit lui-meme ce qui lui manque : le premier ancetre de
+        // sa chaine romof qui n'est pas la. Un paragraphe global « BIOS not
+        // available : … » en tete de page, personne ne le lisait.
+        for (auto& e : rep.games) {
+            std::string name;
+            if (auto it = by_key.find(e.name + '\x1f' + e.system); it != by_key.end()) name = games[it->second].romof;
+            for (int depth = 0; depth < 8 && !name.empty(); ++depth) {
+                auto it = by_key.find(name + '\x1f' + e.system);
+                if (it == by_key.end()) break;
+                const Game& anc = games[it->second];
+                auto st = status_by_key.find(anc.name + '\x1f' + anc.system);
+                if (st != status_by_key.end() && st->second != "available" && st->second != "incorrect") {
+                    e.missing_dependency = (anc.is_bios ? std::string("BIOS ") : std::string("parent ")) + anc.name + ".zip";
+                    break;
+                }
+                if (anc.romof == name) break;
+                name = anc.romof;
+            }
+        }
     }
 
     std::sort(rep.games.begin(), rep.games.end(), [](const GameEntry& a, const GameEntry& b) {
