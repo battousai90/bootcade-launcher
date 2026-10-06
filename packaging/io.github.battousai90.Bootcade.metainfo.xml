@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="1.6.2" date="2026-10-06">
+      <description>
+        <p>Release 1.6.2: one-click updates and 1080p-ready windows</p>
+      </description>
+    </release>
     <release version="1.6.1" date="2026-10-05">
       <description>
         <p>Release 1.6.1: guided first launch and automatic game list</p>
