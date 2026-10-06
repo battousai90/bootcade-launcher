@@ -665,6 +665,10 @@ private:
     Glib::Dispatcher  m_app_update_dispatcher;
     std::string       m_app_update_tag;
     void check_app_update_async(bool asked = false);
+    // Recalcule les statuts une fois quand la regle de jouabilite change
+    // (ex. « incomplete »), sans attendre que le joueur relance un scan.
+    Glib::Dispatcher m_status_rules_dispatcher;
+    void refresh_statuses_if_rules_changed();
     void on_app_update_result();
     // Mise a jour automatique : les fichiers de la release annoncee, et
     // l'avancement du telechargement / de l'installation.

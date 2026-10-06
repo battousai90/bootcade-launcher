@@ -13,6 +13,7 @@
 #include "SettingsPanel.h"
 #include "SettingsUi.h"
 #include "AppUpdater.h"
+#include "RomResolve.h"
 #include "DownloadDialog.h"
 #include "HostLibraries.h"
 #include "GameListSetup.h"
@@ -2075,6 +2076,15 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // bouton « Update », apparait aussi dans la fenetre principale.
     m_settings_panel.signal_update_found().connect([this] { check_app_update_async(true); });
     check_app_update_async();
+    m_status_rules_dispatcher.connect([this] {
+        m_cached_games = load_all_catalogs();
+        m_search_blobs.clear();
+        { std::lock_guard<std::mutex> lk(m_filter_mutex); m_filtered_games.clear(); }
+        populate_filter_tree();
+        filter_games();
+        update_status_bar_stats();
+    });
+    refresh_statuses_if_rules_changed();
     // Rafraîchissement de fond : sans lui, le score d'un autre joueur
     // n'apparaîtrait qu'au prochain démarrage du lanceur.
     Glib::signal_timeout().connect_seconds([this]() {
@@ -4707,7 +4717,9 @@ Gtk::Widget* MainWindow::make_list_row(const Gtk::TreeModel::Row& row) {
      * s'appelle STATUS, et l'infobulle donne le mot pour qui en doute.
      */
     auto* pill = Gtk::make_managed<Gtk::Label>();
-    pill->set_markup("<span foreground=\"" + dot + "\">" + (incomplete ? "\u26A0" : "\u25CF") + "</span>");
+    pill->set_markup(incomplete
+        ? "<span foreground=\"" + dot + "\" size=\"x-large\" weight=\"bold\">\u26A0</span>"
+        : "<span foreground=\"" + dot + "\">\u25CF</span>");
     pill->set_size_request(kColStatus, -1);
     pill->set_valign(Gtk::ALIGN_CENTER);
     pill->set_tooltip_text(status_txt);
@@ -7066,6 +7078,27 @@ void MainWindow::on_scan_progress() {
         m_status_label.set_text(status_text);
         std::cout << status_text << std::endl;
     }
+}
+
+/* Les statuts enregistres datent de la regle d'avant.
+ *
+ * Un jeu a qui il manque son BIOS restait « missing » jusqu'au prochain scan,
+ * que rien ne poussait le joueur a relancer : la mise a jour qui ajoutait
+ * « incomplete » ne se voyait donc pas. Une seule fois par version de la
+ * regle, les statuts de FinalBurn Neo sont rejuges depuis le cache du scan
+ * (aucune archive relue), en arriere-plan, puis la liste se recharge. MAME
+ * n'est pas concerne : ses DAT n'ont ni BIOS ni parent a heriter. */
+void MainWindow::refresh_statuses_if_rules_changed() {
+    constexpr int kStatusRules = 2;   // 2 : « incomplete » (BIOS ou parent absent)
+    if (m_database->getScanMetadata("status_rules", 0) >= kStatusRules) return;
+    std::thread([this, alive = m_alive_token, db = m_database] {
+        const auto r = RomResolve::resolve_all_from_cache(db, DatSource::roms_paths_for("fbneo"), "fbneo");
+        std::cout << "[INFO] Statuses re-judged : " << r.changed << " changed, "
+                  << r.incomplete << " incomplete" << std::endl;
+        if (!r.cancelled) db->setScanMetadata("status_rules", kStatusRules);
+        std::lock_guard<std::mutex> live(alive->mutex);
+        if (alive->alive) m_status_rules_dispatcher.emit();
+    }).detach();
 }
 
 void MainWindow::on_scan_finished() {
