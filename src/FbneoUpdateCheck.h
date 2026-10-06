@@ -18,9 +18,11 @@ struct Result {
     std::string tag;          // release tag_name, e.g. "latest"
     std::string published_at; // ISO 8601, for display
     std::string error;        // set when ok == false
-    // Les fichiers joints a la release (nom, adresse de telechargement) :
-    // la mise a jour automatique y choisit celui de son mode d'installation.
-    std::vector<std::pair<std::string, std::string>> assets;
+    // Les fichiers joints a la release : la mise a jour automatique y choisit
+    // celui de son mode d'installation. sha256 est l'empreinte que GitHub
+    // calcule lui-meme a la mise en ligne (vide sur une release ancienne).
+    struct Asset { std::string name, url, sha256; };
+    std::vector<Asset> assets;
 };
 
 // GET https://api.github.com/repos/battousai90/FBNeo/releases/tags/latest

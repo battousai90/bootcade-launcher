@@ -104,7 +104,7 @@ bool ends_with(const std::string& s, const std::string& end) {
 
 // Le fichier de la release qui correspond au mode d'installation. Choisi par
 // sa terminaison : les noms portent la version, et le Flatpak un « v » de plus.
-const std::pair<std::string, std::string>* pick(const Assets& assets, Install how) {
+const FbneoUpdateCheck::Result::Asset* pick(const Assets& assets, Install how) {
     const char* end = nullptr;
     switch (how) {
         case Install::AppImage: end = "-x86_64.AppImage"; break;
@@ -113,16 +113,23 @@ const std::pair<std::string, std::string>* pick(const Assets& assets, Install ho
         case Install::Tarball:  end = "-x86_64.tar.gz";   break;
         case Install::Unknown:  return nullptr;
     }
-    for (const auto& a : assets) if (ends_with(a.first, end)) return &a;
+    for (const auto& a : assets) if (ends_with(a.name, end)) return &a;
     return nullptr;
 }
 
-// L'empreinte attendue, lue dans SHA256SUMS (« empreinte  nom »).
-std::string expected_sha256(const Assets& assets, const std::string& name) {
+/* L'empreinte attendue.
+ *
+ * Celle que GitHub donne pour le fichier d'abord : il la calcule lui-meme a
+ * la mise en ligne, elle existe pour CHAQUE fichier. SHA256SUMS ne vient
+ * qu'ensuite : le Flatpak, construit a part, n'y figurait pas, et la mise a
+ * jour d'une installation Flatpak echouait faute d'empreinte a comparer. */
+std::string expected_sha256(const Assets& assets, const FbneoUpdateCheck::Result::Asset& file) {
+    if (!file.sha256.empty()) return file.sha256;
+    const std::string& name = file.name;
     for (const auto& a : assets) {
-        if (a.first != "SHA256SUMS") continue;
+        if (a.name != "SHA256SUMS") continue;
         std::string body;
-        if (!download(a.second, "", &body, nullptr).empty()) return {};
+        if (!download(a.url, "", &body, nullptr).empty()) return {};
         std::istringstream lines(body);
         std::string line;
         while (std::getline(lines, line)) {
@@ -224,7 +231,7 @@ std::string install(const Assets& assets, const Progress& progress) {
     const auto* asset = pick(assets, how);
     if (!asset) return "no matching file in the release";
 
-    const std::string expected = expected_sha256(assets, asset->first);
+    const std::string expected = expected_sha256(assets, *asset);
     if (expected.empty()) return "SHA256SUMS unavailable";
 
     const std::string dir = Glib::get_user_cache_dir() + "/bootcade/update";
@@ -232,10 +239,10 @@ std::string install(const Assets& assets, const Progress& progress) {
     fs::remove_all(dir, ec);
     fs::create_directories(dir, ec);
     if (ec) return ec.message();
-    const std::string file = dir + "/" + asset->first;
+    const std::string file = dir + "/" + asset->name;
 
-    if (progress) progress(0.0, asset->first);
-    if (auto err = download(asset->second, file, nullptr, &progress); !err.empty()) return err;
+    if (progress) progress(0.0, asset->name);
+    if (auto err = download(asset->url, file, nullptr, &progress); !err.empty()) return err;
 
     if (progress) progress(0.88, "SHA-256");
     if (DatSource::sha256_of(file) != expected) return "SHA-256 mismatch";

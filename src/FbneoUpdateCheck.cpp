@@ -51,9 +51,14 @@ Result fetch_release(const char* url) {
         r.published_at = j.value("published_at", "");
         if (j.contains("assets") && j["assets"].is_array())
             for (const auto& a : j["assets"])
-                if (a.is_object())
-                    r.assets.emplace_back(a.value("name", ""),
-                                          a.value("browser_download_url", ""));
+                if (a.is_object()) {
+                    std::string digest = a.contains("digest") && a["digest"].is_string()
+                                             ? a["digest"].get<std::string>() : std::string();
+                    if (digest.rfind("sha256:", 0) == 0) digest.erase(0, 7);
+                    else digest.clear();
+                    r.assets.push_back({a.value("name", ""),
+                                        a.value("browser_download_url", ""), digest});
+                }
         // Le tag suffit : c'est lui qui porte la version. Le commit n'a de
         // sens que pour FBNeo, dont on compare la revision construite.
         r.ok = !r.tag.empty();

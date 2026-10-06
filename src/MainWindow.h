@@ -4,6 +4,7 @@
 #include <gtkmm.h>
 #include <string>
 #include <thread>
+#include "FbneoUpdateCheck.h"
 #include "Game.h"
 #include "SettingsPanel.h"
 #include "HiscoreClient.h"
@@ -665,7 +666,7 @@ private:
     void on_app_update_result();
     // Mise a jour automatique : les fichiers de la release annoncee, et
     // l'avancement du telechargement / de l'installation.
-    std::vector<std::pair<std::string, std::string>> m_app_update_assets;
+    std::vector<FbneoUpdateCheck::Result::Asset> m_app_update_assets;
     Gtk::ProgressBar  m_app_update_progress;
     Gtk::Button*      m_app_update_button = nullptr;
     Gtk::Button*      m_app_update_page_button = nullptr;

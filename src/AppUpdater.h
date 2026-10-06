@@ -3,8 +3,9 @@
 
 #include <functional>
 #include <string>
-#include <utility>
 #include <vector>
+
+#include "FbneoUpdateCheck.h"
 
 /* Le joueur clique sur « Update », et tout le reste se fait seul : le bon
  * fichier de la release est telecharge, son empreinte comparee a SHA256SUMS,
@@ -21,7 +22,7 @@ enum class Install { AppImage, Flatpak, Deb, Tarball, Unknown };
 // Comment CETTE copie de Bootcade a ete installee.
 Install detect();
 
-using Assets = std::vector<std::pair<std::string, std::string>>;   // nom, adresse
+using Assets = std::vector<FbneoUpdateCheck::Result::Asset>;
 using Progress = std::function<void(double fraction, const std::string& step)>;
 
 // Telecharge, verifie et installe la release dont `assets` est la liste de
