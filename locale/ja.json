@@ -1793,7 +1793,6 @@
   "FinalBurn Neo cannot start": "FinalBurn Neo を起動できません",
   "FinalBurn Neo cannot start yet": "FinalBurn Neo はまだ起動できません",
   "It needs libraries that are not installed on this computer:": "このコンピューターにインストールされていないライブラリが必要です：",
-  "On Ubuntu or Debian, install them with:": "Ubuntu または Debian では、次のコマンドでインストールします：",
   "Install them with your package manager, then try again.": "パッケージマネージャーでインストールしてから、もう一度お試しください。",
   "The emulator stopped right away. Start it from a terminal to read its error.": "エミュレーターがすぐに終了しました。ターミナルから起動するとエラーを確認できます。",
   "Libraries are missing: click Test Emulator for details.": "ライブラリが不足しています。詳細は「エミュレーターをテスト」をクリックしてください。",
@@ -1832,5 +1831,12 @@
   "The folder that holds your ROM archives (.zip files).": "ROM アーカイブ（.zip ファイル）があるフォルダー。",
   "The game list could not be downloaded": "ゲームリストをダウンロードできませんでした",
   "The game list could not be written": "ゲームリストを書き込めませんでした",
-  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "FinalBurn Neo で遊べるゲームのリスト。Bootcade サーバーからダウンロードします。"
+  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "FinalBurn Neo で遊べるゲームのリスト。Bootcade サーバーからダウンロードします。",
+  "On %1, install them with:": "%1 では、次のコマンドでインストールします：",
+  "Then restart the computer: on this system, new packages only become active after a restart.": "その後、コンピューターを再起動してください：このシステムでは、新しいパッケージは再起動後に有効になります。",
+  "Try again": "再試行",
+  "Download page": "ダウンロードページ",
+  "Updating to Bootcade %1. Bootcade restarts on its own when it is done.": "Bootcade %1 に更新しています。完了すると Bootcade は自動的に再起動します。",
+  "Bootcade %1 is installed. Restarting...": "Bootcade %1 をインストールしました。再起動しています...",
+  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "Bootcade %1 を自動的にインストールできませんでした。もう一度試すか、ダウンロードページから入手してください。"
 }

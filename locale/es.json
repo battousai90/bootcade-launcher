@@ -1793,7 +1793,6 @@
   "FinalBurn Neo cannot start": "FinalBurn Neo no puede iniciarse",
   "FinalBurn Neo cannot start yet": "FinalBurn Neo aún no puede iniciarse",
   "It needs libraries that are not installed on this computer:": "Necesita bibliotecas que no están instaladas en este equipo:",
-  "On Ubuntu or Debian, install them with:": "En Ubuntu o Debian, instálelas con:",
   "Install them with your package manager, then try again.": "Instálelas con su gestor de paquetes y vuelva a intentarlo.",
   "The emulator stopped right away. Start it from a terminal to read its error.": "El emulador se detuvo de inmediato. Ábralo desde una terminal para leer el error.",
   "Libraries are missing: click Test Emulator for details.": "Faltan bibliotecas: pulse Probar el emulador para ver los detalles.",
@@ -1832,5 +1831,12 @@
   "The folder that holds your ROM archives (.zip files).": "La carpeta que contiene sus archivos de ROM (archivos .zip).",
   "The game list could not be downloaded": "No se pudo descargar la lista de juegos",
   "The game list could not be written": "No se pudo escribir la lista de juegos",
-  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "La lista de juegos que ejecuta FinalBurn Neo, descargada del servidor de Bootcade."
+  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "La lista de juegos que ejecuta FinalBurn Neo, descargada del servidor de Bootcade.",
+  "On %1, install them with:": "En %1, instálelas con:",
+  "Then restart the computer: on this system, new packages only become active after a restart.": "Después, reinicie el equipo: en este sistema, los paquetes nuevos solo se activan tras un reinicio.",
+  "Try again": "Reintentar",
+  "Download page": "Página de descarga",
+  "Updating to Bootcade %1. Bootcade restarts on its own when it is done.": "Actualizando a Bootcade %1. Bootcade se reiniciará solo al terminar.",
+  "Bootcade %1 is installed. Restarting...": "Bootcade %1 está instalado. Reiniciando...",
+  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "Bootcade %1 no se pudo instalar automáticamente. Puede volver a intentarlo u obtenerlo en la página de descarga."
 }

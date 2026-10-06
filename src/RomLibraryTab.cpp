@@ -274,8 +274,16 @@ void RomLibraryTab::build_summary() {
     for (auto* p : {m_pill_total, m_pill_correct, m_pill_missing, m_pill_incorrect, m_pill_misnamed,
                     m_pill_fixable, m_pill_extra, m_pill_orphan, m_pill_ignored}) {
         p->set_count(0);
-        m_pills.pack_start(*p, Gtk::PACK_SHRINK);
+        m_pills.add(*p);
     }
+    /* Une ligne qui passe a la ligne. Dans une boite, les neuf pastilles
+     * reclamaient a elles seules plus que la largeur de la fenetre : la page
+     * defilait de cote et coupait le bord droit de la carte. */
+    m_pills.set_selection_mode(Gtk::SELECTION_NONE);
+    m_pills.set_homogeneous(false);
+    m_pills.set_column_spacing(8);
+    m_pills.set_row_spacing(8);
+    m_pills.set_max_children_per_line(9);
     // Problems first : what the tab is for.
     for (auto* p : {m_pill_missing, m_pill_incorrect, m_pill_misnamed, m_pill_fixable, m_pill_extra, m_pill_orphan}) p->set_active(true);
     for (auto* p : {m_pill_correct, m_pill_missing, m_pill_incorrect, m_pill_misnamed, m_pill_fixable, m_pill_extra, m_pill_orphan, m_pill_ignored})

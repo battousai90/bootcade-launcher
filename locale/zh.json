@@ -1793,7 +1793,6 @@
   "FinalBurn Neo cannot start": "FinalBurn Neo 无法启动",
   "FinalBurn Neo cannot start yet": "FinalBurn Neo 暂时无法启动",
   "It needs libraries that are not installed on this computer:": "它需要本机尚未安装的库：",
-  "On Ubuntu or Debian, install them with:": "在 Ubuntu 或 Debian 上，使用以下命令安装：",
   "Install them with your package manager, then try again.": "请用软件包管理器安装后重试。",
   "The emulator stopped right away. Start it from a terminal to read its error.": "模拟器立即退出了。请在终端中启动它以查看错误。",
   "Libraries are missing: click Test Emulator for details.": "缺少库：点击“测试模拟器”查看详情。",
@@ -1832,5 +1831,12 @@
   "The folder that holds your ROM archives (.zip files).": "存放 ROM 压缩包（.zip 文件）的文件夹。",
   "The game list could not be downloaded": "无法下载游戏列表",
   "The game list could not be written": "无法写入游戏列表",
-  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "FinalBurn Neo 可运行的游戏列表，从 Bootcade 服务器下载。"
+  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "FinalBurn Neo 可运行的游戏列表，从 Bootcade 服务器下载。",
+  "On %1, install them with:": "在 %1 上，使用以下命令安装：",
+  "Then restart the computer: on this system, new packages only become active after a restart.": "然后重启计算机：在此系统上，新软件包需重启后才会生效。",
+  "Try again": "重试",
+  "Download page": "下载页面",
+  "Updating to Bootcade %1. Bootcade restarts on its own when it is done.": "正在更新到 Bootcade %1。完成后 Bootcade 会自动重启。",
+  "Bootcade %1 is installed. Restarting...": "Bootcade %1 已安装。正在重启...",
+  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "无法自动安装 Bootcade %1。您可以重试，或从下载页面获取。"
 }

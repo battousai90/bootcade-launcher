@@ -110,6 +110,15 @@ Fold fold(const Card& card, bool open_by_default,
 // Chevron et resume selon que la carte est ouverte ou fermee.
 void refresh_fold(const Fold& f);
 
+// Taille commune des fenetres de travail (Settings, ROM Manager, Controller
+// Configuration) : 1400 x 900, bornee a 90 % de l'ecran de `near`.
+inline constexpr int kWorkWindowWidth  = 1400;
+inline constexpr int kWorkWindowHeight = 900;
+void size_work_window(Gtk::Window& win, Gtk::Window* near = nullptr);
+// Tant que `win` est affichee, `main` porte la classe « behind-work » : la
+// feuille de style l'assombrit quand elle n'est pas la fenetre active.
+void dim_behind(Gtk::Window& win, Gtk::Window& main);
+
 // Le cadre interieur qui regroupe des lignes, avec un filet entre chacune.
 Gtk::Box* rows();
 void      add_row(Gtk::Box* container, Gtk::Widget& row);

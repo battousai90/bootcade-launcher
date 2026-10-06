@@ -360,24 +360,17 @@ void SettingsPanel::build_shell() {
      */
     m_pages.set_transition_type(Gtk::STACK_TRANSITION_TYPE_NONE);
     m_pages.set_transition_duration(0);
-    /* Chaque page a SA hauteur.
-     *
-     * Un Gtk::Stack est homogene par defaut : les quatre pages prenaient donc
-     * la hauteur de la plus haute, et les trois autres se terminaient par une
-     * bande vide qui ne disait rien. La fenetre suit maintenant la page
-     * affichee (voir fit_to_page).
-     */
+    // Chaque page a sa hauteur : la zone defilante ne sert qu'a celles qui
+    // depassent, les autres ne defilent pas sur une bande vide.
     m_pages.set_vhomogeneous(false);
 
-    /* Les pages sont posees telles quelles, sans zone defilante.
+    /* Les pages defilent dans une fenetre de taille fixe.
      *
-     * Un ecran de reglages qui defile cache la moitie de ses options derriere
-     * un geste : on ne voit plus ce qui existe, et le pied d'actions flotte
-     * au-dessus d'un contenu tronque. La fenetre prend donc la hauteur de sa
-     * page la plus haute : Gtk::Stack est homogene par defaut, donc les
-     * quatre pages partagent la meme taille et la fenetre ne saute plus d'un
-     * onglet a l'autre. Seule la LISTE des dossiers de ROMs defile, parce
-     * qu'elle est une liste : son contenu n'a pas de hauteur previsible. */
+     * La fenetre suivait auparavant la hauteur de l'onglet affiche : elle
+     * changeait de taille a chaque clic, et la fiche MAME la poussait au-dela
+     * d'un ecran 1080p. Elle a desormais la taille commune des fenetres de
+     * travail (voir MainWindow::on_settings_clicked) ; ce qui depasse defile,
+     * et le pied d'actions reste toujours visible sous la zone defilante. */
     m_pages.add(*build_page_general(),  "general");
     m_pages.add(*build_page_library(),  "library");
     m_pages.add(*build_page_emulator(), "emulator");
@@ -391,7 +384,13 @@ void SettingsPanel::build_shell() {
     add_tab("random",   "bc-dice.svg",       _("Random play"));
 
     pack_start(m_tabbar, Gtk::PACK_SHRINK);
-    pack_start(m_pages,  Gtk::PACK_EXPAND_WIDGET);
+    // Les deux sens : une page plus large que la fenetre imposerait sinon sa
+    // largeur, et la fenetre grandirait au lieu de garder sa taille commune.
+    m_pages.set_hhomogeneous(false);
+    m_pages_scroll.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+    m_pages_scroll.set_shadow_type(Gtk::SHADOW_NONE);
+    m_pages_scroll.add(m_pages);
+    pack_start(m_pages_scroll, Gtk::PACK_EXPAND_WIDGET);
 
     // ── Pied ─────────────────────────────────────────────────────────────
     // Ce qui defait a gauche, ce qui valide a droite : c'est la disposition de
@@ -438,9 +437,11 @@ void SettingsPanel::build_shell() {
             set_update_state(_("Could not check for updates."), "warn");
         else if (tag.empty())
             set_update_state(_("You are up to date"), "ok");
-        else
+        else {
             set_update_state(Glib::ustring::compose(_("Bootcade %1 is available"), tag),
                              "warn");
+            m_sig_update_found.emit();
+        }
     });
     m_fbneo_caps_done.connect([this] {
         std::string key;
@@ -537,7 +538,8 @@ void SettingsPanel::add_tab(const std::string& id, const std::string& icon_file,
         for (auto* other : m_tabs_buttons) other->set_active(other == btn);
         m_pages.set_visible_child(id);
         m_tab_switching = false;
-        fit_to_page();
+        // Chaque onglet s'ouvre par son haut, pas la ou le precedent s'arretait.
+        m_pages_scroll.get_vadjustment()->set_value(0);
     });
     m_tabs_buttons.push_back(btn);
     m_tabbar.pack_start(*btn, Gtk::PACK_SHRINK);
@@ -973,27 +975,9 @@ Gtk::Widget* SettingsPanel::build_page_library() {
     m_grip_drag = Gtk::GestureDrag::create(m_roms_grip);
     m_grip_drag->signal_drag_begin().connect([this](double, double) {
         m_grip_start_height = m_roms_list_height;
-        /* La borne haute se fige ICI, pas a chaque pixel.
-         *
-         * Elle depend de la place restante entre la fenetre et le bord de
-         * l'ecran ; la recalculer pendant le glisser reviendrait a lire une
-         * geometrie qui bouge. Une fenetre plus haute que la zone de travail
-         * mettrait son pied d'actions hors de portee.
-         */
+        // La page defile : la liste peut grandir sans pousser la fenetre
+        // hors de l'ecran, la borne n'a plus a dependre de sa position.
         m_grip_max_height = 900;
-        if (auto* win = dynamic_cast<Gtk::Window*>(get_toplevel())) {
-            if (auto gdkwin = win->get_window()) {
-                int win_w = 0, win_h = 0;
-                win->get_size(win_w, win_h);
-                Gdk::Rectangle work;
-                auto monitor = win->get_display()->get_monitor_at_window(gdkwin);
-                if (monitor) {
-                    monitor->get_workarea(work);
-                    m_grip_max_height =
-                        m_roms_list_height + (work.get_height() - win_h);
-                }
-            }
-        }
         if (m_grip_max_height < 120) m_grip_max_height = 120;
     });
     m_grip_drag->signal_drag_update().connect([this](double, double offset_y) {
@@ -1887,28 +1871,16 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
 
     /* La colonne de droite defile, et elle seule.
      *
-     * La fiche de MAME porte une quinzaine d'options : empilees, elles
-     * demandent une fenetre plus haute que beaucoup d'ecrans, et le pied
-     * « Cancel / Save » finirait sous le bord. Le defilement ne change rien
-     * aux fiches qui tiennent deja — set_propagate_natural_height laisse la
-     * fenetre se regler au pixel sur leur hauteur — il ne sert que la ou il
-     * n'y a plus le choix.
+     * La fiche de MAME porte une quinzaine d'options. Sa hauteur naturelle
+     * n'est PAS transmise : la page reste petite, la zone defilante des pages
+     * l'etire a la hauteur de la fenetre, et c'est cette colonne qui defile
+     * pendant que la liste des emulateurs reste en place. Un seul ascenseur,
+     * jamais deux imbriques.
      */
     auto* scroller = Gtk::make_managed<Gtk::ScrolledWindow>();
     scroller->set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
-    scroller->set_propagate_natural_height(true);
-    /* Sans hauteur minimale declaree, un volet defilant transmet celle de son
-     * contenu : la fenetre ne pouvait alors plus redescendre sous la taille
-     * de la fiche MAME, et le pied d'actions restait hors de l'ecran sur une
-     * dalle 1080p. Ce plancher la laisse retrecir jusqu'a ce que l'ecran
-     * permet ; c'est le defilement qui rend le reste atteignable. */
+    scroller->set_propagate_natural_height(false);
     scroller->set_min_content_height(360);
-    /* Et un plafond, sans quoi la fiche MAME reclamerait a elle seule une
-     * fenetre de 1900 px de haut : plus que la dalle de beaucoup de monde.
-     * La valeur est reglee sur la fiche la plus longue qui tienne sans
-     * defiler, celle de FinalBurn Neo, pour que passer d'un emulateur a
-     * l'autre ne fasse pas sauter la fenetre. */
-    scroller->set_max_content_height(820);
     scroller->set_shadow_type(Gtk::SHADOW_NONE);
     scroller->add(*right);
     page->pack_start(*scroller, Gtk::PACK_EXPAND_WIDGET);
@@ -1925,8 +1897,7 @@ Gtk::Widget* SettingsPanel::collapsible(const ui::Card& card, const std::string&
                                         bool open_by_default,
                                         std::function<std::string()> describe) {
     m_sections[key] = ui::fold(card, open_by_default, std::move(describe),
-                               [this] { refresh_sections(); },
-                               [this] { fit_to_page(); });
+                               [this] { refresh_sections(); });
     return card.frame;
 }
 
@@ -2487,9 +2458,6 @@ void SettingsPanel::show_emulator_page(size_t index) {
     // Les resumes des sections repliees parlent de l'emulateur affiche :
     // « 3 options on » n'est pas le meme chiffre d'un emulateur a l'autre.
     refresh_sections();
-    // Les deux fiches n'ont pas la meme hauteur : sans cela, la fenetre garde
-    // celle de la precedente, trop grande ou trop petite.
-    fit_to_page();
 }
 
 /* Quel MAME, et dans quel etat.
@@ -3185,19 +3153,8 @@ void SettingsPanel::apply_roms_list_height() {
     m_scrolled_roms.set_min_content_height(m_roms_list_height);
 }
 
-/* Regle la hauteur de la liste. La fenetre se recale ensuite, en ABSOLU.
- *
- * Elle grandissait auparavant de la difference a chaque evenement de souris,
- * a partir d'une taille relue chez GTK : or un redimensionnement est
- * asynchrone, la taille relue etait donc celle d'avant, et l'erreur
- * s'additionnait a chaque pixel de deplacement. Au bout d'un glisser la
- * fenetre depassait de plusieurs centaines de pixels la hauteur de son
- * contenu : l'enorme bande vide.
- *
- * fit_to_page ne calcule pas de difference : il redemande la hauteur
- * MINIMALE de la page. Rien ne s'accumule, et tirer vers le haut retrecit la
- * fenetre aussi bien que tirer vers le bas l'agrandit.
- */
+// Regle la hauteur de la liste, bornee : le glisser rend un deplacement
+// absolu depuis son debut, donc rien ne s'accumule.
 void SettingsPanel::set_roms_list_height(int height) {
     static constexpr int kMinHeight = 120;   // trois lignes : en dessous ce
                                              // n'est plus une liste
@@ -3207,67 +3164,6 @@ void SettingsPanel::set_roms_list_height(int height) {
 
     m_roms_list_height = height;
     apply_roms_list_height();
-    fit_to_page();
-}
-
-/* Recale la fenetre sur la hauteur de la page affichee.
- *
- * La hauteur est CALCULEE, pas devinee. On a d'abord essaye de redemander
- * 1 px en comptant sur GTK pour remonter au minimum : il ne le fait pas. Une
- * fenetre GTK3 redimensionnable accepte d'etre plus petite que le minimum de
- * son contenu, qu'elle se contente alors de rogner. La fenetre restait donc
- * a la hauteur de la premiere page ouverte, quelle que soit la page affichee
- * ensuite, et la liste agrandie a la poignee etait comprimee sans que rien ne
- * bouge : exactement le symptome constate.
- *
- * On demande donc la hauteur NATURELLE du panneau, pas la minimale : c'est
- * celle a laquelle rien n'est comprime, et c'est tout l'objet d'un ecran qui
- * ne defile pas.
- *
- * SANS la barre de titre : gtk_window_resize compte deja la barre posee par
- * set_titlebar. L'ajouter faisait une fenetre trop haute d'exactement une
- * barre, d'ou la bande vide au-dessus du pied, sur les quatre pages.
- *
- * Differe en BASSE priorite : au moment du clic la nouvelle page n'a pas
- * encore negocie sa taille, et a l'ouverture la fenetre n'est meme pas encore
- * affichee.
- */
-void SettingsPanel::fit_to_page() {
-    // Une seule en attente : un glisser emet des dizaines d'evenements, et
-    // autant de redimensionnements empiles se marcheraient dessus.
-    m_fit_conn.disconnect();
-    m_fit_conn = Glib::signal_idle().connect([this] {
-        auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
-        if (win) {
-            int panel_min = 0, panel_nat = 0;
-            get_preferred_height(panel_min, panel_nat);
-            int w = 0, h = 0;
-            win->get_size(w, h);
-            /* Jamais plus haut que l'ecran.
-             *
-             * La hauteur naturelle d'une page peut depasser la zone de
-             * travail (la fiche MAME et ses options), et une fenetre plus
-             * haute que l'ecran met son pied d'actions hors de portee : on
-             * ne peut alors plus ni annuler ni enregistrer. Ce qui deborde
-             * defile, c'est le role du volet de la page. */
-            int limit = 0;
-            if (auto gdkwin = win->get_window()) {
-                if (auto monitor = win->get_display()->get_monitor_at_window(gdkwin)) {
-                    Gdk::Rectangle work;
-                    monitor->get_workarea(work);
-                    limit = work.get_height();
-                }
-            }
-            // Repli : sans zone de travail connue (fenetre pas encore
-            // realisee, serveur sans gestionnaire), la hauteur de l'ecran
-            // reste une borne bien meilleure que pas de borne du tout.
-            if (limit <= 0 && win->get_screen()) limit = win->get_screen()->get_height();
-            int wanted = panel_nat;
-            if (limit > 0 && wanted > limit) wanted = limit;
-            if (wanted > 0 && wanted != h) win->resize(w, wanted);
-        }
-        return false;           // une seule fois
-    }, Glib::PRIORITY_LOW);
 }
 
 void SettingsPanel::refresh_emulator_state() {
@@ -3347,7 +3243,9 @@ Gtk::Widget* SettingsPanel::build_page_online() {
     m_account_row.pack_start(m_account_avatar, Gtk::PACK_SHRINK);
     m_account_row.pack_start(m_account_text,   Gtk::PACK_EXPAND_WIDGET);
 
-    auto* acc_buttons = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 9);
+    // Cote a cote : empiles, ils doublaient la hauteur de la carte, et la
+    // page Online defilait de quelques pixels sur un ecran 1080p.
+    auto* acc_buttons = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 9);
     acc_buttons->set_valign(Gtk::ALIGN_CENTER);
     m_button_manage_account.set_label(_("Manage Account"));
     m_button_manage_account.set_image(*ui::image("bc-account-manage.svg", ui::kIconButton));
@@ -3640,9 +3538,6 @@ void SettingsPanel::on_window_shown() {
     refresh_emulator_state();
     refresh_roms_list();
     refresh_profile_stats();
-    // A l'ouverture aussi : la fenetre est creee avant que les pages aient
-    // negocie leur taille, et resterait sur une hauteur d'avance.
-    fit_to_page();
     m_btn_test_net.set_sensitive(true);
     probe_network_async();
 }

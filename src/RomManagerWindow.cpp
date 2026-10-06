@@ -63,8 +63,8 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
 {
     namespace ui = SettingsUi;
     set_title(_("ROM Management"));
-    // Wide enough for the DAT tab's three columns (groups, table, panels).
-    set_default_size(1400, 900);
+    SettingsUi::size_work_window(*this, &parent);
+    SettingsUi::dim_behind(*this, parent);
     set_transient_for(parent);
     set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
     get_style_context()->add_class("cc-window");
@@ -180,9 +180,23 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     add_tab("quarantine", "bc-shield.svg",   _("Quarantine"), _("Files that could not be used, or were rejected."));
     add_tab("dat",        "bc-file.svg",     _("DAT"),        _("The DAT files your library is compared with."));
 
+    /* Les onglets defilent, la fenetre garde sa taille.
+     *
+     * Poses tels quels, ils imposaient leur taille minimale a la fenetre :
+     * celle du plus grand des cinq, au-dela de 1400 x 900, et elle changeait
+     * avec le contenu, si bien que la fenetre se redimensionnait et se
+     * replacait au moindre clic. Dans une zone defilante, le contenu s'adapte
+     * a la fenetre et non l'inverse ; chaque onglet garde sa propre taille. */
+    m_pages.set_hhomogeneous(false);
+    m_pages.set_vhomogeneous(false);
+    auto* pages_scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    pages_scroll->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+    pages_scroll->set_shadow_type(Gtk::SHADOW_NONE);
+    pages_scroll->add(m_pages);
+
     auto* shell = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
-    shell->pack_start(m_tabbar, Gtk::PACK_SHRINK);
-    shell->pack_start(m_pages,  Gtk::PACK_EXPAND_WIDGET);
+    shell->pack_start(m_tabbar,      Gtk::PACK_SHRINK);
+    shell->pack_start(*pages_scroll, Gtk::PACK_EXPAND_WIDGET);
     add(*shell);
 
     reload_settings();
