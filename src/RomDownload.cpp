@@ -45,6 +45,23 @@ size_t to_string(char* p, size_t s, size_t n, void* out) {
     return s * n;
 }
 
+// La raison d'un refus, que le serveur donne dans X-Bootcade-Reason.
+size_t read_reason(char* p, size_t s, size_t n, void* out) {
+    const std::string line(p, s * n);
+    const std::string key = "x-bootcade-reason:";
+    if (line.size() > key.size()) {
+        std::string head = line.substr(0, key.size());
+        for (auto& c : head) c = (char)std::tolower((unsigned char)c);
+        if (head == key) {
+            std::string v = line.substr(key.size());
+            while (!v.empty() && (v.front() == ' ')) v.erase(0, 1);
+            while (!v.empty() && (v.back() == '\r' || v.back() == '\n' || v.back() == ' ')) v.pop_back();
+            *static_cast<std::string*>(out) = v;
+        }
+    }
+    return s * n;
+}
+
 struct Sink {
     FILE* file = nullptr;
     const std::atomic<bool>* cancelled = nullptr;
@@ -300,6 +317,9 @@ Result download(const std::string& dat_header, const std::string& name,
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 60L);
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
+    std::string server_reason;
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, read_reason);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &server_reason);
     const CURLcode res = curl_easy_perform(curl);
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &r.http_status);
     curl_slist_free_all(headers);
@@ -310,7 +330,15 @@ Result download(const std::string& dat_header, const std::string& name,
         fs::remove(part_path, ec);
         if (cancelled.load())            r.reason = _("cancelled");
         else if (r.http_status == 401)   r.reason = explain("not_signed_in");
-        else if (r.http_status == 403)   r.reason = _("refused by the server (quota or account)");
+        /* Un refus du compte ou du quota porte TOUJOURS sa raison. Sans
+         * raison, c'est le serveur qui n'a pas pu lire le fichier : le dire
+         * « quota or account » a fait chercher la panne au mauvais endroit
+         * pendant une semaine (droits du NAS, octobre 2026). */
+        else if (r.http_status == 403 && !server_reason.empty()) r.reason = explain(server_reason);
+        else if (r.http_status == 403) {
+            r.reason = _("the Bootcade server could not send the file");
+            r.server_fault = true;
+        }
         else if (r.http_status == 404)   r.reason = _("not available on the Bootcade server");
         else if (r.http_status == 429 || r.http_status == 503) r.reason = _("the server is busy, try again later");
         else if (r.http_status)          r.reason = "HTTP " + std::to_string(r.http_status);

@@ -9,6 +9,7 @@
 // lecture de la configuration, le balayage des ROMs ou la connexion au compte
 // ne se debogue plus, parce qu'on ne sait plus ce qui a change.
 #include "SettingsPanel.h"
+#include "DefaultFolders.h"
 #include "BootcadeAuth.h"
 #include "IconManager.h"
 #include "LoginDialog.h"
@@ -2745,8 +2746,9 @@ void SettingsPanel::download_catver_clicked() {
     m_lbl_catver_state.set_text(_("Downloading catver.ini..."));
     while (Gtk::Main::events_pending()) Gtk::Main::iteration(false);
 
-    const auto dl = MameCatalog::download_catver(
-        url, AppContext::get_user_config_dir());
+    const std::string catver_dir = DefaultFolders::sub("Support/Catver/Mame");
+    { std::error_code ec; std::filesystem::create_directories(catver_dir, ec); }
+    const auto dl = MameCatalog::download_catver(url, catver_dir);
 
     if (!dl.ok) {
         refresh_catver_state();
@@ -3276,10 +3278,8 @@ Gtk::Widget* SettingsPanel::build_page_online() {
          * de courriel, double authentification, sessions ouvertes, suppression
          * du compte. « Manage Account » doit mener la, et nulle part ailleurs.
          */
-        auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
-        const std::string url = BootcadeAuth::account_console_url();
-        gtk_show_uri_on_window(win ? GTK_WINDOW(win->gobj()) : nullptr,
-                               url.c_str(), GDK_CURRENT_TIME, nullptr);
+        ui::open_uri(BootcadeAuth::account_console_url(),
+                     dynamic_cast<Gtk::Window*>(get_toplevel()));
     });
     acc_buttons->pack_start(m_button_manage_account, Gtk::PACK_SHRINK);
 
@@ -3468,11 +3468,9 @@ Gtk::Widget* SettingsPanel::build_page_online() {
     m_btn_view_profile.set_image(*ui::image("bc-external.svg", ui::kIconButton));
     m_btn_view_profile.set_always_show_image(true);
     m_btn_view_profile.signal_clicked().connect([this] {
-        auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
         std::string url = "https://bootcade.netlify.app/profile/";
         if (BootcadeAuth::signed_in()) url += "?sso=1";
-        gtk_show_uri_on_window(win ? GTK_WINDOW(win->gobj()) : nullptr,
-                               url.c_str(), GDK_CURRENT_TIME, nullptr);
+        ui::open_uri(url, dynamic_cast<Gtk::Window*>(get_toplevel()));
     });
     m_profile_signed.pack_start(m_btn_view_profile, Gtk::PACK_SHRINK);
     profile.body->pack_start(m_profile_signed, Gtk::PACK_SHRINK);
@@ -3755,8 +3753,15 @@ std::string released_version() {
 }  // namespace
 
 
-bool SettingsPanel::was_account_asked_this_version() const {
-    return m_account_asked_version == released_version();
+/* Posee UNE fois, et plus jamais.
+ *
+ * Elle revenait a chaque nouvelle version pour qui n'etait pas connecte :
+ * avec la mise a jour automatique, c'etait a chaque mise a jour, et le
+ * joueur qui avait deja dit « OK » se la voyait reposer sans fin. La version
+ * enregistree ne sert plus qu'a savoir qu'il a repondu ; vide, la reponse
+ * date d'avant les comptes, et la question (qui en parle) reste a poser. */
+bool SettingsPanel::was_account_asked() const {
+    return !m_account_asked_version.empty();
 }
 
 

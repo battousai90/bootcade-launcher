@@ -62,6 +62,24 @@ std::string lower(std::string s) {
     return s;
 }
 
+// Y a-t-il au moins une archive de ROMs dans ces dossiers ? S'arrete a la
+// premiere trouvee : sur une vraie collection la reponse est immediate, et un
+// dossier vide (ou absent) se parcourt en un instant.
+bool any_archive_on_disk(const std::vector<std::string>& roots) {
+    namespace fs = std::filesystem;
+    for (const auto& root : roots) {
+        std::error_code ec;
+        if (root.empty() || !fs::is_directory(root, ec)) continue;
+        for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file(ec)) continue;
+            const std::string ext = lower(it->path().extension().string());
+            if (ext == ".zip" || ext == ".7z" || ext == ".rar") return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 Report audit(std::shared_ptr<DatabaseManager> db,
@@ -100,10 +118,15 @@ Report audit(std::shared_ptr<DatabaseManager> db,
     // No archive in the cache : nothing can be said about zips before a
     // scan. CHDs are judged on disk by their headers and need no scan : a
     // group of CHD DATs only is audited all the same.
+    //
+    // Sauf si les dossiers ne contiennent aucune archive : la, le cache vide
+    // dit vrai, il n'y a rien a scanner, et TOUT est manquant. Le joueur qui
+    // n'a pas encore de ROMs doit voir cette liste : c'est d'elle que part
+    // « Download from Bootcade ». Avant, il ne voyait que des zeros.
     if (rep.pool_empty) {
         bool zips_expected = false;
         for (const auto& g : games) if (in_group(g) && !g.roms.empty()) { zips_expected = true; break; }
-        if (zips_expected) {
+        if (zips_expected && any_archive_on_disk(roms_paths)) {
             log(cb, "  WARNING: the cache is empty : run a ROM scan first.");
             report(cb, 100.0, _("Nothing to audit."));
             return rep;
@@ -347,6 +370,26 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         }
         std::sort(rep.missing_bios.begin(), rep.missing_bios.end(),
                   [](const BiosGap& a, const BiosGap& b) { return a.dependents > b.dependents; });
+
+        // Chaque set dit lui-meme ce qui lui manque : le premier ancetre de
+        // sa chaine romof qui n'est pas la. Un paragraphe global « BIOS not
+        // available : … » en tete de page, personne ne le lisait.
+        for (auto& e : rep.games) {
+            std::string name;
+            if (auto it = by_key.find(e.name + '\x1f' + e.system); it != by_key.end()) name = games[it->second].romof;
+            for (int depth = 0; depth < 8 && !name.empty(); ++depth) {
+                auto it = by_key.find(name + '\x1f' + e.system);
+                if (it == by_key.end()) break;
+                const Game& anc = games[it->second];
+                auto st = status_by_key.find(anc.name + '\x1f' + anc.system);
+                if (st != status_by_key.end() && st->second != "available" && st->second != "incorrect") {
+                    e.missing_dependency = (anc.is_bios ? std::string("BIOS ") : std::string("parent ")) + anc.name + ".zip";
+                    break;
+                }
+                if (anc.romof == name) break;
+                name = anc.romof;
+            }
+        }
     }
 
     std::sort(rep.games.begin(), rep.games.end(), [](const GameEntry& a, const GameEntry& b) {

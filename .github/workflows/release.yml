@@ -198,7 +198,9 @@ jobs:
   # Flatpak needs its own runtime image, so it runs separately and is allowed to
   # fail without holding back the other packages.
   flatpak:
-    needs: version
+    # Apres « package » : son SHA256SUMS doit exister pour qu'on y ajoute la
+    # ligne du Flatpak (voir plus bas).
+    needs: [version, package]
     runs-on: ubuntu-24.04
     continue-on-error: true
     container:
@@ -230,8 +232,27 @@ jobs:
       - name: Name the bundle after its version
         run: mv bootcade.flatpak "bootcade-${{ needs.version.outputs.tag }}-x86_64.flatpak"
 
+      # SHA256SUMS est publie par « package », avant que le Flatpak n'existe :
+      # il n'en contenait donc jamais l'empreinte, et la mise a jour
+      # automatique d'une installation Flatpak echouait faute de pouvoir
+      # verifier le fichier. On reprend le fichier de « package », on y
+      # ajoute la ligne du Flatpak, et on le republie avec le paquet.
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: packages
+
+      - name: Add the bundle to SHA256SUMS
+        run: |
+          cp packages/SHA256SUMS SHA256SUMS
+          sha256sum "bootcade-${{ needs.version.outputs.tag }}-x86_64.flatpak" >> SHA256SUMS
+          cat SHA256SUMS
+
       - name: Attach the bundle to the release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          files: bootcade-${{ needs.version.outputs.tag }}-x86_64.flatpak
+          overwrite_files: true
+          files: |
+            bootcade-${{ needs.version.outputs.tag }}-x86_64.flatpak
+            SHA256SUMS

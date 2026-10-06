@@ -4,6 +4,7 @@
 #include <gtkmm.h>
 #include <string>
 #include <thread>
+#include "FbneoUpdateCheck.h"
 #include "Game.h"
 #include "SettingsPanel.h"
 #include "HiscoreClient.h"
@@ -71,6 +72,8 @@ private:
     void on_game_selected();
     void show_game_details(const Gtk::TreeModel::Row& row); // populate the detail dock
     void on_play_clicked();
+    std::string missing_dependencies(const std::string& name, const std::string& system,
+                                     const std::string& emulator) const;
     void on_download_art_clicked();
     /* Reglages et manettes : de VRAIES fenetres, pas des boites attachees.
      *
@@ -662,10 +665,14 @@ private:
     Glib::Dispatcher  m_app_update_dispatcher;
     std::string       m_app_update_tag;
     void check_app_update_async(bool asked = false);
+    // Recalcule les statuts une fois quand la regle de jouabilite change
+    // (ex. « incomplete »), sans attendre que le joueur relance un scan.
+    Glib::Dispatcher m_status_rules_dispatcher;
+    void refresh_statuses_if_rules_changed();
     void on_app_update_result();
     // Mise a jour automatique : les fichiers de la release annoncee, et
     // l'avancement du telechargement / de l'installation.
-    std::vector<std::pair<std::string, std::string>> m_app_update_assets;
+    std::vector<FbneoUpdateCheck::Result::Asset> m_app_update_assets;
     Gtk::ProgressBar  m_app_update_progress;
     Gtk::Button*      m_app_update_button = nullptr;
     Gtk::Button*      m_app_update_page_button = nullptr;

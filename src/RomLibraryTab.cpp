@@ -340,7 +340,8 @@ void RomLibraryTab::build_table() {
 
     m_table = Gtk::make_managed<ui::Table>(Gtk::SELECTION_MULTIPLE);
     m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomLibraryTab::row_visible));
-    m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomLibraryTab::on_row_toggled));
+    m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomLibraryTab::on_row_toggled),
+                              [this](bool on) { set_all_checked(on); });
     {
         // Status is painted with the application's state colours, read from
         // the sheet when the tab is on screen (see ensure_colours).
@@ -587,6 +588,11 @@ void RomLibraryTab::populate() {
         if (g.has_disks && disks_not_right(g)) bits.push_back(_("Fix not available for CHDs"));
         if (g.ignored) bits.insert(bits.begin(), _("ignored"));
         if (g.is_bios) bits.insert(bits.begin(), _("BIOS"));
+        // En TETE : la colonne est tronquee, et c'est la seule information
+        // qui dit au joueur quoi faire pour que le jeu demarre.
+        if (!g.missing_dependency.empty() && g.status != "missing")
+            bits.insert(bits.begin(), Glib::ustring::compose(_("\u26A0 cannot run : %1 is missing"),
+                                                            g.missing_dependency).raw());
 
         const std::string key = status_key_of(g);
         row[m_cols.status]     = g.ignored ? Glib::ustring(_("Ignored")) : Glib::ustring(_(status_label_of(key)));
@@ -699,8 +705,10 @@ void RomLibraryTab::update_summary() {
         std::vector<std::string> parts;
         for (const auto& b : m_audit.missing_bios)
             parts.push_back(Glib::ustring::compose(_("%1 (%2) : %3 dependent set(s)"), b.name, b.system, b.dependents).raw());
-        m_bios_line.set_text(Glib::ustring::compose(_("BIOS not available : %1. In a split collection those sets cannot run."), join(parts, "; ", 4)));
-        m_bios_line.show();
+        // Plus de paragraphe : chaque ligne concernee le dit elle-meme
+        // (colonne Details, « cannot run : BIOS msx.zip is missing »).
+        (void)parts;
+        m_bios_line.hide();
     }
 }
 
@@ -879,12 +887,18 @@ void RomLibraryTab::on_row_toggled(const Glib::ustring& path) {
 }
 
 void RomLibraryTab::set_all_checked(bool on) {
-    // Only what is visible : "select all" on a filtered table means the rows
-    // one is looking at.
-    for (const auto& frow : m_models.filter->children()) {
-        Gtk::TreeModel::Row row = *m_models.filter->convert_iter_to_child_iter(frow);
+    /* Les lignes affichees, puis la vue detachee le temps de les modifier.
+     * Attachee, chaque case changee relancait filtre et tri : sur 29 000
+     * lignes, tout cocher figeait la fenetre une dizaine de secondes. */
+    std::vector<Gtk::TreeModel::iterator> shown;
+    for (const auto& frow : m_models.filter->children())
+        shown.push_back(m_models.filter->convert_iter_to_child_iter(frow));
+    m_models.detach(m_table->view());
+    for (const auto& it : shown) {
+        Gtk::TreeModel::Row row = *it;
         if (row[m_cols.checkable]) row[m_cols.include] = on;
     }
+    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomLibraryTab::row_visible));
     update_action_buttons();
 }
 
@@ -918,6 +932,7 @@ std::vector<Gtk::TreeModel::Row> RomLibraryTab::fix_candidates() const {
 }
 
 void RomLibraryTab::update_action_buttons() {
+    if (m_table) m_table->refresh_header_check();
     const int n = (int)fix_candidates().size();
     m_btn_fix->set_label(n ? Glib::ustring::compose(_("Fix selected (%1)"), n)
                            : Glib::ustring(_("Fix")));
@@ -1024,6 +1039,12 @@ void RomLibraryTab::worker_download() {
         if (m_cancelled) break;
         m_dl.failed.push_back(item.name + " : " + res.reason);
         push_log(item.name + " : " + res.reason);
+        // Une panne du serveur touche toutes les ROMs : continuer userait le
+        // quota sur chacune sans rien recevoir.
+        if (res.server_fault) {
+            m_dl.stopped = _("The Bootcade server could not send the files : downloads were stopped. Please try again later.");
+            break;
+        }
         // Refused : ask the account why. Quota used up or access lost stops
         // everything ; anything else is this set's problem only.
         if (res.http_status == 401 || res.http_status == 403) {
@@ -1084,8 +1105,7 @@ void RomLibraryTab::search_on_web(const Gtk::TreeModel::Row& row) {
         ? Glib::ustring(row[m_cols.yours])
         : Glib::ustring(row[m_cols.expected]) + " " + Glib::ustring(row[m_cols.system]);
     std::string uri = "https://duckduckgo.com/?q=" + Glib::uri_escape_string(q.raw());
-    try { Gio::AppInfo::launch_default_for_uri(uri); }
-    catch (const Glib::Error& e) { flash(Glib::ustring::compose(_("Could not open a browser: %1"), e.what())); }
+    if (!ui::open_uri(uri)) flash(_("Could not open a browser."));
 }
 
 void RomLibraryTab::toggle_ignore(const Gtk::TreeModel::Row& row) {
@@ -1556,11 +1576,40 @@ void RomLibraryTab::on_worker_finished() {
         set_busy(false);
         flash(status);
         m_sig_log.emit(status.raw());
-        if (!m_dl.got.empty()) m_sig_send_to_import.emit(m_dl.got);
-        else if (!m_dl.stopped.empty() && m_dl.failed.empty()) {
-            if (auto* top = dynamic_cast<Gtk::Window*>(get_toplevel()))
-                ui::notice(*top, _("Download from Bootcade"), m_dl.stopped);
+        /* Un bilan qui reste a l'ecran.
+         *
+         * Le seul message etait celui de la barre d'etat, efface au bout de
+         * quelques secondes : quand aucune ROM n'arrivait (absente du serveur,
+         * quota atteint), le joueur ne voyait rien se passer et cherchait
+         * des fichiers qui n'existaient pas. Le bilan dit ce qui est arrive,
+         * OU, et ce qui a echoue avec sa raison. */
+        if (auto* top = dynamic_cast<Gtk::Window*>(get_toplevel())) {
+            std::string text;
+            if (!m_dl.got.empty())
+                text += Glib::ustring::compose(_("%1 set(s) downloaded into the import folder:\n%2"),
+                                               (int)m_dl.got.size(), m_job_paths.inbox).raw();
+            if (!m_dl.failed.empty()) {
+                if (!text.empty()) text += "\n\n";
+                text += Glib::ustring::compose(_("%1 set(s) could not be downloaded:"), (int)m_dl.failed.size()).raw();
+                const size_t shown = std::min<size_t>(m_dl.failed.size(), 8);
+                for (size_t i = 0; i < shown; ++i) text += "\n• " + m_dl.failed[i];
+                if (m_dl.failed.size() > shown)
+                    text += "\n" + Glib::ustring::compose(_("…and %1 more, listed in the Import log."),
+                                                          (int)(m_dl.failed.size() - shown)).raw();
+            }
+            if (!m_dl.stopped.empty()) text += (text.empty() ? "" : "\n\n") + m_dl.stopped;
+            if (m_cancelled) text += (text.empty() ? "" : "\n\n") + std::string(_("The download was cancelled."));
+            if (text.empty()) text = _("Nothing was downloaded.");
+            const bool got = !m_dl.got.empty();
+            if (got) {
+                if (ui::offer(*top, _("Download from Bootcade"), text, _("Open import folder"),
+                              "bc-download.svg", "bc-folder.svg"))
+                    ui::open_uri(Glib::filename_to_uri(m_job_paths.inbox), top);
+            } else {
+                ui::notice(*top, _("Download from Bootcade"), text, "bc-warning.svg");
+            }
         }
+        if (!m_dl.got.empty()) m_sig_send_to_import.emit(m_dl.got);
         return;
     } else if (m_job == Job::Fix) {
         Glib::ustring status = Glib::ustring::compose(

@@ -1,5 +1,6 @@
 // src/MameCatalog.cpp
 #include "MameCatalog.h"
+#include "DefaultFolders.h"
 
 #include <sys/wait.h>
 #include <unistd.h>
@@ -1402,7 +1403,14 @@ std::string catver_url(const std::string& mame_version) {
            + digits + ".zip";
 }
 
+// Le catver.ini que Bootcade telecharge : dans Bootcade/Support/Catver/Mame,
+// a cote des DAT. Celui des versions precedentes, dans le dossier de
+// configuration, reste lu (catver_path) tant qu'il est le seul.
 std::string catver_app_path() {
+    return DefaultFolders::sub("Support/Catver/Mame") + "/catver.ini";
+}
+
+static std::string catver_legacy_path() {
     return AppContext::get_user_config_dir() + "/catver.ini";
 }
 
@@ -1414,6 +1422,8 @@ std::string catver_path(const std::string& configured) {
         return configured;
     const std::string mine = catver_app_path();
     if (std::filesystem::is_regular_file(mine, ec)) return mine;
+    const std::string legacy = catver_legacy_path();
+    if (std::filesystem::is_regular_file(legacy, ec)) return legacy;
     return {};
 }
 

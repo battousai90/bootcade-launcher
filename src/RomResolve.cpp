@@ -77,8 +77,9 @@ bool has_data(RomState s) { return s == RomState::Present || s == RomState::Wron
 std::string combine_status(const std::string& a, const std::string& b) {
     if (a.empty()) return b;
     if (b.empty()) return a;
-    if (a == "missing" || b == "missing")     return "missing";
-    if (a == "incorrect" || b == "incorrect") return "incorrect";
+    if (a == "missing" || b == "missing")       return "missing";
+    if (a == "incomplete" || b == "incomplete") return "incomplete";
+    if (a == "incorrect" || b == "incorrect")   return "incorrect";
     return "available";
 }
 
@@ -120,6 +121,8 @@ Verdict evaluate(const Game& game, const Archive* own,
     if (game.roms.empty()) return v;
 
     bool all_present = true, all_correct = true;
+    bool own_missing = false;         // une ROM propre au jeu manque
+    bool inherited_missing = false;   // seules des ROMs heritees manquent
     for (const auto& rom : game.roms) {
         if (rom.crc.empty()) continue;   // nodump: nothing to verify against
 
@@ -161,12 +164,30 @@ Verdict evaluate(const Game& game, const Archive* own,
             }
         }
 
-        if (r.state == RomState::Absent)                                    all_present = false;
+        if (r.state == RomState::Absent) {
+            all_present = false;
+            (r.inherited ? inherited_missing : own_missing) = true;
+        }
         else if (r.state == RomState::WrongName || r.state == RomState::Corrupt) all_correct = false;
         v.roms.push_back(std::move(r));
     }
 
     if (v.roms.empty()) return v;
+    // L'archive du jeu est la, entiere : ce qui manque vient d'un BIOS ou
+    // d'un parent absent. Dire « missing » faisait croire que le jeu lui-meme
+    // manquait, alors que le joueur venait de le telecharger.
+    if (!all_present && !own_missing && inherited_missing && own && archive_for && game_for) {
+        v.status = "incomplete";
+        std::string name = game.romof;
+        for (int depth = 0; depth < 8 && !name.empty(); ++depth) {
+            Game ancestor = game_for(name, game.system);
+            if (ancestor.name.empty()) break;
+            if (!archive_for(ancestor)) v.missing_sets.push_back(ancestor.name);
+            if (ancestor.romof == name) break;
+            name = ancestor.romof;
+        }
+        return v;
+    }
     if (!all_present)      v.status = "missing";
     else if (!all_correct) v.status = "incorrect";
     else                   v.status = "available";
@@ -491,9 +512,10 @@ struct CachePass {
         if (!g.disks.empty()) v.status = combine_status(v.status, evaluate_disks(g, roots).status);
         if (v.status.empty()) return;    // only nodumps
         ++out.evaluated;
-        if (v.status == "available")      ++out.available;
-        else if (v.status == "incorrect") ++out.incorrect;
-        else                              ++out.missing;
+        if (v.status == "available")       ++out.available;
+        else if (v.status == "incorrect")  ++out.incorrect;
+        else if (v.status == "incomplete") ++out.incomplete;
+        else                               ++out.missing;
         if (v.status == g.status) return;
         // The folder of the set's own archive, like the live scan records it :
         // what lets a ROM directory removed from Settings take its sets'

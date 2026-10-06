@@ -295,7 +295,7 @@ public:
      * ne la repose PAS a un joueur connecte, pour qui il n'y a rien a
      * corriger.
      */
-    bool was_account_asked_this_version() const;
+    bool was_account_asked() const;
     void record_account_answer();
     void record_hiscore_answer(bool publish);
 

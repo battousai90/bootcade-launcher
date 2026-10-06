@@ -110,6 +110,10 @@ Fold fold(const Card& card, bool open_by_default,
 // Chevron et resume selon que la carte est ouverte ou fermee.
 void refresh_fold(const Fold& f);
 
+// Ouvre une adresse web ou un dossier dans l'application par defaut du
+// bureau. Rend false si rien n'a pu l'ouvrir (l'appelant le dit au joueur).
+bool open_uri(const std::string& uri, Gtk::Window* parent = nullptr);
+
 // Taille commune des fenetres de travail (Settings, ROM Manager, Controller
 // Configuration) : 1400 x 900, bornee a 90 % de l'ecran de `near`.
 inline constexpr int kWorkWindowWidth  = 1400;
@@ -354,8 +358,14 @@ public:
                                          const ColumnOptions& options = ColumnOptions());
     // Une colonne de cases a cocher ; l'appelant recoit le chemin de la
     // ligne cliquee et bascule la valeur dans son modele.
+    // `on_header`, s'il est donne, pose une case dans l'en-tete : un clic
+    // coche (true) ou decoche (false) toutes les lignes affichees.
     Gtk::TreeViewColumn* add_check_column(const Gtk::TreeModelColumn<bool>& column,
-                                         const sigc::slot<void, const Glib::ustring&>& on_toggled);
+                                         const sigc::slot<void, const Glib::ustring&>& on_toggled,
+                                         const sigc::slot<void, bool>& on_header = {});
+    // Remet la case de l'en-tete d'accord avec les lignes affichees : cochee
+    // si toutes le sont, vide si aucune, a moitie entre les deux.
+    void refresh_header_check();
 
     // Clic droit : la ligne visee est selectionnee (sans defaire une
     // selection multiple qui la contient deja), puis l'ecran est appele avec
@@ -368,6 +378,8 @@ private:
     Gtk::ScrolledWindow m_scroll;
     Gtk::TreeView       m_view;
     sigc::signal<void, const Gtk::TreeModel::Path&, Gtk::TreeViewColumn*, GdkEventButton*> m_context_menu;
+    Gtk::CheckButton*   m_header_check = nullptr;
+    const Gtk::TreeModelColumn<bool>* m_check_column = nullptr;
 };
 
 /* Le journal d'un traitement : un texte monospace qui defile, avec, si

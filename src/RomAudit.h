@@ -97,6 +97,11 @@ struct GameEntry {
     // missing set plus an orphan, and Fix MOVES the archive to Import, which
     // files it under the right name : a copy left the old one behind.
     bool misnamed_archive = false;
+    // Le BIOS ou le parent absent sans lequel ce set ne peut pas tourner
+    // (« BIOS msx.zip »), vide s'il ne lui manque rien. Ne change pas le
+    // verdict du set (conforme ou non au DAT) : il dit seulement pourquoi un
+    // set correct ne demarre pas.
+    std::string missing_dependency;
 };
 
 // A BIOS set that is not available, and how many sets depend on it: in a

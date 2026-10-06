@@ -13,6 +13,7 @@
 #include "SettingsPanel.h"
 #include "SettingsUi.h"
 #include "AppUpdater.h"
+#include "RomResolve.h"
 #include "DownloadDialog.h"
 #include "HostLibraries.h"
 #include "GameListSetup.h"
@@ -563,12 +564,11 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // Deferred: a modal dialog raised from here would be parented to a window
     // that is not on screen yet. Idle runs it once the main loop is up, which
     // is after main.cpp has shown us.
-    if (!m_settings_panel.was_hiscore_asked())
-        Glib::signal_idle().connect_once(
-            sigc::mem_fun(*this, &MainWindow::ask_hiscore_optin));
-    // Deja repondu, mais a la question d'avant les comptes : voir
-    // ask_hiscore_account_again. Le meme report, pour la meme raison.
-    else if (!m_settings_panel.was_account_asked_this_version())
+    // Jamais posee, ou posee avant que la question ne parle du compte : dans
+    // les deux cas, ask_hiscore_account_again attend de savoir si une
+    // session est ouverte. Un joueur deja connecte n'a rien a se faire
+    // demander.
+    if (!m_settings_panel.was_hiscore_asked() || !m_settings_panel.was_account_asked())
         Glib::signal_idle().connect_once(
             sigc::mem_fun(*this, &MainWindow::ask_hiscore_account_again));
     else
@@ -1860,10 +1860,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_app_update_infobar.signal_response().connect([this](int id) {
         if (id == Gtk::RESPONSE_OK) { start_app_update(); return; }
         if (id == Gtk::RESPONSE_HELP) {
-            try {
-                Gio::AppInfo::launch_default_for_uri(
-                    "https://github.com/battousai90/bootcade-launcher/releases/latest");
-            } catch (const Glib::Error&) { /* pas de navigateur : rien a faire */ }
+            SettingsUi::open_uri("https://github.com/battousai90/bootcade-launcher/releases/latest", this);
         }
         // Pendant l'installation, la croix ne doit rien interrompre : le
         // bandeau reste, c'est lui qui dit ou on en est.
@@ -2079,6 +2076,15 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // bouton « Update », apparait aussi dans la fenetre principale.
     m_settings_panel.signal_update_found().connect([this] { check_app_update_async(true); });
     check_app_update_async();
+    m_status_rules_dispatcher.connect([this] {
+        m_cached_games = load_all_catalogs();
+        m_search_blobs.clear();
+        { std::lock_guard<std::mutex> lk(m_filter_mutex); m_filtered_games.clear(); }
+        populate_filter_tree();
+        filter_games();
+        update_status_bar_stats();
+    });
+    refresh_statuses_if_rules_changed();
     // Rafraîchissement de fond : sans lui, le score d'un autre joueur
     // n'apparaîtrait qu'au prochain démarrage du lanceur.
     Glib::signal_timeout().connect_seconds([this]() {
@@ -2450,6 +2456,12 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     } else if (status == "incorrect") {
         add_pill("● " + _("Incorrect"), "pill-warn");
         add_pill(_("CRC mismatch"), nullptr);
+    } else if (status == "incomplete") {
+        // Le jeu est la ; ce qui manque est nomme, en toutes lettres.
+        add_pill("\u26A0 " + _("Incomplete"), "pill-warn");
+        const std::string what = missing_dependencies(name, system,
+                                     Glib::ustring(row[m_columns.m_col_emulator]).raw());
+        add_pill(what.empty() ? _("BIOS or parent missing") : _("Missing: ") + what, "pill-warn");
     } else {
         add_pill("● " + _("Missing"), "pill-muted");
     }
@@ -2640,6 +2652,34 @@ void MainWindow::set_dock_position(const std::string& pos) {
     save_launch_prefs();
 }
 
+/* Ce qui manque a un jeu « incomplete » : son BIOS, son parent.
+ *
+ * Remonte la chaine romof dans la liste chargee et nomme chaque ancetre
+ * absent, en clair : « BIOS msx.zip ». C'est ce que le joueur doit aller
+ * chercher ; un statut seul ne lui dit pas quoi faire. */
+std::string MainWindow::missing_dependencies(const std::string& name, const std::string& system,
+                                             const std::string& emulator) const {
+    auto find = [&](const std::string& n) -> const Game* {
+        for (const auto& g : m_cached_games)
+            if (g.name == n && g.system == system && g.emulator == emulator) return &g;
+        return nullptr;
+    };
+    const Game* g = find(name);
+    std::vector<std::string> parts;
+    std::string up = g ? g->romof : std::string();
+    for (int depth = 0; depth < 8 && !up.empty(); ++depth) {
+        const Game* a = find(up);
+        if (!a) break;
+        if (a->status != "available" && a->status != "incorrect" && a->status != "incomplete")
+            parts.push_back((a->is_bios ? _("BIOS ") : _("parent game ")) + a->name + ".zip");
+        if (a->romof == up) break;
+        up = a->romof;
+    }
+    std::string out;
+    for (const auto& p : parts) out += (out.empty() ? "" : ", ") + p;
+    return out;
+}
+
 void MainWindow::on_play_clicked() {
     /* Le jeu a lancer est celui que le volet de details MONTRE.
      *
@@ -2665,6 +2705,24 @@ void MainWindow::on_play_clicked() {
         emulator_id = m_last_selected_emulator;
     }
     if (rom_name.empty()) return;   // vraiment aucun jeu a lancer
+
+    // Un jeu dont il manque le BIOS ou le parent ne demarrera pas : le dire,
+    // nommement, plutot que lancer un emulateur qui se ferme sans un mot.
+    for (const auto& g : m_cached_games) {
+        if (g.name != rom_name || g.system != game_system || g.emulator != (emulator_id.empty() ? "fbneo" : emulator_id))
+            continue;
+        if (g.status == "incomplete") {
+            const std::string what = missing_dependencies(g.name, g.system, g.emulator);
+            SettingsUi::notice(*this, _("This game cannot start yet"),
+                Glib::ustring::compose(_("%1 is in your library, but it needs %2, which is not.\n\n"
+                                         "Get it with ROM Manager › Download from Bootcade, then play."),
+                                       g.description.empty() ? g.name : g.description,
+                                       what.empty() ? std::string(_("its BIOS or parent game")) : what).raw(),
+                "bc-warning.svg");
+            return;
+        }
+        break;
+    }
     
     // === Jeu MAME : autre emulateur, autre chemin ===
     //
@@ -2947,9 +3005,46 @@ void MainWindow::on_play_clicked() {
         return;
     }
     
-    // FBNeo needs ROM paths configured in its config file
-    // We'll update the FBNeo config to include all our ROM paths, then launch
-    update_fbneo_config(roms_paths);
+    /* Les dossiers que FinalBurn Neo fouillera.
+     *
+     * Il ne descend PAS dans les sous-dossiers. Une bibliotheque rangee par
+     * systeme (Roms/Library/FBNeo/FinalBurn Neo - Arcade Games/...) restait
+     * donc invisible : le jeu ne se lancait pas, sans un mot. On lui donne,
+     * dans l'ordre : le dossier ou se trouve CE jeu, puis chaque dossier de
+     * ROMs et ses sous-dossiers, dans la limite de ses 20 emplacements.
+     * Plusieurs archives du meme nom (1941 en arcade et en SuprGrafx) : celle
+     * dont le dossier porte le nom du systeme du jeu. */
+    std::vector<std::string> launch_dirs;
+    {
+        namespace fs = std::filesystem;
+        auto add = [&launch_dirs](const std::string& d) {
+            if (!d.empty() && launch_dirs.size() < 20 &&
+                std::find(launch_dirs.begin(), launch_dirs.end(), d) == launch_dirs.end())
+                launch_dirs.push_back(d);
+        };
+        const std::string zip_name = rom_name + ".zip";
+        std::string best, first;
+        for (const auto& root : roms_paths) {
+            std::error_code ec;
+            for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+                 !ec && it != end; it.increment(ec)) {
+                if (it->path().filename() != zip_name) continue;
+                const std::string dir = it->path().parent_path().string();
+                if (first.empty()) first = dir;
+                if (it->path().parent_path().filename().string().find(game_system) != std::string::npos) { best = dir; break; }
+            }
+            if (!best.empty()) break;
+        }
+        add(best.empty() ? first : best);
+        for (const auto& root : roms_paths) {
+            add(root);
+            std::error_code ec;
+            for (fs::directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+                 !ec && it != end; it.increment(ec))
+                if (it->is_directory(ec)) add(it->path().string());
+        }
+    }
+    update_fbneo_config(launch_dirs);
     
     
     // Set the correct system in FBNeo config before launching
@@ -3300,12 +3395,18 @@ void MainWindow::update_fbneo_config(const std::vector<std::string>& roms_paths)
         normalized_paths.push_back(path_with_slash);
     }
     
-    // Read the current config to check if paths are already correctly set
-    std::ifstream file(config_file);
-    if (!file.is_open()) {
-        std::cout << "Warning: Could not open FBNeo config file: " << config_file << std::endl;
-        return;
+    // Read the current config to check if paths are already correctly set.
+    // Absent sur une installation neuve : FinalBurn Neo ne l'ecrit qu'en
+    // quittant. Abandonner ici le laissait demarrer sans aucun dossier de
+    // ROMs, et le jeu ne se lancait pas, sans un mot. On le cree : ses autres
+    // reglages gardent leurs valeurs par defaut.
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(config_file).parent_path(), ec);
     }
+    std::ifstream file(config_file);
+    if (!file.is_open())
+        std::cout << "[INFO] Creating FBNeo config file: " << config_file << std::endl;
     
     std::vector<std::string> lines;
     std::string line;
@@ -4023,7 +4124,7 @@ void MainWindow::on_quit() {
 }
 
 void MainWindow::update_status_bar_stats() {
-    int total = 0, available = 0, incorrect = 0, missing = 0, error = 0;
+    int total = 0, available = 0, incorrect = 0, missing = 0, incomplete = 0, error = 0;
 
     // Count stats from filtered games (much faster than re-filtering)
     std::lock_guard<std::mutex> lock(m_filter_mutex);
@@ -4031,6 +4132,7 @@ void MainWindow::update_status_bar_stats() {
         total++;
         if (game->status == "available") available++;
         else if (game->status == "incorrect") incorrect++;
+        else if (game->status == "incomplete") incomplete++;
         else if (game->status == "missing") missing++;
         else error++;
     }
@@ -4048,6 +4150,8 @@ void MainWindow::update_status_bar_stats() {
     };
     add_stat(SettingsUi::tone_hex(*this, "success").c_str(), available, _("Available"));
     add_stat(SettingsUi::tone_hex(*this, "warning").c_str(), incorrect, _("Incorrect"));
+    if (incomplete > 0)
+        add_stat(SettingsUi::tone_hex(*this, "warning").c_str(), incomplete, _("Incomplete"));
     add_stat(SettingsUi::tone_hex(*this, "muted").c_str(),   missing,   _("Missing"));
     if (error > 0) add_stat(SettingsUi::tone_hex(*this, "error").c_str(), error, _("Error"));
 
@@ -4277,7 +4381,7 @@ Gtk::Widget* MainWindow::make_game_card(const Gtk::TreeModel::Row& row) {
 
     const std::string dot = SettingsUi::tone_hex(*this,
                               status == "available" ? "success"
-                            : status == "incorrect" ? "warning"
+                            : (status == "incorrect" || status == "incomplete") ? "warning"
                             : status == "missing"   ? "disabled" : "muted");
 
     auto* card = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
@@ -4324,7 +4428,7 @@ Gtk::Widget* MainWindow::make_game_card(const Gtk::TreeModel::Row& row) {
     auto* slbl = Gtk::make_managed<Gtk::Label>();
     // The ◆ rides on the system line rather than getting a row of its own: a
     // card is 176 px wide, and a second line would push the title out.
-    slbl->set_markup("<span foreground=\"" + std::string(dot) + "\">●</span> " +
+    slbl->set_markup("<span foreground=\"" + std::string(dot) + "\">" + (status == "incomplete" ? "\u26A0" : "●") + "</span> " +
                      Glib::Markup::escape_text(system) +
                      (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
                         ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "info") + "\">◆</span>") : ""));
@@ -4515,13 +4619,20 @@ Gtk::Widget* MainWindow::make_list_row(const Gtk::TreeModel::Row& row) {
 
     const std::string dot = SettingsUi::tone_hex(*this,
                               status == "available" ? "success"
-                            : status == "incorrect" ? "warning"
+                            : (status == "incorrect" || status == "incomplete") ? "warning"
                             : status == "missing"   ? "disabled" : "muted");
     const char* pill_cls = status == "available" ? "pill-ok"
                          : status == "incorrect" ? "pill-warn" : "pill-muted";
     std::string status_txt = status == "available" ? _("Available")
                            : status == "incorrect" ? _("Incorrect")
                            : status == "missing"   ? _("Missing") : status;
+    // Incomplet : un panneau, pas une pastille, et l'infobulle nomme ce qui
+    // manque. C'est le seul etat ou le joueur a quelque chose a faire.
+    const bool incomplete = status == "incomplete";
+    if (incomplete) {
+        const std::string what = missing_dependencies(name, system, Glib::ustring(row[m_columns.m_col_emulator]).raw());
+        status_txt = _("Incomplete") + std::string(" : ") + (what.empty() ? _("BIOS or parent missing") : _("missing ") + what);
+    }
 
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
     box->get_style_context()->add_class("mlist-row");
@@ -4606,7 +4717,9 @@ Gtk::Widget* MainWindow::make_list_row(const Gtk::TreeModel::Row& row) {
      * s'appelle STATUS, et l'infobulle donne le mot pour qui en doute.
      */
     auto* pill = Gtk::make_managed<Gtk::Label>();
-    pill->set_markup("<span foreground=\"" + dot + "\">\u25CF</span>");
+    pill->set_markup(incomplete
+        ? "<span foreground=\"" + dot + "\" size=\"x-large\" weight=\"bold\">\u26A0</span>"
+        : "<span foreground=\"" + dot + "\">\u25CF</span>");
     pill->set_size_request(kColStatus, -1);
     pill->set_valign(Gtk::ALIGN_CENTER);
     pill->set_tooltip_text(status_txt);
@@ -5217,14 +5330,14 @@ void MainWindow::on_about_fbneo() {
     // Our fork : the build the launcher actually downloads/runs.
     auto fork_button = SettingsUi::button(_("Our Linux fork (code)"), "bc-external.svg");
     fork_button->signal_clicked().connect([this]() {
-        spawn_process({"xdg-open", "https://github.com/battousai90/FBNeo"});
+        SettingsUi::open_uri("https://github.com/battousai90/FBNeo", this);
     });
     button_box->pack_start(*fork_button);
 
     // Official upstream project : for general documentation/credits.
     auto github_button = SettingsUi::button(_("Official FinalBurn Neo (upstream)"), "bc-globe.svg");
     github_button->signal_clicked().connect([this]() {
-        spawn_process({"xdg-open", "https://github.com/finalburnneo/FBNeo"});
+        SettingsUi::open_uri("https://github.com/finalburnneo/FBNeo", this);
     });
     button_box->pack_start(*github_button);
 
@@ -5240,7 +5353,7 @@ void MainWindow::on_about_fbneo() {
     license_button->signal_clicked().connect([fbneo_dir]() {
         std::string license_path = fbneo_dir + "/license.txt";
         if (std::filesystem::exists(license_path)) {
-            spawn_process({"xdg-open", license_path});
+            SettingsUi::open_uri(Glib::filename_to_uri(license_path));
         }
     });
     button_box->pack_start(*license_button);
@@ -5250,7 +5363,7 @@ void MainWindow::on_about_fbneo() {
     whatsnew_button->signal_clicked().connect([fbneo_dir]() {
         std::string whatsnew_path = fbneo_dir + "/whatsnew.html";
         if (std::filesystem::exists(whatsnew_path)) {
-            spawn_process({"xdg-open", whatsnew_path});
+            SettingsUi::open_uri(Glib::filename_to_uri(whatsnew_path));
         }
     });
     button_box->pack_start(*whatsnew_button);
@@ -5260,7 +5373,7 @@ void MainWindow::on_about_fbneo() {
     help_button->signal_clicked().connect([fbneo_dir]() {
         std::string help_path = fbneo_dir + "/fbneo.chm";
         if (std::filesystem::exists(help_path)) {
-            spawn_process({"xdg-open", help_path});
+            SettingsUi::open_uri(Glib::filename_to_uri(help_path));
         }
     });
     button_box->pack_start(*help_button);
@@ -5427,10 +5540,9 @@ void MainWindow::ask_hiscore_account_again() {
      * nouvelle : elle a ete donnee sur une promesse qui n'est plus tenue. La
      * question est donc reposee une fois, et une seule, a eux seuls.
      */
-    /* Reposee a CHAQUE nouvelle version tant que le probleme dure : un
-     * joueur qui a repondu « plus tard » il y a trois versions, ou qui arrive
-     * d'une version qui promettait encore qu'aucun compte n'etait necessaire,
-     * ne verrait jamais rien autrement.
+    /* Posee une seule fois au joueur qui avait repondu avant que la
+     * question ne parle du compte. Ensuite, plus jamais : le choix se change
+     * dans Settings › Online, et « Sign in » reste en haut de la fenetre.
      *
      * Jamais reposee a un joueur connecte : pour lui tout fonctionne, et une
      * question sans objet a chaque mise a jour serait du harcelement.
@@ -5451,7 +5563,7 @@ void MainWindow::ask_hiscore_account_again() {
         m_settings_panel.save_to_file(AppContext::get_config_path());
         return;
     }
-    if (m_settings_panel.was_account_asked_this_version()) return;
+    if (m_settings_panel.was_account_asked()) return;
     ask_hiscore_optin();
 }
 
@@ -6968,6 +7080,27 @@ void MainWindow::on_scan_progress() {
     }
 }
 
+/* Les statuts enregistres datent de la regle d'avant.
+ *
+ * Un jeu a qui il manque son BIOS restait « missing » jusqu'au prochain scan,
+ * que rien ne poussait le joueur a relancer : la mise a jour qui ajoutait
+ * « incomplete » ne se voyait donc pas. Une seule fois par version de la
+ * regle, les statuts de FinalBurn Neo sont rejuges depuis le cache du scan
+ * (aucune archive relue), en arriere-plan, puis la liste se recharge. MAME
+ * n'est pas concerne : ses DAT n'ont ni BIOS ni parent a heriter. */
+void MainWindow::refresh_statuses_if_rules_changed() {
+    constexpr int kStatusRules = 2;   // 2 : « incomplete » (BIOS ou parent absent)
+    if (m_database->getScanMetadata("status_rules", 0) >= kStatusRules) return;
+    std::thread([this, alive = m_alive_token, db = m_database] {
+        const auto r = RomResolve::resolve_all_from_cache(db, DatSource::roms_paths_for("fbneo"), "fbneo");
+        std::cout << "[INFO] Statuses re-judged : " << r.changed << " changed, "
+                  << r.incomplete << " incomplete" << std::endl;
+        if (!r.cancelled) db->setScanMetadata("status_rules", kStatusRules);
+        std::lock_guard<std::mutex> live(alive->mutex);
+        if (alive->alive) m_status_rules_dispatcher.emit();
+    }).detach();
+}
+
 void MainWindow::on_scan_finished() {
     std::cout << "[INFO] ROM scan completed" << std::endl;
     
@@ -7419,7 +7552,7 @@ void MainWindow::populate_filter_tree() {
     for (const auto& [status, count] : status_counts) {
         const std::string color = SettingsUi::tone_hex(*this,
                                     status == "available" ? "success"
-                                  : status == "incorrect" ? "warning"
+                                  : (status == "incorrect" || status == "incomplete") ? "warning"
                                   : status == "missing"   ? "disabled" : "muted");
         auto child = m_model_filters->append(status_root->children());
         (*child)[m_filter_columns.m_col_icon] = status_dot(color);
@@ -8202,7 +8335,7 @@ void MainWindow::open_web(const std::string& path) {
     // silence aupres de Keycloak, qui reconnait la session du navigateur.
     std::string url = "https://bootcade.netlify.app" + path;
     if (BootcadeAuth::signed_in()) url += "?sso=1";
-    gtk_show_uri_on_window(GTK_WINDOW(gobj()), url.c_str(), GDK_CURRENT_TIME, nullptr);
+    SettingsUi::open_uri(url, this);
 }
 
 void MainWindow::build_account_button() {

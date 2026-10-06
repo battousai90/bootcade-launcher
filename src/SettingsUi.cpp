@@ -1,5 +1,8 @@
 // src/SettingsUi.cpp
 #include "SettingsUi.h"
+#include <gio/gio.h>
+#include <sstream>
+#include "AppContext.h"
 
 #include <algorithm>
 #include <iostream>
@@ -645,7 +648,8 @@ Gtk::TreeViewColumn* Table::add_text_column(const std::string& title,
 }
 
 Gtk::TreeViewColumn* Table::add_check_column(const Gtk::TreeModelColumn<bool>& column,
-                                             const sigc::slot<void, const Glib::ustring&>& on_toggled) {
+                                             const sigc::slot<void, const Glib::ustring&>& on_toggled,
+                                             const sigc::slot<void, bool>& on_header) {
     auto* renderer = Gtk::make_managed<Gtk::CellRendererToggle>();
     renderer->set_activatable(true);
     renderer->signal_toggled().connect(on_toggled);
@@ -653,8 +657,41 @@ Gtk::TreeViewColumn* Table::add_check_column(const Gtk::TreeModelColumn<bool>& c
     col->add_attribute(renderer->property_active(), column);
     col->set_resizable(false);
     col->set_expand(false);
+    /* La case de l'en-tete, comme dans tout gestionnaire de fichiers.
+     *
+     * « Select all » et « Select none » existaient, en bas a gauche, loin du
+     * tableau : apres un audit qui coche 29 000 jeux manquants, on ne voyait
+     * pas comment tout decocher. C'est la colonne entiere qui recoit le clic
+     * (une case posee dans un en-tete de GTK ne le recoit pas elle-meme). */
+    if (on_header) {
+        m_check_column = &column;
+        m_header_check = Gtk::make_managed<Gtk::CheckButton>();
+        m_header_check->set_tooltip_text(_("Select all / none"));
+        m_header_check->show();
+        col->set_widget(*m_header_check);
+        col->set_clickable(true);
+        col->signal_clicked().connect([this, on_header] {
+            // Toutes cochees : on decoche. Sinon (aucune, ou une partie) : on coche.
+            const bool all = m_header_check->get_active() && !m_header_check->get_inconsistent();
+            on_header(!all);
+            refresh_header_check();
+        });
+    }
     m_view.append_column(*col);
     return col;
+}
+
+void Table::refresh_header_check() {
+    if (!m_header_check || !m_check_column) return;
+    size_t on = 0, total = 0;
+    if (auto model = m_view.get_model()) {
+        for (const auto& row : model->children()) {
+            ++total;
+            if (row.get_value(*m_check_column)) ++on;
+        }
+    }
+    m_header_check->set_inconsistent(on > 0 && on < total);
+    m_header_check->set_active(total > 0 && on == total);
 }
 
 // ── LogPanel ───────────────────────────────────────────────────────────────
@@ -1074,6 +1111,100 @@ void dim_behind(Gtk::Window& win, Gtk::Window& main) {
         if (open_count[m] > 0 && --open_count[m] == 0)
             m->get_style_context()->remove_class("behind-work");
     });
+}
+
+namespace {
+
+// L'environnement a transmettre a un programme du bureau.
+//
+// Une AppImage modifie le sien a son demarrage : ses bibliotheques
+// (LD_LIBRARY_PATH), ses modules GIO et GTK, son XDG_DATA_DIRS. Un navigateur
+// lance avec cet environnement charge les bibliotheques de Bootcade au lieu
+// des siennes, et ne demarre pas : sur Bazzite, ou Firefox est un Flatpak,
+// « Open browser » ne faisait rien. Hors AppImage, l'environnement est rendu
+// tel quel.
+std::vector<std::string> clean_environment() {
+    std::vector<std::string> out;
+    const bool appimage = std::getenv("APPIMAGE") != nullptr;
+    const char* mount = std::getenv("APPDIR");
+    const std::string appdir = mount ? mount : "";
+    static const char* const drop[] = {
+        "LD_LIBRARY_PATH", "LD_PRELOAD", "GIO_MODULE_DIR", "GIO_EXTRA_MODULES",
+        "GDK_PIXBUF_MODULE_FILE", "GDK_PIXBUF_MODULEDIR", "GSETTINGS_SCHEMA_DIR",
+        "GTK_PATH", "GTK_DATA_PREFIX", "GTK_EXE_PREFIX", "GTK_IM_MODULE_FILE",
+        "GTK_THEME", "GDK_BACKEND", "GI_TYPELIB_PATH", "APPDIR", "APPIMAGE", "ARGV0", "OWD",
+    };
+    for (char** e = environ; e && *e; ++e) {
+        std::string kv = *e;
+        const std::string key = kv.substr(0, kv.find('='));
+        if (appimage) {
+            bool skip = false;
+            for (const char* d : drop) if (key == d) { skip = true; break; }
+            if (skip) continue;
+            // Les listes de chemins perdent ceux qui pointent dans l'AppImage.
+            if ((key == "XDG_DATA_DIRS" || key == "PATH") && !appdir.empty()) {
+                std::string kept, value = kv.substr(key.size() + 1), part;
+                std::istringstream parts(value);
+                while (std::getline(parts, part, ':'))
+                    if (!part.empty() && part.rfind(appdir, 0) != 0) kept += (kept.empty() ? "" : ":") + part;
+                kv = key + "=" + kept;
+            }
+        }
+        out.push_back(kv);
+    }
+    return out;
+}
+
+// Le portail du bureau (org.freedesktop.portal.OpenURI) : il ouvre l'adresse
+// dans le navigateur choisi par le joueur, lance par le bureau lui-meme, donc
+// avec SON environnement et non celui de Bootcade. Present sur GNOME, KDE et
+// Bazzite ; absent, l'appel echoue vite et on passe a la suite.
+bool open_with_portal(const std::string& uri) {
+    GError* err = nullptr;
+    GDBusConnection* bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &err);
+    if (!bus) { if (err) g_error_free(err); return false; }
+    GVariant* ret = g_dbus_connection_call_sync(
+        bus, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.OpenURI", "OpenURI",
+        g_variant_new("(ssa{sv})", "", uri.c_str(), nullptr),
+        nullptr, G_DBUS_CALL_FLAGS_NONE, 5000, nullptr, &err);
+    g_object_unref(bus);
+    if (!ret) {
+        if (err) { std::cerr << "[OPEN] portal: " << err->message << std::endl; g_error_free(err); }
+        return false;
+    }
+    g_variant_unref(ret);
+    return true;
+}
+
+}  // namespace
+
+bool open_uri(const std::string& uri, Gtk::Window* parent) {
+    if (uri.empty()) return false;
+    const bool is_file = uri.rfind("file:", 0) == 0;
+
+    // Dans le Flatpak, GTK passe deja par le portail, et c'est la seule voie.
+    if (AppContext::in_flatpak()) {
+        GError* err = nullptr;
+        const bool ok = gtk_show_uri_on_window(parent ? parent->gobj() : nullptr, uri.c_str(),
+                                               GDK_CURRENT_TIME, &err);
+        if (err) { std::cerr << "[OPEN] " << err->message << std::endl; g_error_free(err); }
+        return ok;
+    }
+    // Le portail n'ouvre pas les dossiers par OpenURI (il faut OpenFile et un
+    // descripteur) : un dossier va directement a xdg-open.
+    if (!is_file && open_with_portal(uri)) return true;
+
+    try {
+        Glib::spawn_async("", std::vector<std::string>{"xdg-open", uri}, clean_environment(),
+                          Glib::SPAWN_SEARCH_PATH);
+        return true;
+    } catch (const Glib::Error& e) {
+        std::cerr << "[OPEN] xdg-open: " << e.what() << std::endl;
+    }
+    try { return Gio::AppInfo::launch_default_for_uri(uri); }
+    catch (const Glib::Error& e) { std::cerr << "[OPEN] " << e.what() << std::endl; }
+    return false;
 }
 
 }  // namespace SettingsUi

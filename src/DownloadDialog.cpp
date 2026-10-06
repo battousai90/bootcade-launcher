@@ -1,5 +1,6 @@
 // src/DownloadDialog.cpp
 #include "DownloadDialog.h"
+#include "DefaultFolders.h"
 #include "i18n.h"
 #include "SettingsUi.h"
 #include "IconManager.h"
@@ -43,7 +44,7 @@ std::string DownloadDialog::choose_fbneo_folder(Gtk::Window& parent, const std::
     // Les versions precedentes l'installaient a la racine du dossier
     // personnel : on n'y reinstalle pas, on propose un vrai dossier.
     if (folder.empty() || fs::equivalent(folder, home, ec))
-        folder = home / "Bootcade" / "FBNeo";
+        folder = DefaultFolders::sub("Emulators/FBNeo");
     else if (!ask)
         return folder.string();
 

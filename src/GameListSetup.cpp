@@ -1,5 +1,6 @@
 // src/GameListSetup.cpp
 #include "GameListSetup.h"
+#include "DefaultFolders.h"
 #include "AppContext.h"
 #include "DatSource.h"
 #include "GenerateDAT.h"
@@ -20,8 +21,7 @@ namespace fs = std::filesystem;
 namespace GameListSetup {
 
 std::string default_fbneo_folder() {
-    const char* home = std::getenv("HOME");
-    return (fs::path(home ? home : ".") / "Bootcade" / "DAT" / "FBNeo").string();
+    return DefaultFolders::sub("Support/DAT/FBNeo");
 }
 
 std::string adopt_fbneo_folder() {

@@ -624,7 +624,8 @@ RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
         });
     rep.cancelled = rep.cancelled || rep.statuses.cancelled;
     say(std::to_string(rep.statuses.available) + " available, " + std::to_string(rep.statuses.incorrect)
-        + " incorrect, " + std::to_string(rep.statuses.missing) + " missing; "
+        + " incorrect, " + std::to_string(rep.statuses.incomplete) + " incomplete (BIOS or parent missing), "
+        + std::to_string(rep.statuses.missing) + " missing; "
         + std::to_string(rep.statuses.changed) + " status(es) changed");
     return rep;
 }

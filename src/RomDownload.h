@@ -60,6 +60,10 @@ struct Result {
     long        http_status = 0;    // 0 : nothing answered
     std::string path;               // the zip written, when ok
     std::string reason;             // why not, in the server's words when it gave some
+    // Le serveur a refuse SANS dire pourquoi : ce n'est pas le compte ni le
+    // quota (qui portent toujours une raison), c'est lui qui n'a pas pu
+    // envoyer le fichier. Inutile d'essayer les suivants.
+    bool        server_fault = false;
 };
 Result download(const std::string& dat_header, const std::string& name,
                 const std::string& dest_dir, const std::atomic<bool>& cancelled,
