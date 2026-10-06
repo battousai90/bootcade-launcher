@@ -118,6 +118,8 @@ public:
      */
     Gtk::HeaderBar&     header_bar()             { return m_headerbar; }
     sigc::signal<void>& signal_close_requested() { return m_sig_close; }
+    // Le bouton « Check for updates now » a trouve une version plus recente.
+    sigc::signal<void>& signal_update_found() { return m_sig_update_found; }
     sigc::signal<void>& signal_save_requested()  { return m_sig_save; }
     // Un FinalBurn Neo vient d'etre telecharge et retenu : la fenetre
     // principale prepare sa liste des jeux dans la foulee.
@@ -330,6 +332,7 @@ private:
     Gtk::Button m_btn_close;
     Gtk::Box    m_tabbar{Gtk::ORIENTATION_HORIZONTAL, 8};
     Gtk::Stack  m_pages;
+    Gtk::ScrolledWindow m_pages_scroll;
     Gtk::Box    m_footer{Gtk::ORIENTATION_HORIZONTAL, 10};
     Gtk::Button m_btn_restore_defaults;
     Gtk::Button m_btn_cancel;
@@ -337,6 +340,7 @@ private:
     std::vector<Gtk::ToggleButton*> m_tabs_buttons;
     bool m_tab_switching{false};
     sigc::signal<void> m_sig_close;
+    sigc::signal<void> m_sig_update_found;
     sigc::signal<void> m_sig_save;
     sigc::signal<void> m_sig_fbneo_installed;
 
@@ -380,11 +384,8 @@ private:
     int  m_grip_start_height{0};
     int  m_grip_max_height{900};
     Glib::RefPtr<Gtk::GestureDrag> m_grip_drag;
-    sigc::connection m_fit_conn;
     void set_roms_list_height(int height);
     void apply_roms_list_height();
-    // Ramene la fenetre a la hauteur de la page affichee.
-    void fit_to_page();
 
     // Other entries
     Gtk::Entry m_entry_dat;

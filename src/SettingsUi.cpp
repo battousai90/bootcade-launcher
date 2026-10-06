@@ -9,6 +9,7 @@
 #include "i18n.h"
 
 #include <cmath>
+#include <map>
 #include <memory>
 #include <cstdio>
 #include <fstream>
@@ -1023,6 +1024,56 @@ void refresh_fold(const Fold& f) {
     const std::string text = (!open && f.describe) ? f.describe() : std::string();
     f.summary->set_text(text);
     f.summary->set_visible(!text.empty());
+}
+
+/* Une seule taille pour les fenetres de travail.
+ *
+ * Chacune avait la sienne (1180 de large, 1400 x 900, ou la hauteur de son
+ * contenu) : passer de l'une a l'autre faisait sauter le cadre. La reference
+ * est un ecran 1920 x 1080, celui d'une Steam Machine branchee sur une TV
+ * (1080p, ou 4K affichee a 200 %) : 1400 x 900 y tient avec la barre des
+ * taches et la barre de titre. La borne a 90 % de la zone de travail ne sert
+ * qu'aux ecrans plus petits. */
+void size_work_window(Gtk::Window& win, Gtk::Window* near) {
+    int w = kWorkWindowWidth, h = kWorkWindowHeight;
+    auto display = Gdk::Display::get_default();
+    Glib::RefPtr<Gdk::Monitor> monitor;
+    if (display) {
+        if (near && near->get_window())
+            monitor = display->get_monitor_at_window(near->get_window());
+        if (!monitor) monitor = display->get_primary_monitor();
+        if (!monitor && display->get_n_monitors() > 0) monitor = display->get_monitor(0);
+    }
+    if (monitor) {
+        Gdk::Rectangle work;
+        monitor->get_workarea(work);
+        if (work.get_width() > 0)  w = std::min(w, work.get_width()  * 9 / 10);
+        if (work.get_height() > 0) h = std::min(h, work.get_height() * 9 / 10);
+    }
+    win.set_default_size(w, h);
+    win.get_style_context()->add_class("work-window");
+}
+
+/* Distinguer la fenetre de travail de la fenetre principale.
+ *
+ * Les deux ont le meme fond sombre : posee par-dessus, une fenetre de
+ * reglages se confondait avec ce qu'il y avait derriere. La fenetre
+ * principale s'efface donc (voir « behind-work » dans la feuille de style),
+ * mais seulement quand elle n'est pas active : ces fenetres ne sont pas
+ * modales, et un clic sur la bibliotheque doit la rendre lisible aussitot.
+ * Un compteur, parce que Settings, ROM Management et les manettes peuvent
+ * etre ouvertes ensemble. map / unmap plutot que show / hide : une fenetre
+ * detruite sans avoir ete cachee passe tout de meme par unmap. */
+void dim_behind(Gtk::Window& win, Gtk::Window& main) {
+    static std::map<Gtk::Window*, int> open_count;
+    Gtk::Window* m = &main;
+    win.signal_map().connect([m] {
+        if (open_count[m]++ == 0) m->get_style_context()->add_class("behind-work");
+    });
+    win.signal_unmap().connect([m] {
+        if (open_count[m] > 0 && --open_count[m] == 0)
+            m->get_style_context()->remove_class("behind-work");
+    });
 }
 
 }  // namespace SettingsUi

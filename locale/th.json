@@ -1793,7 +1793,6 @@
   "FinalBurn Neo cannot start": "ไม่สามารถเริ่ม FinalBurn Neo ได้",
   "FinalBurn Neo cannot start yet": "FinalBurn Neo ยังเริ่มทำงานไม่ได้",
   "It needs libraries that are not installed on this computer:": "ต้องใช้ไลบรารีที่ยังไม่ได้ติดตั้งบนคอมพิวเตอร์เครื่องนี้:",
-  "On Ubuntu or Debian, install them with:": "บน Ubuntu หรือ Debian ติดตั้งด้วยคำสั่ง:",
   "Install them with your package manager, then try again.": "ติดตั้งด้วยตัวจัดการแพ็กเกจของคุณ แล้วลองอีกครั้ง",
   "The emulator stopped right away. Start it from a terminal to read its error.": "อีมูเลเตอร์หยุดทำงานทันที ให้เปิดจากเทอร์มินัลเพื่ออ่านข้อผิดพลาด",
   "Libraries are missing: click Test Emulator for details.": "ไลบรารีขาดหายไป: คลิกทดสอบอีมูเลเตอร์เพื่อดูรายละเอียด",
@@ -1832,5 +1831,12 @@
   "The folder that holds your ROM archives (.zip files).": "โฟลเดอร์ที่เก็บไฟล์ ROM ของคุณ (ไฟล์ .zip)",
   "The game list could not be downloaded": "ไม่สามารถดาวน์โหลดรายชื่อเกมได้",
   "The game list could not be written": "ไม่สามารถเขียนรายชื่อเกมได้",
-  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "รายชื่อเกมที่ FinalBurn Neo เล่นได้ ดาวน์โหลดจากเซิร์ฟเวอร์ Bootcade"
+  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "รายชื่อเกมที่ FinalBurn Neo เล่นได้ ดาวน์โหลดจากเซิร์ฟเวอร์ Bootcade",
+  "On %1, install them with:": "บน %1 ติดตั้งด้วยคำสั่ง:",
+  "Then restart the computer: on this system, new packages only become active after a restart.": "จากนั้นรีสตาร์ทคอมพิวเตอร์: บนระบบนี้ แพ็กเกจใหม่จะใช้งานได้หลังรีสตาร์ทเท่านั้น",
+  "Try again": "ลองอีกครั้ง",
+  "Download page": "หน้าดาวน์โหลด",
+  "Updating to Bootcade %1. Bootcade restarts on its own when it is done.": "กำลังอัปเดตเป็น Bootcade %1 เมื่อเสร็จแล้ว Bootcade จะรีสตาร์ทเอง",
+  "Bootcade %1 is installed. Restarting...": "ติดตั้ง Bootcade %1 แล้ว กำลังรีสตาร์ท...",
+  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "ไม่สามารถติดตั้ง Bootcade %1 โดยอัตโนมัติได้ คุณสามารถลองอีกครั้ง หรือดาวน์โหลดจากหน้าดาวน์โหลด"
 }

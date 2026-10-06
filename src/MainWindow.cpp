@@ -12,6 +12,7 @@
 #include "DatSource.h"
 #include "SettingsPanel.h"
 #include "SettingsUi.h"
+#include "AppUpdater.h"
 #include "DownloadDialog.h"
 #include "HostLibraries.h"
 #include "GameListSetup.h"
@@ -554,6 +555,11 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // all, and that is exactly the case that needs a name generated for it.
     m_settings_panel.ensure_hiscore_identity();
     load_launch_prefs();
+    fit_first_launch_geometry();
+    // Lu une seule fois, ici : load_launch_prefs est rappele a la fermeture
+    // des reglages, et ne doit pas masquer en cours de route le guide qu'un
+    // scan vient de remplir de son resultat.
+    m_setup_dismissed = m_setup_guide_done;
     // Deferred: a modal dialog raised from here would be parented to a window
     // that is not on screen yet. Idle runs it once the main loop is up, which
     // is after main.cpp has shown us.
@@ -1532,7 +1538,8 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
      * centrale qui est flexible, elle doit donc ceder, jamais imposer.
      */
     m_content_paned.pack1(m_center_box, true, true);
-    // Recalculee a chaque redimensionnement de la fenetre.
+    // Relue a chaque redimensionnement : ne change que si la fenetre passe
+    // sur un autre ecran.
     signal_size_allocate().connect([this](Gtk::Allocation&) {
         update_dock_width();
     });
@@ -1826,18 +1833,36 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_app_update_infobar.set_message_type(Gtk::MESSAGE_INFO);
     m_app_update_infobar.set_show_close_button(true);
     m_app_update_infobar.set_no_show_all(true);
-    dynamic_cast<Gtk::Container*>(m_app_update_infobar.get_content_area())
-        ->add(m_app_update_label);
-    m_app_update_label.show();
-    m_app_update_infobar.add_button(_("Download"), Gtk::RESPONSE_OK);
+    {
+        /* « Update » fait tout : telecharger, verifier, installer, relancer.
+         * « Download page » reste pour le cas ou Bootcade ne sait pas se
+         * mettre a jour lui-meme (installation qu'il ne reconnait pas) ou
+         * vient d'echouer : le joueur garde toujours une issue. */
+        auto* area = dynamic_cast<Gtk::Box*>(m_app_update_infobar.get_content_area());
+        area->set_orientation(Gtk::ORIENTATION_VERTICAL);
+        area->set_spacing(6);
+        m_app_update_label.set_xalign(0.0f);
+        m_app_update_label.set_line_wrap(true);
+        area->pack_start(m_app_update_label, Gtk::PACK_SHRINK);
+        m_app_update_progress.set_no_show_all(true);
+        m_app_update_progress.set_show_text(true);
+        area->pack_start(m_app_update_progress, Gtk::PACK_SHRINK);
+        m_app_update_label.show();
+    }
+    m_app_update_page_button = m_app_update_infobar.add_button(_("Download page"), Gtk::RESPONSE_HELP);
+    m_app_update_button      = m_app_update_infobar.add_button(_("Update"), Gtk::RESPONSE_OK);
+    m_app_update_button->get_style_context()->add_class("accent-button");
     m_app_update_infobar.signal_response().connect([this](int id) {
-        if (id == Gtk::RESPONSE_OK) {
+        if (id == Gtk::RESPONSE_OK) { start_app_update(); return; }
+        if (id == Gtk::RESPONSE_HELP) {
             try {
                 Gio::AppInfo::launch_default_for_uri(
                     "https://github.com/battousai90/bootcade-launcher/releases/latest");
             } catch (const Glib::Error&) { /* pas de navigateur : rien a faire */ }
         }
-        m_app_update_infobar.hide();
+        // Pendant l'installation, la croix ne doit rien interrompre : le
+        // bandeau reste, c'est lui qui dit ou on en est.
+        if (!m_app_updating) m_app_update_infobar.hide();
     });
     m_app_update_infobar.hide();
     m_main_box.pack_start(m_app_update_infobar, Gtk::PACK_SHRINK);
@@ -2022,6 +2047,16 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
 
     m_fbneo_update_dispatcher.connect(sigc::mem_fun(*this, &MainWindow::on_fbneo_update_check_result));
     m_app_update_dispatcher.connect(sigc::mem_fun(*this, &MainWindow::on_app_update_result));
+    m_app_update_progress_dispatcher.connect([this] {
+        double f;
+        { std::lock_guard<std::mutex> lock(m_app_update_mutex); f = m_app_update_fraction; }
+        m_app_update_progress.set_fraction(f);
+        m_app_update_progress.set_text(std::to_string(static_cast<int>(f * 100)) + " %");
+    });
+    m_app_update_done_dispatcher.connect(sigc::mem_fun(*this, &MainWindow::on_app_update_done));
+    // Une nouvelle version trouvee depuis les reglages : le bandeau, avec son
+    // bouton « Update », apparait aussi dans la fenetre principale.
+    m_settings_panel.signal_update_found().connect([this] { check_app_update_async(true); });
     check_app_update_async();
     // Rafraîchissement de fond : sans lui, le score d'un autre joueur
     // n'apparaîtrait qu'au prochain démarrage du lanceur.
@@ -2568,6 +2603,8 @@ void MainWindow::set_dock_position(const std::string& pos) {
         // masquer le probleme de place au lieu de le resoudre.
         m_details_scroll.set_min_content_width(460);
         m_details_scroll.set_min_content_height(-1);
+        m_last_alloc_width = 0;   // la largeur de l'ecran s'applique aussitot
+        update_dock_width();
     } else {
         m_details_scroll.set_min_content_width(-1);
         m_details_scroll.set_min_content_height(270); // fits the side-by-side artworks
@@ -3740,6 +3777,8 @@ void MainWindow::build_setup_guide() {
     skip->set_halign(Gtk::ALIGN_CENTER);
     skip->signal_clicked().connect([this] {
         m_setup_dismissed = true;
+        m_setup_guide_done = true;
+        save_launch_prefs();
         refresh_setup_guide();
     });
     column->pack_start(*skip, Gtk::PACK_SHRINK);
@@ -3748,9 +3787,11 @@ void MainWindow::build_setup_guide() {
     column->show_all();
 }
 
-/* Visible tant que rien n'est jouable. Les etapes se relisent a chaque
- * appel : l'etat vient des reglages et de la base, jamais d'un drapeau qui
- * pourrait mentir. */
+/* Visible tant que rien n'est jouable, et seulement jusqu'a ce que le joueur
+ * ait fait un scan complet ou choisi « Show the game list » : ces deux gestes
+ * sont retenus dans config.json (setup_guide_done). Sans cela, une machine
+ * sans ROMs revoyait le guide a chaque demarrage. Les etapes se relisent a
+ * chaque appel : leur etat vient des reglages et de la base. */
 void MainWindow::refresh_setup_guide() {
     if (!m_setup_steps) return;
 
@@ -3882,15 +3923,10 @@ void MainWindow::on_settings_clicked() {
     m_settings_win = dialog;
     dialog->set_title(_("Settings"));
     dialog->set_modal(false);
-    /* La hauteur est laissee a -1 : « pas de defaut ».
-     *
-     * GTK prend alors la hauteur NATURELLE du contenu, ce qui est exactement
-     * ce qu'on veut depuis que les pages ne defilent plus : la fenetre fait la
-     * taille de ce qu'elle a a montrer, ni plus, ni moins. Une hauteur fixe
-     * rognait la derniere carte ou laissait une bande morte selon l'onglet.
-     * La largeur, elle, est imposee : la maquette tient sur deux colonnes de
-     * cartes, et plus etroit les pages Emulator et Online se replient. */
-    dialog->set_default_size(1180, -1);
+    // Taille commune des fenetres de travail ; les pages defilent dedans.
+    SettingsUi::size_work_window(*dialog, this);
+    SettingsUi::dim_behind(*dialog, *this);
+    dialog->set_position(Gtk::WIN_POS_CENTER);
     dialog->set_titlebar(m_settings_panel.header_bar());
     dialog->get_content_area()->set_spacing(0);
     dialog->get_content_area()->pack_start(m_settings_panel);
@@ -4872,6 +4908,7 @@ const ControllerConfig* MainWindow::controller_profile_for(const std::string& fb
 void MainWindow::present_controller_dialog(ControllerDialog* dlg, const std::string& cfg_path) {
     m_controller_win = dlg;
     dlg->set_modal(false);
+    SettingsUi::dim_behind(*dlg, *this);
     /* La destruction attend la fin du traitement de l'evenement.
      *
      * La fenetre porte sa propre barre de titre, donc son bouton de
@@ -6385,7 +6422,7 @@ static bool version_is_newer(const std::string& candidate, const std::string& cu
     return false;
 }
 
-void MainWindow::check_app_update_async() {
+void MainWindow::check_app_update_async(bool asked) {
     // Un build de DEVELOPPEMENT ne recoit jamais cette banniere.
     //
     // Elle s'adresse a un joueur qui a installe un paquet, dont la version est
@@ -6395,35 +6432,102 @@ void MainWindow::check_app_update_async() {
     // jour son depot, et lui proposer de telecharger une release est au mieux
     // inutile, au pire trompeur : son build contient souvent du code PLUS
     // recent que la release qu'on lui propose.
+    // BOOTCADE_FORCE_UPDATE=1 : pour essayer la mise a jour automatique sur
+    // un build de test, la derniere release est proposee meme si elle n'est
+    // pas plus recente.
+    const char* force_env = std::getenv("BOOTCADE_FORCE_UPDATE");
+    const bool forced = force_env && *force_env && std::string(force_env) != "0";
     const std::string me = BOOTCADE_VERSION;
-    if (me.find('+') != std::string::npos || me.find(".dirty") != std::string::npos)
+    if (!forced && (me.find('+') != std::string::npos || me.find(".dirty") != std::string::npos))
         return;
 
     // « Check for updates automatically ». Eteint, le lanceur ne demande plus
     // rien de lui-meme ; le bouton « Check for updates now » des reglages, lui,
     // reste utilisable : c'est bien la verification AUTOMATIQUE qu'on coupe.
-    if (!m_settings_panel.checks_updates_auto()) return;
+    // Le bouton « Check for updates now » passe outre : c'est une demande.
+    if (!forced && !asked && !m_settings_panel.checks_updates_auto()) return;
 
-    std::thread([this, alive = m_alive_token]() {
+    std::thread([this, alive = m_alive_token, forced]() {
         auto r = FbneoUpdateCheck::fetch_launcher_latest();
         if (!r.ok) return;                  // hors ligne ou quota : on se tait
         std::string tag = r.tag;
         if (!tag.empty() && tag[0] == 'v') tag.erase(0, 1);
-        if (!version_is_newer(tag, BOOTCADE_VERSION)) return;
+        if (!forced && !version_is_newer(tag, BOOTCADE_VERSION)) return;
 
         std::lock_guard<std::mutex> live(alive->mutex);
         if (!alive->alive) return;
         m_app_update_tag = tag;
+        m_app_update_assets = r.assets;
         m_app_update_dispatcher.emit();
     }).detach();
 }
 
 void MainWindow::on_app_update_result() {
-    if (m_app_update_tag.empty()) return;
+    if (m_app_update_tag.empty() || m_app_updating) return;
     m_app_update_label.set_text(Glib::ustring::compose(
         _("Bootcade %1 is available. You are running %2."),
         m_app_update_tag, BOOTCADE_VERSION));
+    // Une installation que Bootcade ne reconnait pas : pas de bouton qui ne
+    // pourrait qu'echouer, la page de telechargement seulement.
+    const bool can_update = AppUpdater::detect() != AppUpdater::Install::Unknown;
+    m_app_update_button->set_visible(can_update);
+    m_app_update_page_button->set_visible(true);
+    m_app_update_progress.hide();
     m_app_update_infobar.show();
+}
+
+void MainWindow::start_app_update() {
+    if (m_app_updating) return;
+    m_app_updating = true;
+    m_app_update_button->hide();
+    m_app_update_page_button->hide();
+    m_app_update_infobar.set_show_close_button(false);
+    m_app_update_label.set_text(Glib::ustring::compose(
+        _("Updating to Bootcade %1. Bootcade restarts on its own when it is done."),
+        m_app_update_tag));
+    m_app_update_progress.set_fraction(0.0);
+    m_app_update_progress.set_text("0 %");
+    m_app_update_progress.show();
+
+    std::thread([this, alive = m_alive_token, assets = m_app_update_assets]() {
+        const std::string err = AppUpdater::install(assets, [this, alive](double f, const std::string&) {
+            std::lock_guard<std::mutex> live(alive->mutex);
+            if (!alive->alive) return;
+            { std::lock_guard<std::mutex> lock(m_app_update_mutex); m_app_update_fraction = f; }
+            m_app_update_progress_dispatcher.emit();
+        });
+        std::lock_guard<std::mutex> live(alive->mutex);
+        if (!alive->alive) return;
+        { std::lock_guard<std::mutex> lock(m_app_update_mutex); m_app_update_error = err; }
+        m_app_update_done_dispatcher.emit();
+    }).detach();
+}
+
+void MainWindow::on_app_update_done() {
+    std::string err;
+    { std::lock_guard<std::mutex> lock(m_app_update_mutex); err = m_app_update_error; }
+    if (err.empty()) {
+        m_app_update_label.set_text(Glib::ustring::compose(
+            _("Bootcade %1 is installed. Restarting..."), m_app_update_tag));
+        m_app_update_progress.set_fraction(1.0);
+        // Un court delai : le message a le temps de s'afficher avant que la
+        // fenetre ne se ferme.
+        Glib::signal_timeout().connect_once([this] {
+            AppUpdater::restart_after_exit();
+            on_quit();
+        }, 800);
+        return;
+    }
+    std::cerr << "[UPDATE] " << err << std::endl;
+    m_app_updating = false;
+    m_app_update_progress.hide();
+    m_app_update_infobar.set_show_close_button(true);
+    m_app_update_label.set_text(Glib::ustring::compose(
+        _("Bootcade %1 could not be installed automatically. You can try again, or get it from the download page."),
+        m_app_update_tag));
+    m_app_update_button->set_label(_("Try again"));
+    m_app_update_button->show();
+    m_app_update_page_button->show();
 }
 
 void MainWindow::on_fbneo_update_check_result() {
@@ -6827,6 +6931,11 @@ void MainWindow::on_scan_dialog_complete() {
 
     m_scan_in_progress = false;
     m_button_scan.set_sensitive(true);
+    /* Les quatre etapes ont ete faites : le guide ne reviendra plus au
+     * demarrage, meme sans jeu jouable. Il reste affiche jusqu'a la fin de
+     * cette session, le temps de lire ce que le scan a trouve. */
+    m_setup_guide_done = true;
+    save_launch_prefs();
     refresh_setup_guide();   // l'etape « Scan » n'est plus en cours
 
     // Replace progress bar with a brief "done" (or "cancelled") message then hide after 4 s
@@ -7866,7 +7975,7 @@ void MainWindow::load_launch_prefs() {
         if (j.contains("launch_integerscale")) m_launch_integerscale = j["launch_integerscale"].get<bool>();
         if (j.contains("detail_dock_position")) {
             std::string p = j["detail_dock_position"].get<std::string>();
-            m_dock_position = (p == "right") ? "right" : "bottom";
+            m_dock_position = (p == "bottom") ? "bottom" : "right";
         }
         if (j.contains("grid_columns")) {
             int n = j["grid_columns"].get<int>();
@@ -7882,12 +7991,15 @@ void MainWindow::load_launch_prefs() {
          * defaut a chaque lancement : c'est ce que « ne pas retenir l'etat de
          * la fenetre » veut dire. */
         const bool restore_geometry = j.value("restore_window_state", true);
+        m_geometry_saved = restore_geometry
+            && ((j.contains("win_w") && j.contains("win_h")) || j.value("win_max", false));
         if (restore_geometry && j.contains("win_w") && j.contains("win_h"))
             set_default_size(j["win_w"].get<int>(), j["win_h"].get<int>());
         if (restore_geometry && j.contains("win_x") && j.contains("win_y"))
             move(j["win_x"].get<int>(), j["win_y"].get<int>());
         if (restore_geometry && j.value("win_max", false)) maximize();
 
+        m_setup_guide_done     = j.value("setup_guide_done", false);
         m_last_selected_rom    = j.value("startup_last_selected_game", std::string());
         m_last_selected_system = j.value("startup_last_selected_system", std::string());
         m_last_selected_emulator = j.value("startup_last_selected_emulator", std::string());
@@ -7906,6 +8018,33 @@ void MainWindow::load_launch_prefs() {
     m_settings_panel.set_launch_flags(m_launch_fullscreen, m_launch_integerscale);
 }
 
+/* Taille de la fenetre quand aucune n'est memorisee.
+ *
+ * 1760 x 1000 ne tient pas sur un ecran 1080p une fois la barre des taches
+ * retiree : le gestionnaire de fenetres la rognait ou la debordait, et le
+ * premier ecran qu'un joueur decouvre sur une Steam Machine neuve, branchee
+ * sur une TV, etait de travers. Jusqu'au 1080p, on occupe donc tout l'ecran ;
+ * au-dela, la taille par defaut, bornee a 90 % de la zone de travail.
+ */
+void MainWindow::fit_first_launch_geometry() {
+    if (m_geometry_saved) return;
+    auto display = Gdk::Display::get_default();
+    if (!display) return;
+    auto monitor = display->get_primary_monitor();
+    if (!monitor && display->get_n_monitors() > 0) monitor = display->get_monitor(0);
+    if (!monitor) return;
+    Gdk::Rectangle work;
+    monitor->get_workarea(work);
+    if (work.get_width() <= 0 || work.get_height() <= 0) return;
+    if (work.get_width() <= 1920 || work.get_height() <= 1080) {
+        maximize();
+        return;
+    }
+    set_default_size(std::min(1760, work.get_width()  * 9 / 10),
+                     std::min(1000, work.get_height() * 9 / 10));
+    set_position(Gtk::WIN_POS_CENTER);
+}
+
 void MainWindow::save_launch_prefs() {
     const std::string cfg = AppContext::get_config_path();
     nlohmann::json j;
@@ -7916,6 +8055,7 @@ void MainWindow::save_launch_prefs() {
     j["launch_fullscreen"]   = m_launch_fullscreen;
     j["launch_integerscale"] = m_launch_integerscale;
     j["detail_dock_position"] = m_dock_position;
+    j["setup_guide_done"] = m_setup_guide_done;
     j["grid_columns"] = m_grid_columns;
     j["startup_last_selected_game"]   = m_last_selected_rom;
     j["startup_last_selected_system"] = m_last_selected_system;
@@ -8439,25 +8579,36 @@ void MainWindow::refresh_mlist_header() {
 }
 
 
-/* La largeur du volet suit celle de la fenetre.
+/* La largeur du volet suit celle de l'ECRAN, pas celle de la fenetre.
  *
  * On agit sur la largeur MINIMALE du volet et non sur la position du
- * separateur : le joueur peut donc toujours l'elargir a la souris, et rien
- * ne vient contrarier son geste au redimensionnement suivant. Les bornes
- * garantissent l'invariant demande : le volet ne disparait jamais, et il
- * n'avale pas la liste sur un ecran modeste.
+ * separateur : le joueur peut donc toujours l'elargir a la souris. Mais cette
+ * largeur minimale fait partie de la taille que la fenetre reclame : la
+ * calculer depuis la largeur de la fenetre bouclait (volet plus large,
+ * fenetre plus large, volet plus large...) et la fenetre tremblait sans fin
+ * derriere chaque boite de dialogue. L'ecran, lui, ne bouge pas. Les bornes
+ * garantissent que le volet ne disparait jamais et n'avale pas la liste.
  */
 void MainWindow::update_dock_width() {
     if (m_dock_position != "right") return;
-    const int w = get_allocated_width();
+    int w = 0;
+    if (auto display = get_display()) {
+        Glib::RefPtr<Gdk::Monitor> monitor;
+        if (auto gdkwin = get_window()) monitor = display->get_monitor_at_window(gdkwin);
+        if (!monitor) monitor = display->get_primary_monitor();
+        if (monitor) {
+            Gdk::Rectangle work;
+            monitor->get_workarea(work);
+            w = work.get_width();
+        }
+    }
     if (w <= 0 || w == m_last_alloc_width) return;
     m_last_alloc_width = w;
 
     int target = static_cast<int>(w * 0.26);
-    if (target < 460) target = 460;
     if (target > 820) target = 820;
-    // Jamais plus du tiers : sur une fenetre etroite, la liste doit rester
-    // le sujet principal.
+    // Jamais plus du tiers : sur un ecran etroit, la liste doit rester le
+    // sujet principal.
     if (target > w / 3) target = w / 3;
     // Plancher absolu : sous cette largeur les valeurs de la fiche ne
     // tiennent plus sur une ligne, et on retomberait dans les coupures.

@@ -138,7 +138,7 @@ private:
     Gtk::Button*        m_btn_audit = nullptr;
     Gtk::Label          m_last_audit;
     Gtk::Label          m_bios_line;
-    Gtk::Box            m_pills{Gtk::ORIENTATION_HORIZONTAL, 8};
+    Gtk::FlowBox        m_pills;   // passe a la ligne quand la place manque
     SettingsUi::Pill*   m_pill_total     = nullptr;
     SettingsUi::Pill*   m_pill_correct   = nullptr;
     SettingsUi::Pill*   m_pill_missing   = nullptr;

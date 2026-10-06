@@ -29,6 +29,9 @@ namespace MameCatalog {
 // Cherche dans le PATH de l'hote : sous Flatpak, MAME vit en dehors du bac a
 // sable, comme FinalBurn Neo.
 std::string find_executable();
+// Le MAME du Flatpak org.mamedev.MAME, par un petit script de lancement pose
+// dans le dossier de configuration. Vide s'il n'est pas installe.
+std::string flatpak_wrapper();
 
 // Vrai si `exe` est un executable que Bootcade peut lancer. Sous Flatpak, le
 // MAME de la distribution (/usr/games/mame) n'existe pas dans le bac a sable :
