@@ -3755,8 +3755,15 @@ std::string released_version() {
 }  // namespace
 
 
-bool SettingsPanel::was_account_asked_this_version() const {
-    return m_account_asked_version == released_version();
+/* Posee UNE fois, et plus jamais.
+ *
+ * Elle revenait a chaque nouvelle version pour qui n'etait pas connecte :
+ * avec la mise a jour automatique, c'etait a chaque mise a jour, et le
+ * joueur qui avait deja dit « OK » se la voyait reposer sans fin. La version
+ * enregistree ne sert plus qu'a savoir qu'il a repondu ; vide, la reponse
+ * date d'avant les comptes, et la question (qui en parle) reste a poser. */
+bool SettingsPanel::was_account_asked() const {
+    return !m_account_asked_version.empty();
 }
 
 

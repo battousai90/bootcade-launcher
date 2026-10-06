@@ -563,12 +563,11 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // Deferred: a modal dialog raised from here would be parented to a window
     // that is not on screen yet. Idle runs it once the main loop is up, which
     // is after main.cpp has shown us.
-    if (!m_settings_panel.was_hiscore_asked())
-        Glib::signal_idle().connect_once(
-            sigc::mem_fun(*this, &MainWindow::ask_hiscore_optin));
-    // Deja repondu, mais a la question d'avant les comptes : voir
-    // ask_hiscore_account_again. Le meme report, pour la meme raison.
-    else if (!m_settings_panel.was_account_asked_this_version())
+    // Jamais posee, ou posee avant que la question ne parle du compte : dans
+    // les deux cas, ask_hiscore_account_again attend de savoir si une
+    // session est ouverte. Un joueur deja connecte n'a rien a se faire
+    // demander.
+    if (!m_settings_panel.was_hiscore_asked() || !m_settings_panel.was_account_asked())
         Glib::signal_idle().connect_once(
             sigc::mem_fun(*this, &MainWindow::ask_hiscore_account_again));
     else
@@ -5427,10 +5426,9 @@ void MainWindow::ask_hiscore_account_again() {
      * nouvelle : elle a ete donnee sur une promesse qui n'est plus tenue. La
      * question est donc reposee une fois, et une seule, a eux seuls.
      */
-    /* Reposee a CHAQUE nouvelle version tant que le probleme dure : un
-     * joueur qui a repondu « plus tard » il y a trois versions, ou qui arrive
-     * d'une version qui promettait encore qu'aucun compte n'etait necessaire,
-     * ne verrait jamais rien autrement.
+    /* Posee une seule fois au joueur qui avait repondu avant que la
+     * question ne parle du compte. Ensuite, plus jamais : le choix se change
+     * dans Settings › Online, et « Sign in » reste en haut de la fenetre.
      *
      * Jamais reposee a un joueur connecte : pour lui tout fonctionne, et une
      * question sans objet a chaque mise a jour serait du harcelement.
@@ -5451,7 +5449,7 @@ void MainWindow::ask_hiscore_account_again() {
         m_settings_panel.save_to_file(AppContext::get_config_path());
         return;
     }
-    if (m_settings_panel.was_account_asked_this_version()) return;
+    if (m_settings_panel.was_account_asked()) return;
     ask_hiscore_optin();
 }
 
