@@ -1849,5 +1849,8 @@
   "Downloading artwork for %1...": "正在下载 %1 的图片...",
   "Looking for missing artwork...": "正在查找缺失的图片...",
   "Downloading: %1 (%2/%3)": "正在下载：%1 (%2/%3)",
-  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "按顺序尝试，直到找到图片。地址可以是包含 previews/ 和 titles/ 的基础文件夹，也可以是使用 {rom}、{desc} 和 {snaps|titles} 的模板。"
+  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "按顺序尝试，直到找到图片。地址可以是包含 previews/ 和 titles/ 的基础文件夹，也可以是使用 {rom}、{desc} 和 {snaps|titles} 的模板。",
+  "Select all / none": "全选 / 全不选",
+  "Could not open a browser.": "无法打开浏览器。",
+  "Could not open the folder.": "无法打开文件夹。"
 }

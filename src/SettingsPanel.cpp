@@ -3276,10 +3276,8 @@ Gtk::Widget* SettingsPanel::build_page_online() {
          * de courriel, double authentification, sessions ouvertes, suppression
          * du compte. « Manage Account » doit mener la, et nulle part ailleurs.
          */
-        auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
-        const std::string url = BootcadeAuth::account_console_url();
-        gtk_show_uri_on_window(win ? GTK_WINDOW(win->gobj()) : nullptr,
-                               url.c_str(), GDK_CURRENT_TIME, nullptr);
+        ui::open_uri(BootcadeAuth::account_console_url(),
+                     dynamic_cast<Gtk::Window*>(get_toplevel()));
     });
     acc_buttons->pack_start(m_button_manage_account, Gtk::PACK_SHRINK);
 
@@ -3468,11 +3466,9 @@ Gtk::Widget* SettingsPanel::build_page_online() {
     m_btn_view_profile.set_image(*ui::image("bc-external.svg", ui::kIconButton));
     m_btn_view_profile.set_always_show_image(true);
     m_btn_view_profile.signal_clicked().connect([this] {
-        auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
         std::string url = "https://bootcade.netlify.app/profile/";
         if (BootcadeAuth::signed_in()) url += "?sso=1";
-        gtk_show_uri_on_window(win ? GTK_WINDOW(win->gobj()) : nullptr,
-                               url.c_str(), GDK_CURRENT_TIME, nullptr);
+        ui::open_uri(url, dynamic_cast<Gtk::Window*>(get_toplevel()));
     });
     m_profile_signed.pack_start(m_btn_view_profile, Gtk::PACK_SHRINK);
     profile.body->pack_start(m_profile_signed, Gtk::PACK_SHRINK);

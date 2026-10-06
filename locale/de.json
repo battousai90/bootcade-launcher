@@ -1849,5 +1849,8 @@
   "Downloading artwork for %1...": "Bilder für %1 werden heruntergeladen...",
   "Looking for missing artwork...": "Fehlende Bilder werden gesucht...",
   "Downloading: %1 (%2/%3)": "Herunterladen: %1 (%2/%3)",
-  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "Der Reihe nach versucht, bis ein Bild gefunden wird. Eine Adresse ist entweder ein Basisordner mit previews/ und titles/ oder ein Muster mit {rom}, {desc} und {snaps|titles}."
+  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "Der Reihe nach versucht, bis ein Bild gefunden wird. Eine Adresse ist entweder ein Basisordner mit previews/ und titles/ oder ein Muster mit {rom}, {desc} und {snaps|titles}.",
+  "Select all / none": "Alle auswählen / keine",
+  "Could not open a browser.": "Es konnte kein Browser geöffnet werden.",
+  "Could not open the folder.": "Der Ordner konnte nicht geöffnet werden."
 }

@@ -49,14 +49,10 @@ LoginDialog::LoginDialog(Gtk::Window& parent)
         // alors rien à saisir, il n'a qu'à confirmer. C'est tout l'intérêt
         // d'ouvrir le navigateur plutôt que de lui laisser l'adresse courte.
         if (m_dc.verification_uri_complete.empty()) return;
-        try {
-            gtk_show_uri_on_window(GTK_WINDOW(gobj()),
-                                   m_dc.verification_uri_complete.c_str(),
-                                   GDK_CURRENT_TIME, nullptr);
-        } catch (...) {
-            // Sans navigateur, le code affiché reste la porte de sortie.
+        // Sans navigateur, le code affiché reste la porte de sortie. L'échec
+        // était avant ignoré : le bouton semblait ne rien faire.
+        if (!SettingsUi::open_uri(m_dc.verification_uri_complete, this))
             m_status.set_text(_("Could not open a browser. Use the code above."));
-        }
     });
 
     m_done.connect(sigc::mem_fun(*this, &LoginDialog::on_poll_done));

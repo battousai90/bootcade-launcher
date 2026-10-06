@@ -1849,5 +1849,8 @@
   "Downloading artwork for %1...": "กำลังดาวน์โหลดภาพของ %1...",
   "Looking for missing artwork...": "กำลังค้นหาภาพที่ขาดหายไป...",
   "Downloading: %1 (%2/%3)": "กำลังดาวน์โหลด: %1 (%2/%3)",
-  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "ลองตามลำดับจนกว่าจะพบภาพ ที่อยู่เป็นได้ทั้งโฟลเดอร์หลักที่มี previews/ และ titles/ หรือรูปแบบที่ใช้ {rom}, {desc} และ {snaps|titles}"
+  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "ลองตามลำดับจนกว่าจะพบภาพ ที่อยู่เป็นได้ทั้งโฟลเดอร์หลักที่มี previews/ และ titles/ หรือรูปแบบที่ใช้ {rom}, {desc} และ {snaps|titles}",
+  "Select all / none": "เลือกทั้งหมด / ไม่เลือก",
+  "Could not open a browser.": "ไม่สามารถเปิดเบราว์เซอร์ได้",
+  "Could not open the folder.": "ไม่สามารถเปิดโฟลเดอร์ได้"
 }

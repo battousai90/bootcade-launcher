@@ -340,7 +340,8 @@ void RomLibraryTab::build_table() {
 
     m_table = Gtk::make_managed<ui::Table>(Gtk::SELECTION_MULTIPLE);
     m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomLibraryTab::row_visible));
-    m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomLibraryTab::on_row_toggled));
+    m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomLibraryTab::on_row_toggled),
+                              [this](bool on) { set_all_checked(on); });
     {
         // Status is painted with the application's state colours, read from
         // the sheet when the tab is on screen (see ensure_colours).
@@ -879,12 +880,18 @@ void RomLibraryTab::on_row_toggled(const Glib::ustring& path) {
 }
 
 void RomLibraryTab::set_all_checked(bool on) {
-    // Only what is visible : "select all" on a filtered table means the rows
-    // one is looking at.
-    for (const auto& frow : m_models.filter->children()) {
-        Gtk::TreeModel::Row row = *m_models.filter->convert_iter_to_child_iter(frow);
+    /* Les lignes affichees, puis la vue detachee le temps de les modifier.
+     * Attachee, chaque case changee relancait filtre et tri : sur 29 000
+     * lignes, tout cocher figeait la fenetre une dizaine de secondes. */
+    std::vector<Gtk::TreeModel::iterator> shown;
+    for (const auto& frow : m_models.filter->children())
+        shown.push_back(m_models.filter->convert_iter_to_child_iter(frow));
+    m_models.detach(m_table->view());
+    for (const auto& it : shown) {
+        Gtk::TreeModel::Row row = *it;
         if (row[m_cols.checkable]) row[m_cols.include] = on;
     }
+    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomLibraryTab::row_visible));
     update_action_buttons();
 }
 
@@ -918,6 +925,7 @@ std::vector<Gtk::TreeModel::Row> RomLibraryTab::fix_candidates() const {
 }
 
 void RomLibraryTab::update_action_buttons() {
+    if (m_table) m_table->refresh_header_check();
     const int n = (int)fix_candidates().size();
     m_btn_fix->set_label(n ? Glib::ustring::compose(_("Fix selected (%1)"), n)
                            : Glib::ustring(_("Fix")));
@@ -1084,8 +1092,7 @@ void RomLibraryTab::search_on_web(const Gtk::TreeModel::Row& row) {
         ? Glib::ustring(row[m_cols.yours])
         : Glib::ustring(row[m_cols.expected]) + " " + Glib::ustring(row[m_cols.system]);
     std::string uri = "https://duckduckgo.com/?q=" + Glib::uri_escape_string(q.raw());
-    try { Gio::AppInfo::launch_default_for_uri(uri); }
-    catch (const Glib::Error& e) { flash(Glib::ustring::compose(_("Could not open a browser: %1"), e.what())); }
+    if (!ui::open_uri(uri)) flash(_("Could not open a browser."));
 }
 
 void RomLibraryTab::toggle_ignore(const Gtk::TreeModel::Row& row) {

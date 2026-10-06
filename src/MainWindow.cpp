@@ -1859,10 +1859,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_app_update_infobar.signal_response().connect([this](int id) {
         if (id == Gtk::RESPONSE_OK) { start_app_update(); return; }
         if (id == Gtk::RESPONSE_HELP) {
-            try {
-                Gio::AppInfo::launch_default_for_uri(
-                    "https://github.com/battousai90/bootcade-launcher/releases/latest");
-            } catch (const Glib::Error&) { /* pas de navigateur : rien a faire */ }
+            SettingsUi::open_uri("https://github.com/battousai90/bootcade-launcher/releases/latest", this);
         }
         // Pendant l'installation, la croix ne doit rien interrompre : le
         // bandeau reste, c'est lui qui dit ou on en est.
@@ -5216,14 +5213,14 @@ void MainWindow::on_about_fbneo() {
     // Our fork : the build the launcher actually downloads/runs.
     auto fork_button = SettingsUi::button(_("Our Linux fork (code)"), "bc-external.svg");
     fork_button->signal_clicked().connect([this]() {
-        spawn_process({"xdg-open", "https://github.com/battousai90/FBNeo"});
+        SettingsUi::open_uri("https://github.com/battousai90/FBNeo", this);
     });
     button_box->pack_start(*fork_button);
 
     // Official upstream project : for general documentation/credits.
     auto github_button = SettingsUi::button(_("Official FinalBurn Neo (upstream)"), "bc-globe.svg");
     github_button->signal_clicked().connect([this]() {
-        spawn_process({"xdg-open", "https://github.com/finalburnneo/FBNeo"});
+        SettingsUi::open_uri("https://github.com/finalburnneo/FBNeo", this);
     });
     button_box->pack_start(*github_button);
 
@@ -5239,7 +5236,7 @@ void MainWindow::on_about_fbneo() {
     license_button->signal_clicked().connect([fbneo_dir]() {
         std::string license_path = fbneo_dir + "/license.txt";
         if (std::filesystem::exists(license_path)) {
-            spawn_process({"xdg-open", license_path});
+            SettingsUi::open_uri(Glib::filename_to_uri(license_path));
         }
     });
     button_box->pack_start(*license_button);
@@ -5249,7 +5246,7 @@ void MainWindow::on_about_fbneo() {
     whatsnew_button->signal_clicked().connect([fbneo_dir]() {
         std::string whatsnew_path = fbneo_dir + "/whatsnew.html";
         if (std::filesystem::exists(whatsnew_path)) {
-            spawn_process({"xdg-open", whatsnew_path});
+            SettingsUi::open_uri(Glib::filename_to_uri(whatsnew_path));
         }
     });
     button_box->pack_start(*whatsnew_button);
@@ -5259,7 +5256,7 @@ void MainWindow::on_about_fbneo() {
     help_button->signal_clicked().connect([fbneo_dir]() {
         std::string help_path = fbneo_dir + "/fbneo.chm";
         if (std::filesystem::exists(help_path)) {
-            spawn_process({"xdg-open", help_path});
+            SettingsUi::open_uri(Glib::filename_to_uri(help_path));
         }
     });
     button_box->pack_start(*help_button);
@@ -8200,7 +8197,7 @@ void MainWindow::open_web(const std::string& path) {
     // silence aupres de Keycloak, qui reconnait la session du navigateur.
     std::string url = "https://bootcade.netlify.app" + path;
     if (BootcadeAuth::signed_in()) url += "?sso=1";
-    gtk_show_uri_on_window(GTK_WINDOW(gobj()), url.c_str(), GDK_CURRENT_TIME, nullptr);
+    SettingsUi::open_uri(url, this);
 }
 
 void MainWindow::build_account_button() {

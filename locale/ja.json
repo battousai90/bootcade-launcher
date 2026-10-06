@@ -1849,5 +1849,8 @@
   "Downloading artwork for %1...": "%1 の画像をダウンロードしています...",
   "Looking for missing artwork...": "不足している画像を探しています...",
   "Downloading: %1 (%2/%3)": "ダウンロード中: %1 (%2/%3)",
-  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "画像が見つかるまで順に試します。アドレスは previews/ と titles/ を含むベースフォルダー、または {rom}、{desc}、{snaps|titles} を使うパターンです。"
+  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "画像が見つかるまで順に試します。アドレスは previews/ と titles/ を含むベースフォルダー、または {rom}、{desc}、{snaps|titles} を使うパターンです。",
+  "Select all / none": "すべて選択 / 選択解除",
+  "Could not open a browser.": "ブラウザーを開けませんでした。",
+  "Could not open the folder.": "フォルダーを開けませんでした。"
 }

@@ -256,7 +256,8 @@ void RomImportTab::build_results() {
 
     m_table = Gtk::make_managed<ui::Table>(Gtk::SELECTION_MULTIPLE);
     m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomImportTab::row_visible));
-    m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomImportTab::on_row_toggled));
+    m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomImportTab::on_row_toggled),
+                              [this](bool on) { set_all_checked(on); });
     {
         auto* renderer = Gtk::make_managed<Gtk::CellRendererText>();
         auto* col = Gtk::make_managed<Gtk::TreeViewColumn>(_("Status"), *renderer);
@@ -846,16 +847,25 @@ void RomImportTab::on_row_toggled(const Glib::ustring& path) {
 }
 
 void RomImportTab::set_all_checked(bool on) {
-    for (const auto& frow : m_models.filter->children()) {
-        Gtk::TreeModel::Row row = *m_models.filter->convert_iter_to_child_iter(frow);
+    /* Les lignes affichees, puis la vue detachee le temps de les modifier.
+     * Attachee, chaque case changee relancait filtre et tri : sur 29 000
+     * lignes, tout cocher figeait la fenetre une dizaine de secondes. */
+    std::vector<Gtk::TreeModel::iterator> shown;
+    for (const auto& frow : m_models.filter->children())
+        shown.push_back(m_models.filter->convert_iter_to_child_iter(frow));
+    m_models.detach(m_table->view());
+    for (const auto& it : shown) {
+        Gtk::TreeModel::Row row = *it;
         if (!row[m_cols.actionable]) continue;
         row[m_cols.include] = on;
         m_report.sets[(unsigned int)row[m_cols.index]].selected = on;
     }
+    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomImportTab::row_visible));
     update_action_buttons();
 }
 
 void RomImportTab::update_action_buttons() {
+    if (m_table) m_table->refresh_header_check();
     int selected = 0, fixable = 0;
     for (const auto& s : m_report.sets) {
         bool actionable = s.action == RomInbox::Action::Move || s.action == RomInbox::Action::Rebuild;
@@ -899,13 +909,13 @@ void RomImportTab::on_context_menu(const Gtk::TreeModel::Path& path, Gtk::TreeVi
         m_context_menu.append(*Gtk::make_managed<Gtk::SeparatorMenuItem>());
         add(_("Search on web"), [this, s] {
             std::string uri = "https://duckduckgo.com/?q=" + Glib::uri_escape_string(s.game_name + " " + s.system + " rom");
-            try { Gio::AppInfo::launch_default_for_uri(uri); } catch (const Glib::Error& e) { flash(e.what()); }
+            if (!ui::open_uri(uri)) flash(_("Could not open a browser."));
         });
     } else {
         add(_("Copy file name"), [copy, file] { copy(file, _("the file name")); });
         add(_("Search on web"), [this, file] {
             std::string uri = "https://duckduckgo.com/?q=" + Glib::uri_escape_string(fs::path(file.raw()).stem().string() + " rom");
-            try { Gio::AppInfo::launch_default_for_uri(uri); } catch (const Glib::Error& e) { flash(e.what()); }
+            if (!ui::open_uri(uri)) flash(_("Could not open a browser."));
         });
     }
     m_context_menu.show_all();

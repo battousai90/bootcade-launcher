@@ -196,7 +196,8 @@ void RomQuarantineTab::build_table() {
 
     m_table = Gtk::make_managed<ui::Table>(Gtk::SELECTION_MULTIPLE);
     m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomQuarantineTab::row_visible));
-    m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomQuarantineTab::on_row_toggled));
+    m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomQuarantineTab::on_row_toggled),
+                              [this](bool on) { set_all_checked(on); });
     {
         auto* renderer = Gtk::make_managed<Gtk::CellRendererText>();
         auto* col = Gtk::make_managed<Gtk::TreeViewColumn>(_("Reason"), *renderer);
@@ -382,15 +383,24 @@ void RomQuarantineTab::on_row_toggled(const Glib::ustring& path) {
 }
 
 void RomQuarantineTab::set_all_checked(bool on) {
-    for (const auto& frow : m_models.filter->children()) {
-        Gtk::TreeModel::Row row = *m_models.filter->convert_iter_to_child_iter(frow);
+    /* Les lignes affichees, puis la vue detachee le temps de les modifier.
+     * Attachee, chaque case changee relancait filtre et tri : sur 29 000
+     * lignes, tout cocher figeait la fenetre une dizaine de secondes. */
+    std::vector<Gtk::TreeModel::iterator> shown;
+    for (const auto& frow : m_models.filter->children())
+        shown.push_back(m_models.filter->convert_iter_to_child_iter(frow));
+    m_models.detach(m_table->view());
+    for (const auto& it : shown) {
+        Gtk::TreeModel::Row row = *it;
         row[m_cols.include] = on;
         m_items[(unsigned int)row[m_cols.index]].selected = on;
     }
+    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomQuarantineTab::row_visible));
     update_action_buttons();
 }
 
 void RomQuarantineTab::update_action_buttons() {
+    if (m_table) m_table->refresh_header_check();
     int selected = 0, restorable_to_origin = 0;
     for (const auto& it : m_items) {
         if (!it.selected) continue;
@@ -444,8 +454,7 @@ void RomQuarantineTab::on_open_folder() {
     Paths p = m_paths();
     std::error_code ec;
     if (p.quarantine.empty() || !fs::is_directory(p.quarantine, ec)) { flash(_("No quarantine folder to open.")); return; }
-    try { Gio::AppInfo::launch_default_for_uri(Glib::filename_to_uri(p.quarantine)); }
-    catch (const Glib::Error& e) { flash(Glib::ustring::compose(_("Could not open the folder: %1"), e.what())); }
+    if (!ui::open_uri(Glib::filename_to_uri(p.quarantine))) flash(_("Could not open the folder."));
 }
 
 // config.json est aussi ecrit par le panneau de reglages : on relit le fichier

@@ -1163,8 +1163,7 @@ void RomDatTab::on_in_group_toggled(const Glib::ustring& path) {
 void RomDatTab::on_open_folder() {
     std::error_code ec;
     if (group().folder.empty() || !fs::is_directory(group().folder, ec)) { flash(_("No DAT folder to open.")); return; }
-    try { Gio::AppInfo::launch_default_for_uri(Glib::filename_to_uri(group().folder)); }
-    catch (const Glib::Error& e) { flash(Glib::ustring::compose(_("Could not open the folder: %1"), e.what())); }
+    if (!ui::open_uri(Glib::filename_to_uri(group().folder))) flash(_("Could not open the folder."));
 }
 
 // ═══ Content ════════════════════════════════════════════════════════════════
