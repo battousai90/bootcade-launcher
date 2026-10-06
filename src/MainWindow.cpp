@@ -2943,9 +2943,46 @@ void MainWindow::on_play_clicked() {
         return;
     }
     
-    // FBNeo needs ROM paths configured in its config file
-    // We'll update the FBNeo config to include all our ROM paths, then launch
-    update_fbneo_config(roms_paths);
+    /* Les dossiers que FinalBurn Neo fouillera.
+     *
+     * Il ne descend PAS dans les sous-dossiers. Une bibliotheque rangee par
+     * systeme (Roms/Library/FBNeo/FinalBurn Neo - Arcade Games/...) restait
+     * donc invisible : le jeu ne se lancait pas, sans un mot. On lui donne,
+     * dans l'ordre : le dossier ou se trouve CE jeu, puis chaque dossier de
+     * ROMs et ses sous-dossiers, dans la limite de ses 20 emplacements.
+     * Plusieurs archives du meme nom (1941 en arcade et en SuprGrafx) : celle
+     * dont le dossier porte le nom du systeme du jeu. */
+    std::vector<std::string> launch_dirs;
+    {
+        namespace fs = std::filesystem;
+        auto add = [&launch_dirs](const std::string& d) {
+            if (!d.empty() && launch_dirs.size() < 20 &&
+                std::find(launch_dirs.begin(), launch_dirs.end(), d) == launch_dirs.end())
+                launch_dirs.push_back(d);
+        };
+        const std::string zip_name = rom_name + ".zip";
+        std::string best, first;
+        for (const auto& root : roms_paths) {
+            std::error_code ec;
+            for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+                 !ec && it != end; it.increment(ec)) {
+                if (it->path().filename() != zip_name) continue;
+                const std::string dir = it->path().parent_path().string();
+                if (first.empty()) first = dir;
+                if (it->path().parent_path().filename().string().find(game_system) != std::string::npos) { best = dir; break; }
+            }
+            if (!best.empty()) break;
+        }
+        add(best.empty() ? first : best);
+        for (const auto& root : roms_paths) {
+            add(root);
+            std::error_code ec;
+            for (fs::directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+                 !ec && it != end; it.increment(ec))
+                if (it->is_directory(ec)) add(it->path().string());
+        }
+    }
+    update_fbneo_config(launch_dirs);
     
     
     // Set the correct system in FBNeo config before launching
@@ -3296,12 +3333,18 @@ void MainWindow::update_fbneo_config(const std::vector<std::string>& roms_paths)
         normalized_paths.push_back(path_with_slash);
     }
     
-    // Read the current config to check if paths are already correctly set
-    std::ifstream file(config_file);
-    if (!file.is_open()) {
-        std::cout << "Warning: Could not open FBNeo config file: " << config_file << std::endl;
-        return;
+    // Read the current config to check if paths are already correctly set.
+    // Absent sur une installation neuve : FinalBurn Neo ne l'ecrit qu'en
+    // quittant. Abandonner ici le laissait demarrer sans aucun dossier de
+    // ROMs, et le jeu ne se lancait pas, sans un mot. On le cree : ses autres
+    // reglages gardent leurs valeurs par defaut.
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(config_file).parent_path(), ec);
     }
+    std::ifstream file(config_file);
+    if (!file.is_open())
+        std::cout << "[INFO] Creating FBNeo config file: " << config_file << std::endl;
     
     std::vector<std::string> lines;
     std::string line;
