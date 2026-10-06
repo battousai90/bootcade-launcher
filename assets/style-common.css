@@ -54,8 +54,13 @@ headerbar button.titlebutton {
 window.csd:not(.popup) > decoration {
   box-shadow: 0 3px 9px 1px @shadow, 0 0 0 1px @border;
 }
+/* Meme decalage, meme flou, meme etendue qu'au premier plan : seule
+   l'intensite change. GTK deduit de l'ombre la marge invisible autour de la
+   fenetre, et le gestionnaire de fenetres place la fenetre d'apres cette
+   marge : une ombre plus petite en arriere-plan decalait toute la fenetre
+   de quelques pixels a chaque changement de fenetre active. */
 window.csd:not(.popup) > decoration:backdrop {
-  box-shadow: 0 2px 6px 2px alpha(@shadow, 0.5), 0 0 0 1px @border;
+  box-shadow: 0 3px 9px 1px alpha(@shadow, 0.5), 0 0 0 1px @border;
 }
 window.csd.maximized > decoration,
 window.csd.fullscreen > decoration { box-shadow: none; }
@@ -64,6 +69,21 @@ window.csd.tiled-top > decoration,
 window.csd.tiled-right > decoration,
 window.csd.tiled-bottom > decoration,
 window.csd.tiled-left > decoration { box-shadow: 0 0 0 1px @border; }
+/* Fenetres de travail (Settings, ROM Management, Controller Configuration).
+   Meme fond que la fenetre principale : sans marque propre, elles s'y
+   confondaient. Un contour plus franc et une ombre plus profonde les
+   detachent. Ombre IDENTIQUE au premier plan et en arriere-plan, pour la
+   meme raison que plus haut : une marge qui change deplace la fenetre. */
+window.csd.work-window:not(.popup) > decoration,
+window.csd.work-window:not(.popup) > decoration:backdrop {
+  box-shadow: 0 12px 36px 4px alpha(@shadow, 1.6), 0 0 0 1px @border_strong;
+}
+/* La fenetre principale, derriere une fenetre de travail, s'efface tant
+   qu'elle n'est pas active ; un clic dessus la rend lisible aussitot. */
+window.behind-work:backdrop > *:not(decoration) {
+  opacity: 0.45;
+}
+
 /* Sans ombre possible, GTK garde une bande pleine pour saisir le bord et
    redimensionner : elle prend la couleur de la barre, filetee du trait. */
 window.solid-csd > decoration,
@@ -707,7 +727,7 @@ expander > title { min-height: 0; padding: 2px 0; }
 /* ── Barres et pied ──────────────────────────────────────────────────── */
 .cc-window .cc-topbar {
   background-color: @surface;
-  padding: 13px 20px;
+  padding: 7px 20px;
   border-bottom: 1px solid @border;
 }
 .cc-window .cc-footer {
@@ -835,6 +855,10 @@ expander > title { min-height: 0; padding: 2px 0; }
   background-color: alpha(@accent, 0.26);
   border-color: @accent;
 }
+/* La regle generale des boutons de la fenetre (36 px) l'emporte sinon :
+   une ligne de liaison a la hauteur des boutons de Settings, pour que les
+   commandes tiennent sans defiler sur un ecran 1080p. */
+.cc-window button.bind-cell { min-height: 30px; padding: 2px 12px; }
 
 /* Ecran de test : une pastille par bouton, allumee tant qu'on appuie, et une
    barre par axe. */
@@ -897,11 +921,11 @@ expander > title { min-height: 0; padding: 2px 0; }
 /* ── Onglets joueurs : deux grandes pastilles ───────────────────────── */
 .cc-window .cc-tabs > header {
   background-color: @surface;
-  padding: 12px 20px;
+  padding: 7px 20px;
   border-bottom: 1px solid @border;
 }
 .cc-window .cc-tabs tab {
-  min-height: 42px;
+  min-height: 32px;
   min-width: 158px;
   padding: 4px 20px;
   margin-right: 10px;

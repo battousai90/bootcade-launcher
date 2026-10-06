@@ -1793,7 +1793,6 @@
   "FinalBurn Neo cannot start": "FinalBurn Neo ne peut pas démarrer",
   "FinalBurn Neo cannot start yet": "FinalBurn Neo ne peut pas encore démarrer",
   "It needs libraries that are not installed on this computer:": "Il a besoin de bibliothèques qui ne sont pas installées sur cet ordinateur :",
-  "On Ubuntu or Debian, install them with:": "Sur Ubuntu ou Debian, installez-les avec :",
   "Install them with your package manager, then try again.": "Installez-les avec votre gestionnaire de paquets, puis réessayez.",
   "The emulator stopped right away. Start it from a terminal to read its error.": "L'émulateur s'est arrêté aussitôt. Lancez-le depuis un terminal pour lire son erreur.",
   "Libraries are missing: click Test Emulator for details.": "Des bibliothèques manquent : cliquez sur Tester l'émulateur pour le détail.",
@@ -1832,5 +1831,12 @@
   "The folder that holds your ROM archives (.zip files).": "Le dossier qui contient vos archives de ROMs (fichiers .zip).",
   "The game list could not be downloaded": "La liste des jeux n'a pas pu être téléchargée",
   "The game list could not be written": "La liste des jeux n'a pas pu être écrite",
-  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "La liste des jeux que FinalBurn Neo fait tourner, téléchargée depuis le serveur Bootcade."
+  "The list of the games FinalBurn Neo runs, downloaded from the Bootcade server.": "La liste des jeux que FinalBurn Neo fait tourner, téléchargée depuis le serveur Bootcade.",
+  "On %1, install them with:": "Sur %1, installez-les avec :",
+  "Then restart the computer: on this system, new packages only become active after a restart.": "Redémarrez ensuite l'ordinateur : sur ce système, les nouveaux paquets ne sont actifs qu'après un redémarrage.",
+  "Try again": "Réessayer",
+  "Download page": "Page de téléchargement",
+  "Updating to Bootcade %1. Bootcade restarts on its own when it is done.": "Mise à jour vers Bootcade %1. Bootcade redémarre tout seul une fois terminé.",
+  "Bootcade %1 is installed. Restarting...": "Bootcade %1 est installé. Redémarrage...",
+  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "Bootcade %1 n'a pas pu être installé automatiquement. Vous pouvez réessayer, ou le récupérer sur la page de téléchargement."
 }

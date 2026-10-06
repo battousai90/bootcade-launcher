@@ -461,6 +461,8 @@ private:
 
     void update_dock_width();
     int  m_last_alloc_width = 0;
+    bool m_geometry_saved = false;   // config.json porte une taille de fenetre
+    void fit_first_launch_geometry();
     Gtk::TreeView m_treeview_filters;
     Glib::RefPtr<Gtk::TreeStore> m_model_filters;
     
@@ -655,8 +657,22 @@ private:
     Gtk::Label        m_app_update_label;
     Glib::Dispatcher  m_app_update_dispatcher;
     std::string       m_app_update_tag;
-    void check_app_update_async();
+    void check_app_update_async(bool asked = false);
     void on_app_update_result();
+    // Mise a jour automatique : les fichiers de la release annoncee, et
+    // l'avancement du telechargement / de l'installation.
+    std::vector<std::pair<std::string, std::string>> m_app_update_assets;
+    Gtk::ProgressBar  m_app_update_progress;
+    Gtk::Button*      m_app_update_button = nullptr;
+    Gtk::Button*      m_app_update_page_button = nullptr;
+    Glib::Dispatcher  m_app_update_progress_dispatcher;
+    Glib::Dispatcher  m_app_update_done_dispatcher;
+    std::mutex        m_app_update_mutex;
+    double            m_app_update_fraction = 0.0;
+    std::string       m_app_update_error;
+    bool              m_app_updating = false;
+    void start_app_update();
+    void on_app_update_done();
 
     void check_fbneo_update_async();
     void on_fbneo_update_check_result();
@@ -749,7 +765,8 @@ private:
     Gtk::Box            m_center_box{Gtk::ORIENTATION_VERTICAL, 0};
     Gtk::Box            m_setup_guide{Gtk::ORIENTATION_VERTICAL, 0};
     Gtk::Box*           m_setup_steps = nullptr;
-    bool                m_setup_dismissed = false;   // « Show the game list » : pour cette session
+    bool                m_setup_dismissed = false;   // guide masque pour cette session
+    bool                m_setup_guide_done = false;  // config.json : plus jamais au demarrage
     bool                m_preparing_game_list = false;
     bool                m_scan_done_once = false;     // le guide distingue « pas encore » de « rien trouve »
     Gtk::Box            m_center_foot{Gtk::ORIENTATION_HORIZONTAL, 8};
@@ -985,9 +1002,9 @@ private:
     const ControllerConfig* controller_profile_for(const std::string& fbneo_rom_name) const;
     void refresh_reset_settings_item();
 
-    // Detail dock position: "bottom" (default) or "right".
+    // Detail dock position: "right" (default) or "bottom".
     Gtk::ToggleButton m_btn_dock_toggle;
-    std::string       m_dock_position{"bottom"};
+    std::string       m_dock_position{"right"};
     void set_dock_position(const std::string& pos);
     
     // === Thumbnail Downloader ===

@@ -49,6 +49,11 @@ Result fetch_release(const char* url) {
         r.sha          = j.value("target_commitish", "");
         r.tag          = j.value("tag_name", "");
         r.published_at = j.value("published_at", "");
+        if (j.contains("assets") && j["assets"].is_array())
+            for (const auto& a : j["assets"])
+                if (a.is_object())
+                    r.assets.emplace_back(a.value("name", ""),
+                                          a.value("browser_download_url", ""));
         // Le tag suffit : c'est lui qui porte la version. Le commit n'a de
         // sens que pour FBNeo, dont on compare la revision construite.
         r.ok = !r.tag.empty();

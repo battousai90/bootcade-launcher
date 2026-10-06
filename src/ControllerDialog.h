@@ -84,8 +84,7 @@ private:
      * complet empile SOUS la barre du gestionnaire de fenetres donnait deux
      * titres et deux croix pour la meme fenetre. */
     Gtk::HeaderBar m_headerbar;
-    Gtk::Box    m_header{Gtk::ORIENTATION_HORIZONTAL, 11};
-    SettingsUi::Icon m_header_icon{"bc-logo-pad.svg", 26};
+    Gtk::Box    m_header{Gtk::ORIENTATION_HORIZONTAL, 12};
     Gtk::Label  m_header_title;
     Gtk::Label  m_header_sub;
     Gtk::Box    m_topbar{Gtk::ORIENTATION_HORIZONTAL, 18};

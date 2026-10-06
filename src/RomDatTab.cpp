@@ -341,6 +341,13 @@ void RomDatTab::build_source_card() {
     m_radio_site.set_label(_("DAT site — downloads the DAT files from the site that publishes them"));
     m_radio_folder.set_label(_("Local folder — you put the DAT files there yourself"));
     for (auto* r : {&m_radio_emulator, &m_radio_http, &m_radio_url, &m_radio_site, &m_radio_folder}) {
+        // Les libelles passent a la ligne : sur une seule ligne, le plus long
+        // imposait sa largeur a la carte et la coupait au bord de la fenetre.
+        if (auto* lbl = dynamic_cast<Gtk::Label*>(r->get_child())) {
+            lbl->set_line_wrap(true);
+            lbl->set_max_width_chars(56);
+            lbl->set_xalign(0.0f);
+        }
         body->pack_start(*r, Gtk::PACK_SHRINK);
         r->signal_toggled().connect([this, r] { if (r->get_active()) on_source_changed(); });
     }
@@ -561,7 +568,10 @@ void RomDatTab::build_table() {
 
 Gtk::Widget* RomDatTab::fold_card(const ui::Card& card, const std::string& key,
                                   std::function<std::string()> describe) {
-    bool open = true;
+    // Replies par defaut : ce sont des fiches de consultation, et ouvertes
+    // elles poussaient l'onglet hors de la fenetre. Le choix du joueur, lui,
+    // est retenu.
+    bool open = false;
     {
         nlohmann::json j;
         std::ifstream in(AppContext::get_config_path());
@@ -602,8 +612,9 @@ void RomDatTab::refresh_folds() {
 
 void RomDatTab::build_footer() {
     m_footer_label.set_xalign(0.0f);
+    m_footer_label.set_ellipsize(Pango::ELLIPSIZE_END);
     m_footer_label.get_style_context()->add_class("set-sub");
-    m_footer.pack_start(m_footer_label, Gtk::PACK_SHRINK);
+    m_footer.pack_start(m_footer_label, Gtk::PACK_EXPAND_WIDGET);
     m_progress.set_show_text(true);
     m_progress.set_size_request(220, -1);
     m_progress.set_valign(Gtk::ALIGN_CENTER);

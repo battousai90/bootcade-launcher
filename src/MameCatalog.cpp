@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <unordered_map>
@@ -147,7 +148,50 @@ std::string find_executable() {
         if (is_runnable(p)) return p;
     }
     const std::string found = run_capture({"which", "mame"});
-    return found.find('/') == std::string::npos ? std::string() : found;
+    if (found.find('/') != std::string::npos) return found;
+    return flatpak_wrapper();
+}
+
+/* MAME installe en Flatpak (org.mamedev.MAME).
+ *
+ * C'est ainsi que l'installent Bazzite, SteamOS et les autres systemes a
+ * racine en lecture seule : par le magasin d'applications, sans commande
+ * « mame » dans le PATH. Les emplacements usuels ne le trouvaient donc pas,
+ * et Bootcade le disait « Not installed » alors qu'il tournait tres bien.
+ *
+ * Tout Bootcade appelle MAME comme un executable auquel il passe des options
+ * (-version, -listxml, le jeu). Plutot que de reecrire chacun de ces appels,
+ * on pose un petit script qui fait la meme chose par « flatpak run ». Il vit
+ * dans le dossier de configuration, dont le chemin est le meme vu de l'hote
+ * et vu du bac a sable de Bootcade.
+ *
+ * Aucune permission ajoutee : le paquet Flathub declare deja host:ro (les
+ * ROMs, ou qu'elles soient) et home (les reglages que Bootcade y ecrit). */
+std::string flatpak_wrapper() {
+    static const char* const kAppId = "org.mamedev.MAME";
+    if (run_capture({"flatpak", "info", "--show-ref", kAppId}).empty()) return {};
+
+    const std::string path = AppContext::get_user_config_dir() + "/mame-flatpak.sh";
+    const std::string body = std::string("#!/bin/sh\n"
+        "# Ecrit par Bootcade : lance le MAME installe en Flatpak.\n"
+        "exec flatpak run ") + kAppId + " \"$@\"\n";
+    std::string current;
+    {
+        std::ifstream in(path);
+        if (in) current.assign(std::istreambuf_iterator<char>(in), {});
+    }
+    if (current != body) {
+        std::ofstream out(path, std::ios::trunc);
+        if (!out) return {};
+        out << body;
+    }
+    std::error_code ec;
+    std::filesystem::permissions(path,
+        std::filesystem::perms::owner_all | std::filesystem::perms::group_read |
+        std::filesystem::perms::group_exec | std::filesystem::perms::others_read |
+        std::filesystem::perms::others_exec,
+        std::filesystem::perm_options::replace, ec);
+    return ec ? std::string() : path;
 }
 
 std::string installed_build(const std::string& mame_exe) {

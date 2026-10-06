@@ -61,7 +61,7 @@ std::string key_name_from_event(const GdkEventKey* ev) {
  * des pastilles de meme diametre et des colonnes qui tombent en face les unes
  * des autres. Une correction se fait ici, pas dans vingt endroits.
  */
-constexpr int kRowHeight   = 38;   // hauteur d'une ligne de controle
+constexpr int kRowHeight   = 36;   // hauteur d'une ligne de controle
 constexpr int kCellSize    = 34;   // conteneur carre d'un pictogramme de ligne
 constexpr int kCellIcon    = 18;   // pictogramme a l'interieur de ce conteneur
 constexpr int kBadgeSize   = 28;   // pastille numerotee des boutons
@@ -198,16 +198,9 @@ ControllerDialog::ControllerDialog(const std::map<std::string, ControllerConfig>
     }
     m_config = m_profiles[m_active_profile_name];
 
-    /* Largeur de la maquette, hauteur laissee au contenu.
-     *
-     * Deux appels a set_default_size se contredisaient, et le second imposait
-     * 600 px de haut a un ecran qui en demande davantage : d'ou la bande morte
-     * sous les controles des qu'on agrandissait. Une hauteur a -1 veut dire
-     * << pas de defaut >>, et GTK prend alors la hauteur naturelle. Encore
-     * faut-il que la zone defilante la propage, sinon elle annonce son
-     * minimum et la fenetre se replie sur rien.
-     */
-    set_default_size(1180, -1);
+    // Taille commune des fenetres de travail ; l'onglet defile dedans si
+    // l'ecran est trop petit, le pied reste hors du defilement.
+    SettingsUi::size_work_window(*this);
     set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
 
     m_binding_labels.resize(2 * GAME_ACTION_COUNT, nullptr);
@@ -216,6 +209,9 @@ ControllerDialog::ControllerDialog(const std::map<std::string, ControllerConfig>
 
     // Layout: profile bar on top, notebook below
     get_style_context()->add_class("cc-window");
+    // Le meme jeu de styles que Settings et ROM Management : polices,
+    // champs, boutons et interrupteurs identiques d'une fenetre a l'autre.
+    get_style_context()->add_class("set-window");
 
     auto* vbox = get_content_area();
     vbox->set_spacing(0);
@@ -234,24 +230,36 @@ ControllerDialog::ControllerDialog(const std::map<std::string, ControllerConfig>
      * gestionnaire de fenetres : deux titres, deux croix, et un ecran qui ne
      * ressemblait plus au reste de l'application.
      */
-    m_header_icon.set_valign(Gtk::ALIGN_CENTER);
-    m_header_title.set_markup("<b>" +
-        Glib::Markup::escape_text(_("Controller Configuration")) + "</b>");
+    // La tuile violette, le titre et la croix de Settings et ROM Management.
+    m_header_title.set_text(_("Controller Configuration"));
     m_header_title.set_xalign(0.0f);
-    m_header_title.get_style_context()->add_class("cc-title");
+    m_header_title.get_style_context()->add_class("set-head-title");
     m_header_sub.set_text(_("Configure your controllers to play your favorite games"));
     m_header_sub.set_xalign(0.0f);
-    m_header_sub.get_style_context()->add_class("cc-sub");
+    m_header_sub.get_style_context()->add_class("set-head-sub");
 
     auto* head_txt = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
     head_txt->set_valign(Gtk::ALIGN_CENTER);
     head_txt->pack_start(m_header_title, Gtk::PACK_SHRINK);
     head_txt->pack_start(m_header_sub,   Gtk::PACK_SHRINK);
-    m_header.pack_start(m_header_icon, Gtk::PACK_SHRINK);
-    m_header.pack_start(*head_txt,     Gtk::PACK_SHRINK);
+    m_header.pack_start(*SettingsUi::tile("bc-controller.svg", 21, 36, /*accent=*/true),
+                        Gtk::PACK_SHRINK);
+    m_header.pack_start(*head_txt, Gtk::PACK_SHRINK);
 
-    m_headerbar.set_show_close_button(true);
+    // Fermer = annuler, comme le bouton Cancel du pied.
+    auto* close = Gtk::make_managed<Gtk::Button>();
+    close->set_image(*SettingsUi::image("bc-close.svg", 18));
+    close->set_tooltip_text(_("Close"));
+    close->get_style_context()->add_class("set-close");
+    close->set_valign(Gtk::ALIGN_CENTER);
+    close->signal_clicked().connect([this] {
+        response(Gtk::RESPONSE_CANCEL);
+        hide();
+    });
+
+    m_headerbar.set_show_close_button(false);
     m_headerbar.pack_start(m_header);
+    m_headerbar.pack_end(*close);
     /* Titre personnalise vide, comme la fenetre principale : sans lui, GTK
      * dessine SON titre au centre en plus de la marque, et repose le nom de
      * la fenetre sur celui de l'application. */
@@ -748,8 +756,8 @@ void ControllerDialog::build_player_tab(int p) {
     auto* tab_box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 18);
     tab_box->set_margin_start(24);
     tab_box->set_margin_end(24);
-    tab_box->set_margin_top(20);
-    tab_box->set_margin_bottom(22);
+    tab_box->set_margin_top(12);
+    tab_box->set_margin_bottom(12);
 
     /* Trois cartes cote a cote, comme la maquette.
      *
@@ -1035,9 +1043,9 @@ void ControllerDialog::build_player_tab(int p) {
     // Le contenu peut depasser la fenetre sur un petit ecran, et un bouton
     // Save rogne est inutilisable : le pied reste hors du defilement.
     auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
-    scroll->set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
-    scroll->set_propagate_natural_height(true);
-    scroll->set_propagate_natural_width(true);
+    // Les deux sens, sans propager la taille du contenu : la fenetre garde la
+    // taille commune des fenetres de travail, c'est l'onglet qui defile.
+    scroll->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     scroll->add(*tab_box);
 
     /* Onglet avec son pictogramme, comme la maquette : deux grands
@@ -1694,31 +1702,37 @@ void ControllerDialog::open_test_dialog(int p) {
     Gtk::Dialog dlg(_("Controller Testing"), *this,
                     Gtk::DIALOG_MODAL | Gtk::DIALOG_DESTROY_WITH_PARENT);
     dlg.get_style_context()->add_class("cc-window");
+    dlg.get_style_context()->add_class("set-window");
     dlg.set_default_size(1120, -1);
     dlg.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
 
-    // Meme traitement de fenetre que partout ailleurs : une barre de titre
-    // cote client, sa marque a gauche, son unique bouton de fermeture.
+    // Meme en-tete que Settings, ROM Management et Controller Configuration :
+    // la tuile violette, le titre, et notre croix plutot que celle du bureau.
     auto* hb = Gtk::make_managed<Gtk::HeaderBar>();
     {
-        auto* ico = SettingsUi::image("bc-logo-pad.svg", 26);
-        ico->set_valign(Gtk::ALIGN_CENTER);
-        auto* t1 = Gtk::make_managed<Gtk::Label>();
-        t1->set_markup("<b>" + Glib::Markup::escape_text(_("Controller Testing")) + "</b>");
+        auto* t1 = Gtk::make_managed<Gtk::Label>(_("Controller Testing"));
         t1->set_xalign(0.0f);
-        t1->get_style_context()->add_class("cc-title");
+        t1->get_style_context()->add_class("set-head-title");
         auto* t2 = Gtk::make_managed<Gtk::Label>(_("Test your controller inputs in real time"));
         t2->set_xalign(0.0f);
-        t2->get_style_context()->add_class("cc-sub");
+        t2->get_style_context()->add_class("set-head-sub");
         auto* col = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
         col->set_valign(Gtk::ALIGN_CENTER);
         col->pack_start(*t1, Gtk::PACK_SHRINK);
         col->pack_start(*t2, Gtk::PACK_SHRINK);
-        auto* brand = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 11);
-        brand->pack_start(*ico, Gtk::PACK_SHRINK);
+        auto* brand = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 12);
+        brand->pack_start(*SettingsUi::tile("bc-controller.svg", 21, 36, /*accent=*/true),
+                          Gtk::PACK_SHRINK);
         brand->pack_start(*col, Gtk::PACK_SHRINK);
-        hb->set_show_close_button(true);
+        auto* close = Gtk::make_managed<Gtk::Button>();
+        close->set_image(*SettingsUi::image("bc-close.svg", 18));
+        close->set_tooltip_text(_("Close"));
+        close->get_style_context()->add_class("set-close");
+        close->set_valign(Gtk::ALIGN_CENTER);
+        close->signal_clicked().connect([&dlg] { dlg.response(Gtk::RESPONSE_CLOSE); });
+        hb->set_show_close_button(false);
         hb->pack_start(*brand);
+        hb->pack_end(*close);
         hb->set_custom_title(*Gtk::make_managed<Gtk::Box>());
         dlg.set_titlebar(*hb);
         hb->show_all();
@@ -1737,8 +1751,9 @@ void ControllerDialog::open_test_dialog(int p) {
         auto* combo = Gtk::make_managed<Gtk::ComboBoxText>();
         combo->append("", _("None "));
         for (const auto& d : m_devices) combo->append(d.path, d.name);
-        if (!path.empty()) combo->set_active_id(path);
-        else               combo->set_active(0);
+        // Une manette reglee mais debranchee n'est pas dans la liste : sans
+        // repli, la case restait vide au lieu de dire « None ».
+        if (path.empty() || !combo->set_active_id(path)) combo->set_active(0);
         combo->set_sensitive(false);   // on essaie la manette du joueur, pas une autre
         combo->set_size_request(300, -1);
         bar->pack_start(*combo, Gtk::PACK_SHRINK);
