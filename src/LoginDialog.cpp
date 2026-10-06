@@ -9,14 +9,25 @@
 
 LoginDialog::LoginDialog(Gtk::Window& parent)
     : Gtk::Dialog(_("Sign in to Bootcade"), parent, true) {
+    namespace ui = SettingsUi;
 
-    set_default_size(460, -1);
-    set_border_width(20);
+    /* La presentation des autres fenetres : barre de titre de Bootcade
+     * (tuile, titre, sous-titre, croix), contenu en carte, pied d'actions en
+     * bas a droite. Elle avait garde la barre du bureau et un bouton Cancel
+     * de GTK : une autre application au milieu de Bootcade. */
+    set_default_size(500, -1);
+    set_resizable(false);
+    set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
+    ui::window_header(*this, "bc-account.svg", _("Sign in to Bootcade"),
+                      _("Link this launcher to your Bootcade account"),
+                      [this] { response(Gtk::RESPONSE_CANCEL); });
 
     m_intro.set_text(_("Open the page below and confirm the code to link this "
                        "launcher to your Bootcade account."));
     m_intro.set_line_wrap(true);
+    m_intro.set_max_width_chars(48);
     m_intro.set_xalign(0.0f);
+    m_intro.get_style_context()->add_class("set-sub");
 
     // Le code est l'élément que le joueur doit lire et recopier : il est donc
     // le plus gros de la fenêtre, en chasse fixe pour qu'un 0 ne se confonde
@@ -26,23 +37,42 @@ LoginDialog::LoginDialog(Gtk::Window& parent)
 
     m_countdown.set_xalign(0.5f);
 
+    // Le seul geste attendu : le bouton principal, en couleur.
     m_open.set_label(_("Open browser"));
+    m_open.set_image(*ui::image("bc-external.svg", ui::kIconButton));
+    m_open.set_always_show_image(true);
+    m_open.get_style_context()->add_class("accent-button");
 
     m_status.set_xalign(0.0f);
     m_status.set_line_wrap(true);
+    m_status.get_style_context()->add_class("set-sub");
+
+    auto* code_box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 4);
+    code_box->get_style_context()->add_class("cc-subcard");
+    code_box->pack_start(m_code, Gtk::PACK_SHRINK);
+    code_box->pack_start(m_countdown, Gtk::PACK_SHRINK);
 
     auto* waiting = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
     waiting->pack_start(m_spinner, Gtk::PACK_SHRINK);
     waiting->pack_start(m_status, Gtk::PACK_SHRINK);
 
+    m_box.set_margin_top(20);
+    m_box.set_margin_bottom(20);
+    m_box.set_margin_start(22);
+    m_box.set_margin_end(22);
     m_box.pack_start(m_intro,  Gtk::PACK_SHRINK);
-    m_box.pack_start(m_code,   Gtk::PACK_SHRINK);
-    m_box.pack_start(m_countdown, Gtk::PACK_SHRINK);
+    m_box.pack_start(*code_box, Gtk::PACK_SHRINK);
     m_box.pack_start(m_open,   Gtk::PACK_SHRINK);
     m_box.pack_start(*waiting, Gtk::PACK_SHRINK);
+    get_content_area()->set_spacing(0);
     get_content_area()->pack_start(m_box);
 
-    add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+    // Pied d'actions de la charte : Cancel en bas a droite.
+    auto* foot = ui::footer();
+    auto* cancel = ui::button(_("Cancel"));
+    cancel->signal_clicked().connect([this] { response(Gtk::RESPONSE_CANCEL); });
+    foot->pack_end(*cancel, Gtk::PACK_SHRINK);
+    get_content_area()->pack_end(*foot, Gtk::PACK_SHRINK);
 
     m_open.signal_clicked().connect([this] {
         // L'adresse COMPLÈTE, celle qui porte déjà le code : le joueur n'a
