@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="1.7.0" date="2026-10-06">
+      <description>
+        <p>Bootcade folder on first launch, BIOS-aware game list and smoother ROM downloads</p>
+      </description>
+    </release>
     <release version="1.6.3" date="2026-10-06">
       <description>
         <p>Use the Bootcade artwork server as the first source for FinalBurn Neo and MAME</p>
