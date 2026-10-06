@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.16)
 #
 # Packaging (CPack, plus bas) l'utilise tel quel : un nom de paquet veut un
 # numero de release propre, jamais une empreinte de commit.
-project(bootcade VERSION 1.6.2 LANGUAGES CXX)
+project(bootcade VERSION 1.6.3 LANGUAGES CXX)
 
 # --- Ce que le binaire annonce -------------------------------------------
 #

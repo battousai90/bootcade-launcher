@@ -210,13 +210,15 @@ Gtk::Widget* stat_tile(const std::string& icon_file, const std::string& label,
 // fois (previsualisations, titres, DAT).
 Gtk::Widget* path_row(const std::string& title, const std::string& subtitle,
                       Gtk::Entry& entry, Gtk::Button& browse,
-                      Gtk::Button& action) {
+                      Gtk::Button* action = nullptr) {
     auto* line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 12);
     line->get_style_context()->add_class("set-row");
 
     auto* txt = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 1);
     txt->set_valign(Gtk::ALIGN_CENTER);
-    txt->set_size_request(240, -1);
+    // Assez large pour le plus long sous-titre : sinon les champs de deux
+    // lignes voisines ne commencent pas au meme endroit.
+    txt->set_size_request(300, -1);
     txt->pack_start(*ui::title_label(title), Gtk::PACK_SHRINK);
     txt->pack_start(*ui::sub_label(subtitle), Gtk::PACK_SHRINK);
     line->pack_start(*txt, Gtk::PACK_SHRINK);
@@ -225,9 +227,11 @@ Gtk::Widget* path_row(const std::string& title, const std::string& subtitle,
     entry.set_valign(Gtk::ALIGN_CENTER);
     line->pack_start(entry, Gtk::PACK_EXPAND_WIDGET);
     browse.set_valign(Gtk::ALIGN_CENTER);
-    action.set_valign(Gtk::ALIGN_CENTER);
     line->pack_start(browse, Gtk::PACK_SHRINK);
-    line->pack_start(action, Gtk::PACK_SHRINK);
+    if (action) {
+        action->set_valign(Gtk::ALIGN_CENTER);
+        line->pack_start(*action, Gtk::PACK_SHRINK);
+    }
     return line;
 }
 
@@ -1000,15 +1004,9 @@ Gtk::Widget* SettingsPanel::build_page_library() {
     m_button_browse_previews.signal_clicked().connect([this] {
         on_folder_clicked(&m_entry_previews);
     });
-    m_button_download_previews.set_label(_("Download All"));
-    m_button_download_previews.set_image(*ui::image("bc-download.svg", ui::kIconButton));
-    m_button_download_previews.set_always_show_image(true);
-    m_button_download_previews.signal_clicked().connect(
-        sigc::mem_fun(*this, &SettingsPanel::on_download_previews_clicked));
     ui::add_row(art_rows, *path_row(_("Previews"),
                                     _("Path for game preview images (screenshots)."),
-                                    m_entry_previews, m_button_browse_previews,
-                                    m_button_download_previews));
+                                    m_entry_previews, m_button_browse_previews));
 
     m_button_browse_titles.set_label(_("Browse..."));
     m_button_browse_titles.set_image(*ui::image("bc-folder.svg", ui::kIconButton));
@@ -1016,15 +1014,9 @@ Gtk::Widget* SettingsPanel::build_page_library() {
     m_button_browse_titles.signal_clicked().connect([this] {
         on_folder_clicked(&m_entry_titles);
     });
-    m_button_download_titles.set_label(_("Download All"));
-    m_button_download_titles.set_image(*ui::image("bc-download.svg", ui::kIconButton));
-    m_button_download_titles.set_always_show_image(true);
-    m_button_download_titles.signal_clicked().connect(
-        sigc::mem_fun(*this, &SettingsPanel::on_download_titles_clicked));
     ui::add_row(art_rows, *path_row(_("Titles"),
                                     _("Path for game title images (logos, marquees, etc)."),
-                                    m_entry_titles, m_button_browse_titles,
-                                    m_button_download_titles));
+                                    m_entry_titles, m_button_browse_titles));
     art.body->pack_start(*art_rows, Gtk::PACK_SHRINK);
     m_lbl_lib_art_sub = art.subtitle;
 
@@ -1043,8 +1035,9 @@ Gtk::Widget* SettingsPanel::build_page_library() {
     src_txt->pack_start(*ui::title_label(_("Download sources")), Gtk::PACK_SHRINK);
     {
         auto* sub = ui::sub_label(
-            _("Tried in order until an image is found. Each address is a base "
-              "folder holding previews/ and titles/."));
+            _("Tried in order until an image is found. An address is either a base "
+              "folder holding previews/ and titles/, or a pattern using {rom}, {desc} "
+              "and {snaps|titles}."));
         sub->set_line_wrap(true);
         src_txt->pack_start(*sub, Gtk::PACK_SHRINK);
     }
@@ -1068,8 +1061,8 @@ Gtk::Widget* SettingsPanel::build_page_library() {
 
     m_art_sources_list.set_selection_mode(Gtk::SELECTION_NONE);
     {
-        // Une liste vide doit dire ce qu'elle entraine : sans source, aucun
-        // bouton « Download All » de cette carte ne peut rien ramener.
+        // Une liste vide doit dire ce qu'elle entraine : sans source, le
+        // bouton « Download missing artwork » ne ramene rien pour ces jeux.
         auto* none = ui::sub_label(_("No source: artwork cannot be downloaded for "
                                      "these games. Add one above."));
         none->set_line_wrap(true);
@@ -1083,6 +1076,31 @@ Gtk::Widget* SettingsPanel::build_page_library() {
     m_art_sources_list.get_style_context()->add_class("set-rows");
     m_art_sources_list.set_margin_top(8);
     art.body->pack_start(m_art_sources_list, Gtk::PACK_SHRINK);
+
+    /* Un seul bouton pour toutes les images qui manquent.
+     *
+     * Il remplace les deux « Download All » (un par type d'image) : les deux
+     * types se cherchent dans les memes sources, et chaque emulateur range
+     * deja ses images dans ses propres dossiers. Rien de ce qui est deja la
+     * n'est retelecharge. */
+    {
+        auto* line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 12);
+        line->set_margin_top(14);
+        auto* txt = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 1);
+        txt->set_valign(Gtk::ALIGN_CENTER);
+        txt->pack_start(*ui::title_label(_("Missing artwork")), Gtk::PACK_SHRINK);
+        auto* sub = ui::sub_label(_("Downloads the previews and titles not yet in your folders, "
+                                    "for every emulator that has a source. Images already there are kept."));
+        sub->set_line_wrap(true);
+        txt->pack_start(*sub, Gtk::PACK_SHRINK);
+        line->pack_start(*txt, Gtk::PACK_EXPAND_WIDGET);
+        m_button_download_missing.set_label(_("Download missing artwork"));
+        m_button_download_missing.set_image(*ui::image("bc-download.svg", ui::kIconButton));
+        m_button_download_missing.set_always_show_image(true);
+        m_button_download_missing.set_valign(Gtk::ALIGN_CENTER);
+        line->pack_end(m_button_download_missing, Gtk::PACK_SHRINK);
+        art.body->pack_start(*line, Gtk::PACK_SHRINK);
+    }
 
     // Les DAT ne se reglent plus ici : leur dossier, leur source et leur
     // generation vivent dans ROM Management, onglet DAT. m_entry_dat reste le
@@ -4146,6 +4164,8 @@ bool SettingsPanel::load_from_file(const std::string& filename) {
                         else if (v.is_object() && v.contains("url") && v["url"].is_string())
                             lib.artwork_sources.push_back(v["url"].get<std::string>());
                     }
+                    lib.artwork_sources = ArtworkSources::with_new_defaults(
+                        std::move(lib.artwork_sources), id, e.value("artwork_defaults", 1));
                 }
             } else if (id == kDefaultEmulator) {
                 lib = legacy;
@@ -4311,6 +4331,9 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
         e["previews_path"]    = lib.previews_path;
         e["titles_path"]      = lib.titles_path;
         e["artwork_sources"]  = nlohmann::json::array();
+        // La liste enregistree tient compte des sources par defaut de cette
+        // version : celles que le joueur retire ensuite ne reviendront pas.
+        e["artwork_defaults"] = ArtworkSources::kDefaultsVersion;
         for (const auto& url : lib.artwork_sources)
             if (!url.empty()) e["artwork_sources"].push_back(url);
         e["scan_recursive"]   = lib.scan_recursive;
@@ -4491,18 +4514,6 @@ void SettingsPanel::on_download_fbneo_clicked() {
     if (installed) m_sig_fbneo_installed.emit();
 }
 
-
-void SettingsPanel::on_download_previews_clicked() {
-    // Cette méthode sera connectée depuis MainWindow
-    // pour avoir accès aux jeux et aux méthodes de progression
-    std::cout << "[INFO] Download previews button clicked" << std::endl;
-}
-
-void SettingsPanel::on_download_titles_clicked() {
-    // Cette méthode sera connectée depuis MainWindow
-    // pour avoir accès aux jeux et aux méthodes de progression
-    std::cout << "[INFO] Download titles button clicked" << std::endl;
-}
 
 void SettingsPanel::refresh_account_row() {
     const bool in = BootcadeAuth::signed_in();

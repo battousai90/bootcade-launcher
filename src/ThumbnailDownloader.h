@@ -7,6 +7,7 @@
 #include <map>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include "Game.h"
 
 /* ── Ou les images des jeux se telechargent ───────────────────────────────
@@ -36,9 +37,29 @@ std::vector<std::string> defaults_for(const std::string& emulator);
 // fil qui ne connait pas l'ecran des reglages.
 std::vector<std::string> load_for(const std::string& emulator);
 
-// L'adresse complete d'une image : base + sous-dossier + nom + « .png ».
-std::string artwork_url(const std::string& base, const std::string& folder,
-                        const std::string& encoded_name);
+// Version de la liste des sources par defaut. Une configuration ecrite avec
+// une version plus ancienne recoit, une fois, les sources ajoutees depuis ;
+// celles que le joueur a retirees ensuite ne reviennent pas.
+inline constexpr int kDefaultsVersion = 2;
+
+// `list` complete des sources par defaut apparues apres `seen_version`.
+std::vector<std::string> with_new_defaults(std::vector<std::string> list,
+                                           const std::string& emulator,
+                                           int seen_version);
+
+/* L'adresse complete d'une image.
+ *
+ * Deux formes de source :
+ *  - une adresse de BASE (FBNeo-extras) : base + « previews/ » ou
+ *    « titles/ » + nom court du jeu + « .png » ;
+ *  - un MODELE, qui contient des accolades (libretro-thumbnails) :
+ *      {rom}      le nom court du jeu (avec le prefixe de systeme) ;
+ *      {desc}     son titre complet, au format des noms de fichiers libretro ;
+ *      {A|B}      A pour une capture, B pour un ecran titre.
+ *    ex. .../MAME/master/{Named_Snaps|Named_Titles}/{desc}.png
+ * Rend une chaine vide quand le modele demande un titre que le jeu n'a pas. */
+std::string artwork_url(const std::string& source, bool titles,
+                        const std::string& encoded_rom, const std::string& description);
 
 }  // namespace ArtworkSources
 
@@ -56,17 +77,32 @@ public:
         Titles
     };
     
-    // Démarre le téléchargement en arrière-plan
-    void start_download(const std::vector<Game>& games, 
-                       const std::string& artwork_dir,
-                       ArtworkType artwork_type,
-                       ProgressCallback progress_callback = nullptr);
-    
+    // Les dossiers d'images d'un emulateur ; vide = ce type n'est pas voulu.
+    struct Folders { std::string previews; std::string titles; };
+
+    // Ce que la derniere passe a donne.
+    struct Summary {
+        int downloaded = 0;     // images trouvees et enregistrees
+        int not_found = 0;      // cherchees dans toutes les sources, en vain
+        int already_there = 0;  // deja dans le dossier
+        int no_source = 0;      // jeux d'un emulateur sans aucune source
+        bool cancelled = false;
+    };
+
+    // Telecharge en arriere-plan toutes les images (previews ET titles) qui
+    // manquent, chaque emulateur dans ses dossiers (`folders`, par id
+    // d'emulateur) et avec ses propres sources.
+    void start_missing_download(const std::vector<Game>& games,
+                                const std::map<std::string, Folders>& folders,
+                                ProgressCallback progress_callback = nullptr);
+    Summary last_summary() const;
+
     // Download single artwork item
     // `emulator` dit dans quelle liste de sources chercher. Il a une valeur
     // par defaut parce que le seul appelant d'aujourd'hui ne connait que
     // FinalBurn Neo ; le telechargement en masse, lui, lit Game::emulator.
     void download_single_artwork(const std::string& game_name,
+                                const std::string& game_description,
                                 const std::string& game_system,
                                 const std::string& artwork_dir,
                                 ArtworkType artwork_type,
@@ -86,6 +122,7 @@ private:
     
     // Télécharge un seul artwork file, en essayant les sources dans l'ordre.
     bool download_single_file(const std::string& rom_name,
+                             const std::string& description,
                              const std::string& system,
                              const std::string& emulator,
                              const std::string& artwork_dir,
@@ -98,9 +135,10 @@ private:
     // Détermine le préfixe de fichier selon le système pour FBNeo-extras
     std::string get_system_prefix(const std::string& system);
     
-    // Download worker thread
-    void download_worker(const std::vector<Game> games, 
-                        const std::string artwork_dir,
-                        ArtworkType artwork_type,
+    void missing_worker(const std::vector<Game> games,
+                        const std::map<std::string, Folders> folders,
                         ProgressCallback progress_callback);
+
+    mutable std::mutex m_summary_mutex;
+    Summary m_summary;
 };

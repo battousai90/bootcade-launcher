@@ -1838,5 +1838,16 @@
   "Download page": "Página de descarga",
   "Updating to Bootcade %1. Bootcade restarts on its own when it is done.": "Actualizando a Bootcade %1. Bootcade se reiniciará solo al terminar.",
   "Bootcade %1 is installed. Restarting...": "Bootcade %1 está instalado. Reiniciando...",
-  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "Bootcade %1 no se pudo instalar automáticamente. Puede volver a intentarlo u obtenerlo en la página de descarga."
+  "Bootcade %1 could not be installed automatically. You can try again, or get it from the download page.": "Bootcade %1 no se pudo instalar automáticamente. Puede volver a intentarlo u obtenerlo en la página de descarga.",
+  "Missing artwork": "Imágenes que faltan",
+  "Downloads the previews and titles not yet in your folders, for every emulator that has a source. Images already there are kept.": "Descarga las capturas y pantallas de título que faltan en sus carpetas, para cada emulador que tenga una fuente. Las imágenes ya presentes se conservan.",
+  "Download missing artwork": "Descargar las imágenes que faltan",
+  "Artwork downloaded.": "Imágenes descargadas.",
+  "No artwork found for this game in your sources.": "No se encontró ninguna imagen para este juego en sus fuentes.",
+  "All artwork is already there.": "Todas las imágenes ya están.",
+  "Artwork: %1 downloaded, %2 not found in any source.": "Imágenes: %1 descargadas, %2 no encontradas en ninguna fuente.",
+  "Downloading artwork for %1...": "Descargando las imágenes de %1...",
+  "Looking for missing artwork...": "Buscando las imágenes que faltan...",
+  "Downloading: %1 (%2/%3)": "Descargando: %1 (%2/%3)",
+  "Tried in order until an image is found. An address is either a base folder holding previews/ and titles/, or a pattern using {rom}, {desc} and {snaps|titles}.": "Se prueban en orden hasta encontrar una imagen. Una dirección es una carpeta base con previews/ y titles/, o un patrón con {rom}, {desc} y {snaps|titles}."
 }
