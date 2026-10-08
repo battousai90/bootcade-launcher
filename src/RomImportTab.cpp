@@ -321,7 +321,7 @@ void RomImportTab::build_footer() {
     auto* export_face = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
     export_face->pack_start(*ui::image("bc-save.svg", ui::kIconButton), Gtk::PACK_SHRINK);
     export_face->pack_start(*Gtk::make_managed<Gtk::Label>(_("Export missing list…")), Gtk::PACK_SHRINK);
-    export_face->pack_start(*ui::image("bc-chevron-down.svg", 14), Gtk::PACK_SHRINK);
+    export_face->pack_start(*ui::image("bc-caret-down.svg", 14), Gtk::PACK_SHRINK);
     m_btn_export->add(*export_face);
     struct Fmt { const char* label; int id; };
     for (Fmt f : {Fmt{N_("Text list"), 0}, Fmt{N_("CSV (spreadsheet)"), 1}, Fmt{N_("Missing sets as DAT"), 2}}) {

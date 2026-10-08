@@ -94,7 +94,7 @@ void SplashScreen::setup_ui() {
     )");
 
     auto screen = Gdk::Screen::get_default();
-    Gtk::StyleContext::add_provider_for_screen(screen, css, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    Gtk::StyleContext::add_provider_for_screen(screen, css, GTK_STYLE_PROVIDER_PRIORITY_USER + 10);
 
     // Rounded corners need an RGBA visual (compositing) to avoid black corners.
     if (auto vis = screen->get_rgba_visual()) gtk_widget_set_visual(GTK_WIDGET(gobj()), vis->gobj());

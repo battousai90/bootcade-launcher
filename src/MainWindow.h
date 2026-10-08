@@ -35,6 +35,8 @@ class ControllerDialog;
 
 class MainWindow : public Gtk::Window {
 public:
+    // Imposes GTK's built-in Adwaita as the base theme (see MainWindow.cpp).
+    static void pin_base_theme();
     // Aucun emulateur pret : dire au joueur quoi faire, une fois la fenetre
     // affichee (au demarrage).
     void check_emulators_ready();
@@ -1081,6 +1083,7 @@ private:
 
     // Theme management (dark / light / system)
     Glib::RefPtr<Gtk::CssProvider> m_css_common;
+    Glib::RefPtr<Gtk::CssProvider> m_css_base;
     Glib::RefPtr<Gtk::CssProvider> m_css_dark;
     Glib::RefPtr<Gtk::CssProvider> m_css_light;
     Glib::RefPtr<Gio::Settings>    m_desktop_settings;   // org.gnome.desktop.interface, for System

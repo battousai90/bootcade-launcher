@@ -138,7 +138,7 @@ void RomQuarantineTab::build_footer() {
     m_btn_restore = ui::button(_("Restore selected to Import"), "bc-restore.svg", ui::Tone::Accent);
     m_btn_restore->signal_clicked().connect([this] { on_restore(false); });
     m_btn_restore_more = Gtk::make_managed<Gtk::MenuButton>();
-    m_btn_restore_more->add(*ui::image("bc-chevron-down.svg", 14));
+    m_btn_restore_more->add(*ui::image("bc-caret-down.svg", 14));
     m_btn_restore_more->get_style_context()->add_class("accent-button");
     m_item_restore_origin = Gtk::make_managed<Gtk::MenuItem>(_("Restore selected to original location"));
     m_item_restore_origin->signal_activate().connect([this] { on_restore(true); });
