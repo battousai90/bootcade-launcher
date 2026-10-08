@@ -38,6 +38,11 @@
 @define-color accent_fg        #5a49dd;   /* fonce d'un cran : lisible en texte sur blanc */
 @define-color accent_text      #ffffff;
 
+/* ── Boutons ordinaires (style-base.css) ────────────────────────────── */
+@define-color control_bg       #ffffff;   /* fond d'un bouton au repos     */
+@define-color control_border   #cfd5e1;   /* son trait                     */
+@define-color control_hover    #f1f3f8;   /* son fond survole              */
+
 /* ── Etats : les memes teintes, assombries pour tenir sur du blanc ──── */
 @define-color success          #1f9d5b;
 @define-color warning          #b7791f;

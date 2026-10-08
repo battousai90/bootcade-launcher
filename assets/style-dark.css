@@ -34,6 +34,11 @@
 @define-color accent_fg        #9a8cff;   /* l'accent en TEXTE sur une surface */
 @define-color accent_text      #ffffff;   /* texte pose SUR un fond accent */
 
+/* ── Boutons ordinaires (style-base.css) ────────────────────────────── */
+@define-color control_bg       rgba(255, 255, 255, 0.11);   /* fond d'un bouton au repos */
+@define-color control_border   rgba(255, 255, 255, 0.11);   /* son trait                 */
+@define-color control_hover    rgba(255, 255, 255, 0.16);   /* son fond survole          */
+
 /* ── Etats ──────────────────────────────────────────────────────────── */
 @define-color success          #41d08a;
 @define-color warning          #f2a01e;

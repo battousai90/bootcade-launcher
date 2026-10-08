@@ -7974,6 +7974,52 @@ void MainWindow::on_language_selected(const std::string& code) {
                        "bc-globe.svg");
 }
 
+/* Le theme GTK du bureau, tel qu'il etait avant que Bootcade n'impose le
+ * sien : seul son nom sert encore, pour deviner si le bureau est sombre. */
+static Glib::ustring s_desktop_theme_name;
+
+/* Le theme de base est TOUJOURS Adwaita, celui qui est compile dans GTK.
+ *
+ * La charte ne peint pas chaque detail de chaque widget : fond et encre des
+ * boutons, cases, ascenseurs viennent du theme de base. Celui du bureau
+ * changeait d'une distribution a l'autre (Yaru sur Ubuntu, Breeze sur KDE,
+ * une extension Flatpak plus ou moins a jour), et sa variante sombre pouvait
+ * manquer : boutons clairs a texte noir sur la barre sombre. Adwaita existe
+ * partout, avec sa variante sombre, et donne le meme dessin sur toutes. */
+void MainWindow::pin_base_theme() {
+    auto settings = Gtk::Settings::get_default();
+    if (!settings) return;
+    static bool captured = false;
+    if (!captured) {
+        captured = true;
+        // GTK_THEME, set aside by main() before GTK started, wins as it did.
+        const char* env = std::getenv("BOOTCADE_DESKTOP_GTK_THEME");
+        s_desktop_theme_name = (env && *env) ? Glib::ustring(env)
+                                             : settings->property_gtk_theme_name().get_value();
+    }
+    if (settings->property_gtk_theme_name().get_value() != "Adwaita")
+        settings->property_gtk_theme_name() = "Adwaita";
+
+    /* Les icones que GTK dessine lui-meme (fleches des listes et des menus,
+     * reduire/agrandir/fermer) venaient du jeu d'icones du bureau : chevrons
+     * fins sous Yaru, triangles sous Breeze. Bootcade livre les siennes, dans
+     * un petit jeu « Bootcade » qui herite d'Adwaita pour tout le reste. */
+    static bool icons_added = false;
+    if (!icons_added) {
+        icons_added = true;
+        if (auto icons = Gtk::IconTheme::get_default())
+            icons->prepend_search_path(AppContext::get_asset_path("icon-theme"));
+    }
+    if (settings->property_gtk_icon_theme_name().get_value() != "Bootcade")
+        settings->property_gtk_icon_theme_name() = "Bootcade";
+
+    /* KDE demande l'icone de l'application a gauche de la barre de titre :
+     * un second logo Bootcade a cote du notre. Reduire, agrandir, fermer a
+     * droite, et rien d'autre, sur tous les bureaux. */
+    if (settings->property_gtk_decoration_layout().get_value() != ":minimize,maximize,close")
+        settings->property_gtk_decoration_layout() = ":minimize,maximize,close";
+}
+
 // Does the desktop ask for dark surfaces ? GNOME publishes it as
 // org.gnome.desktop.interface color-scheme ; elsewhere the theme name says it.
 static bool desktop_prefers_dark(const Glib::RefPtr<Gio::Settings>& desktop) {
@@ -7984,13 +8030,10 @@ static bool desktop_prefers_dark(const Glib::RefPtr<Gio::Settings>& desktop) {
             if (scheme == "prefer-light") return false;
         }
     } catch (...) {}
-    if (auto settings = Gtk::Settings::get_default()) {
-        Glib::ustring theme = settings->property_gtk_theme_name();
-        if (theme.lowercase().find("dark") != Glib::ustring::npos) return true;
-        // Not gtk-application-prefer-dark-theme : that one is ours (set by
-        // apply_theme), reading it back would make System stick to Dark.
-    }
-    return false;
+    // The desktop's own theme name, not the live one : that one is Adwaita,
+    // pinned by pin_base_theme(). Nor gtk-application-prefer-dark-theme :
+    // that one is ours too, reading it back would make System stick to Dark.
+    return s_desktop_theme_name.lowercase().find("dark") != Glib::ustring::npos;
 }
 
 /* Trois feuilles : la charte (style-common.css, ecrite en jetons) et une
@@ -8007,6 +8050,7 @@ void MainWindow::apply_theme(const std::string& mode) {
         catch (const Glib::Error& e) { std::cerr << "[WARN] " << file << ": " << e.what() << std::endl; }
         return p;
     };
+    pin_base_theme();
     if (!m_css_common) m_css_common = load("style-common.css");
     // System follows the desktop live : when it flips between light and dark,
     // the palette flips with it, without a restart.
@@ -8023,22 +8067,29 @@ void MainWindow::apply_theme(const std::string& mode) {
             }
         } catch (...) {}
     }
+    if (!m_css_base)   m_css_base   = load("style-base.css");
     if (!m_css_dark)   m_css_dark   = load("style-dark.css");
     if (!m_css_light)  m_css_light  = load("style-light.css");
 
     const bool dark = mode == "dark" || (mode != "light" && desktop_prefers_dark(m_desktop_settings));
 
-    // The base GTK theme follows, for what Bootcade does not draw itself
-    // (file choosers, tooltips of the desktop, window decorations).
+    // The base GTK theme (Adwaita) follows, for what Bootcade does not draw
+    // itself : buttons, checks, scrollbars, file choosers.
     if (auto settings = Gtk::Settings::get_default())
         settings->property_gtk_application_prefer_dark_theme() = dark;
 
-    // Palette first, charter on top : the charter only names the tokens.
+    // Palette first, base controls next, charter on top : the charter only
+    // names the tokens. All three sit above USER, the desktop's own
+    // ~/.config/gtk-3.0/gtk.css : a theme tool that writes there would
+    // otherwise repaint Bootcade on that machine only.
+    const int prio = GTK_STYLE_PROVIDER_PRIORITY_USER + 10;
     Gtk::StyleContext::remove_provider_for_screen(screen, m_css_common);
+    Gtk::StyleContext::remove_provider_for_screen(screen, m_css_base);
     Gtk::StyleContext::remove_provider_for_screen(screen, m_css_dark);
     Gtk::StyleContext::remove_provider_for_screen(screen, m_css_light);
-    Gtk::StyleContext::add_provider_for_screen(screen, dark ? m_css_dark : m_css_light, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    Gtk::StyleContext::add_provider_for_screen(screen, m_css_common, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
+    Gtk::StyleContext::add_provider_for_screen(screen, dark ? m_css_dark : m_css_light, prio);
+    Gtk::StyleContext::add_provider_for_screen(screen, m_css_base, prio + 1);
+    Gtk::StyleContext::add_provider_for_screen(screen, m_css_common, prio + 2);
 
     m_theme_mode = mode;
     m_theme_dark = dark;

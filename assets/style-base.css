@@ -1,0 +1,46 @@
+/* Bootcade : le dessin de base des controles.
+ *
+ * Avant cette feuille, ce que la charte ne peignait pas venait du theme GTK
+ * du bureau : un bouton ordinaire etait blanc et plat sous Yaru, gris et
+ * bombe sous Adwaita, clair a texte noir sous un theme force en clair par
+ * GTK_THEME (AppImage). Ces regles donnent a chaque controle courant son
+ * fond, son trait et son encre, en jetons, quel que soit le bureau.
+ *
+ * Elles sont chargees JUSTE SOUS style-common.css : la priorite de la
+ * feuille, pas la specificite des selecteurs, les fait passer apres la
+ * charte. Une classe de style-common.css (.dock-action, .accent-button...)
+ * l'emporte donc toujours, meme sur `button.flat` ecrit ici.
+ */
+
+button {
+  background-image: none;
+  background-color: @control_bg;
+  border: 1px solid @control_border;
+  color: @text;
+  box-shadow: none;
+  text-shadow: none;
+  -gtk-icon-shadow: none;
+}
+button:hover { background-color: @control_hover; }
+button:active,
+button:checked { background-color: alpha(@accent, 0.26); }
+button:disabled {
+  background-color: @control_bg;
+  color: @text_disabled;
+}
+button:disabled label { color: @text_disabled; }
+
+/* Un bouton sans relief (lien, croix, ligne cliquable) reste sans fond. */
+button.flat {
+  background-color: transparent;
+  border-color: transparent;
+}
+button.flat:hover { background-color: @surface_hover; }
+
+/* La croix d'un bandeau est un bouton plat pour GTK : elle garde pourtant le
+   fond des autres boutons du bandeau, a cote de « Sign in ». */
+infobar button.flat {
+  background-color: @control_bg;
+  border-color: @control_border;
+}
+infobar button.flat:hover { background-color: @control_hover; }

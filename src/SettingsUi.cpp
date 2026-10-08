@@ -861,7 +861,7 @@ Choice::Choice(int max_height) {
     m_label.set_xalign(0.0f);
     m_label.set_ellipsize(Pango::ELLIPSIZE_END);
     m_face.pack_start(m_label, Gtk::PACK_EXPAND_WIDGET);
-    m_face.pack_end(*image("bc-chevron-down.svg", 16), Gtk::PACK_SHRINK);
+    m_face.pack_end(*image("bc-caret-down.svg", 16), Gtk::PACK_SHRINK);
     add(m_face);
     m_face.show_all();
 

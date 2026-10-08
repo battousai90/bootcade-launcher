@@ -279,7 +279,7 @@ void RomOutboxTab::build_footer() {
     m_btn_move = ui::button(_("Move selected to Library"), "bc-right.svg", ui::Tone::Accent);
     m_btn_move->signal_clicked().connect([this] { on_move_clicked(false); });
     m_btn_move_more = Gtk::make_managed<Gtk::MenuButton>();
-    m_btn_move_more->add(*ui::image("bc-chevron-down.svg", 14));
+    m_btn_move_more->add(*ui::image("bc-caret-down.svg", 14));
     m_btn_move_more->get_style_context()->add_class("accent-button");
     auto* item = Gtk::make_managed<Gtk::MenuItem>(_("Move all ready sets to Library"));
     item->signal_activate().connect([this] { on_move_clicked(true); });

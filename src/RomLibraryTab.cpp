@@ -300,7 +300,7 @@ void RomLibraryTab::build_summary() {
     auto* export_face = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
     export_face->pack_start(*ui::image("bc-save.svg", ui::kIconButton), Gtk::PACK_SHRINK);
     export_face->pack_start(*Gtk::make_managed<Gtk::Label>(_("Export…")), Gtk::PACK_SHRINK);
-    export_face->pack_start(*ui::image("bc-chevron-down.svg", 14), Gtk::PACK_SHRINK);
+    export_face->pack_start(*ui::image("bc-caret-down.svg", 14), Gtk::PACK_SHRINK);
     m_btn_export->add(*export_face);
     m_btn_export->set_valign(Gtk::ALIGN_CENTER);
     struct Fmt { const char* label; int id; };

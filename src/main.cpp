@@ -100,6 +100,15 @@ int main(int argc, char *argv[]) {
         argv[argc] = nullptr;
     }
 
+    /* GTK_THEME passe avant tout reglage : un « Yaru:dark » ou un theme
+     * absent du paquet remplacerait le theme de base que Bootcade impose
+     * (MainWindow::pin_base_theme). Son nom sert encore a deviner si le bureau
+     * est sombre : on le garde de cote avant de l'effacer. */
+    if (const char* t = std::getenv("GTK_THEME"); t && *t) {
+        setenv("BOOTCADE_DESKTOP_GTK_THEME", t, 1);
+        unsetenv("GTK_THEME");
+    }
+
     auto app = Gtk::Application::create(argc, argv, "org.gilbert.bootcade");
     if (const char* wd = std::getenv("BOOTCADE_WATCHDOG"); wd && *wd && std::string(wd) != "0")
         start_main_loop_watchdog();
@@ -124,6 +133,9 @@ int main(int argc, char *argv[]) {
         }
     } catch (...) {}
     i18n::init(AppContext::get_locale_dir(), ui_lang);
+
+    // Avant la premiere fenetre : le splash aussi s'ouvre sur Adwaita.
+    MainWindow::pin_base_theme();
 
     // Créer et afficher le splash screen
     SplashScreen splash;

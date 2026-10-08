@@ -1,0 +1,11 @@
+[Icon Theme]
+Name=Bootcade
+Comment=The few icons GTK draws itself (arrows, window buttons), so they look the same on every desktop
+Inherits=Adwaita,hicolor
+Directories=scalable
+
+[scalable]
+Size=16
+MinSize=8
+MaxSize=512
+Type=Scalable
