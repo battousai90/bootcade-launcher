@@ -166,6 +166,15 @@ Fetched<std::set<std::string>> fetch_supported() {
         std::string system = item.value("system", "");
         std::string game   = item.value("game", "");
         if (system.empty() || game.empty()) continue;
+        /* Seuls les jeux dont le serveur a PROUVE la lecture sur la table
+         * d'usine (`baseline`) : le joueur y est classe des sa premiere
+         * partie. Sans elle, le serveur ne sait distinguer le score du joueur
+         * d'une valeur d'usine qu'a partir de la deuxieme partie, et la
+         * premiere peut publier une ligne que personne n'a jouee. La pastille
+         * Highscore promet « tu joues, ton score est publie » : un jeu qui ne
+         * tient pas cette promesse ne la porte pas. Absent = ancien serveur,
+         * qui ne faisait pas la distinction : on le garde. */
+        if (!item.value("baseline", true)) continue;
         out.insert(key(system, game));
         {
             std::lock_guard<std::mutex> lock(g_saveram_mutex);
