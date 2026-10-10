@@ -167,6 +167,7 @@ public:
         bool from_shown     = true;
         std::set<std::string> systems;
         bool hiscore_only   = false;
+        bool achievements_only = false;
         bool originals_only = false;
         bool unplayed_only  = false;
         bool launch         = false;
@@ -457,6 +458,7 @@ private:
     Gtk::Switch m_switch_play_history;
     // Jeu au hasard
     Gtk::ComboBoxText m_combo_random_from;
+    Gtk::Switch m_switch_random_achievements;
     Gtk::Switch m_switch_random_hiscore, m_switch_random_originals,
                 m_switch_random_unplayed, m_switch_random_launch;
     // Un groupe par emulateur, son nom en tete et ses systemes en dessous.
@@ -737,6 +739,12 @@ private:
     Gtk::Label  m_profile_queued;
     Gtk::Box    m_profile_empty{Gtk::ORIENTATION_VERTICAL, 10};
     Gtk::Button m_btn_view_profile;
+    // RetroAchievements : le compte, et le mode Hardcore.
+    Gtk::Label  m_ra_state;
+    Gtk::Button m_btn_ra;
+    Gtk::Switch m_switch_ra_hardcore;
+    void refresh_ra_row();
+    void on_ra_button();
     // Trois compteurs, tous LOCAUX et tous verifiables : les classements
     // personnels connus, les jeux effectivement lances, les favoris. Le
     // service n'expose ni succes ni total de parties, donc rien de tel n'est

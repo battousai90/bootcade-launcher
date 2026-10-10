@@ -787,7 +787,18 @@ private:
     // m_hdr_emu ne parait qu'en portee « tous » : ailleurs la colonne
     // repeterait la meme valeur sur chaque ligne.
     Gtk::Button         m_hdr_game, m_hdr_emu, m_hdr_system, m_hdr_year;
-    Gtk::Label          m_hdr_status, m_hdr_hs;
+    Gtk::Label          m_hdr_status, m_hdr_hs, m_hdr_ra;
+    // RetroAchievements : la section du volet, et le catalogue charge au demarrage.
+    Gtk::Expander       m_ach_exp;
+    Gtk::Label          m_ach_sum;
+    Gtk::Box            m_ach_list{Gtk::ORIENTATION_VERTICAL, 6};
+    Glib::Dispatcher    m_ach_dispatcher;          // la liste d'un jeu est arrivee
+    Glib::Dispatcher    m_ra_catalog_dispatcher;   // le catalogue a change
+    std::mutex          m_ach_mutex;
+    std::string         m_ach_for;                 // le set dont la liste est attendue
+    std::map<std::string, std::shared_ptr<void>> m_ach_cache;
+    void show_achievements(const std::string& emulator, const std::string& system, const std::string& name);
+    void on_achievements_ready();
     void build_mlist_header();
     void refresh_mlist_header();
 

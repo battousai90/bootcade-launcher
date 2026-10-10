@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.16)
 #
 # Packaging (CPack, plus bas) l'utilise tel quel : un nom de paquet veut un
 # numero de release propre, jamais une empreinte de commit.
-project(bootcade VERSION 1.7.1 LANGUAGES CXX)
+project(bootcade VERSION 1.8.0 LANGUAGES CXX)
 
 # --- Ce que le binaire annonce -------------------------------------------
 #
@@ -195,6 +195,7 @@ add_executable(bootcade
     src/FbneoUpdateCheck.cpp
     src/AppUpdater.cpp
     src/DefaultFolders.cpp
+    src/RetroAchievements.cpp
     src/FbneoVideo.cpp
     src/HiscoreClient.cpp
     src/BootcadeAuth.cpp

@@ -13,6 +13,8 @@
 #include "SettingsPanel.h"
 #include "SettingsUi.h"
 #include "AppUpdater.h"
+#include "RetroAchievements.h"
+#include <map>
 #include "RomResolve.h"
 #include "DownloadDialog.h"
 #include "HostLibraries.h"
@@ -63,6 +65,7 @@ static constexpr int kColEmu    = 104;
 static constexpr int kColYear   = 46;
 static constexpr int kColStatus = 54;
 static constexpr int kColHs     = 38;
+static constexpr int kColRa     = 38;
 
 /* La marque d'un emulateur, posee dans les vues.
  *
@@ -1080,6 +1083,9 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     build_dock_section(m_specs_exp,    m_specs_sum,    _("Game information"), m_specs_row);
     m_detail_text_col.pack_start(m_activity_exp, Gtk::PACK_SHRINK);
     m_detail_text_col.pack_start(m_specs_exp,    Gtk::PACK_SHRINK);
+    build_dock_section(m_ach_exp, m_ach_sum, _("Achievements"), m_ach_list);
+    m_ach_exp.set_no_show_all(true);
+    m_detail_text_col.pack_start(m_ach_exp, Gtk::PACK_SHRINK);
     // Fiche a gauche, capture a droite : la seconde donne une idee du jeu
     // que dix lignes de caracteristiques ne donnent pas.
     m_specs_row.pack_start(m_specs_grid,     Gtk::PACK_EXPAND_WIDGET);
@@ -2076,6 +2082,20 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // bouton « Update », apparait aussi dans la fenetre principale.
     m_settings_panel.signal_update_found().connect([this] { check_app_update_async(true); });
     check_app_update_async();
+    // Le catalogue RetroAchievements : lu sur le disque tout de suite (pastilles
+    // et filtre sans attendre), rafraichi au plus une fois par jour.
+    m_ach_dispatcher.connect(sigc::mem_fun(*this, &MainWindow::on_achievements_ready));
+    m_ra_catalog_dispatcher.connect([this] {
+        populate_filter_tree();
+        refresh_active_view();
+        auto sel = m_treeview_games.get_selection();
+        if (sel) { if (auto it = sel->get_selected()) show_game_details(*it); }
+    });
+    std::thread([this, alive = m_alive_token] {
+        const bool changed = RetroAchievements::refresh_catalog();
+        std::lock_guard<std::mutex> live(alive->mutex);
+        if (changed && alive->alive) m_ra_catalog_dispatcher.emit();
+    }).detach();
     m_status_rules_dispatcher.connect([this] {
         m_cached_games = load_all_catalogs();
         m_search_blobs.clear();
@@ -2376,6 +2396,7 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     } else {
         m_activity_exp.hide();
     }
+    show_achievements(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name);
 
     std::string info;
     if (!comment.empty()) info = escape_markup(comment);
@@ -2467,6 +2488,9 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     }
     if (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name))
         add_pill("◆ " + _("Highscore"), "pill-hiscore");
+    if (const unsigned n = RetroAchievements::achievement_count(
+            Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name))
+        add_pill("\u2605 " + Glib::ustring::compose(_("%1 achievements"), n).raw(), "pill-warn");
     m_dock_pills.show_all();
 
     m_button_favorite.set_image(*SettingsUi::image(fav ? "star-gold.svg" : "star.svg", 24));
@@ -2650,6 +2674,105 @@ void MainWindow::set_dock_position(const std::string& pos) {
     }
 
     save_launch_prefs();
+}
+
+/* La section « Achievements » du volet.
+ *
+ * Le nombre vient du catalogue, toujours disponible. La liste et ce que le
+ * joueur a debloque demandent son compte et deux requetes : elles partent en
+ * arriere-plan, et la reponse ne s'affiche que si le jeu est encore celui
+ * qu'on regarde. Gardee en memoire le temps de la session. */
+void MainWindow::show_achievements(const std::string& emulator, const std::string& system,
+                                   const std::string& name) {
+    SettingsUi::destroy_children(m_ach_list);
+    const unsigned n = RetroAchievements::achievement_count(emulator, system, name);
+    if (!n) { m_ach_exp.hide(); return; }
+    m_ach_exp.show();
+    m_ach_list.show();
+    m_ach_exp.get_label_widget()->show_all();
+    m_ach_sum.set_text(Glib::ustring::compose(_("%1 achievements"), n));
+    auto note = [this](const std::string& text) {
+        auto* l = Gtk::make_managed<Gtk::Label>(text);
+        l->set_xalign(0.0f);
+        l->set_line_wrap(true);
+        l->get_style_context()->add_class("dock-sub");
+        m_ach_list.pack_start(*l, Gtk::PACK_SHRINK);
+        l->show();
+    };
+    if (!RetroAchievements::signed_in()) {
+        note(_("Sign in to RetroAchievements in Settings › Online to unlock them and follow your progress."));
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_ach_mutex);
+        m_ach_for = name;
+        if (m_ach_cache.count(name)) {
+            // deja recu : affiche sans attendre
+        } else {
+            note(_("Loading achievements…"));
+            std::thread([this, alive = m_alive_token, name] {
+                auto res = std::make_shared<RetroAchievements::GameAchievements>(RetroAchievements::fetch(name));
+                std::lock_guard<std::mutex> live(alive->mutex);
+                if (!alive->alive) return;
+                {
+                    std::lock_guard<std::mutex> lock(m_ach_mutex);
+                    m_ach_cache[name] = res;
+                }
+                m_ach_dispatcher.emit();
+            }).detach();
+            return;
+        }
+    }
+    on_achievements_ready();
+}
+
+void MainWindow::on_achievements_ready() {
+    std::shared_ptr<RetroAchievements::GameAchievements> res;
+    {
+        std::lock_guard<std::mutex> lock(m_ach_mutex);
+        auto it = m_ach_cache.find(m_ach_for);
+        if (it == m_ach_cache.end()) return;
+        res = std::static_pointer_cast<RetroAchievements::GameAchievements>(it->second);
+    }
+    SettingsUi::destroy_children(m_ach_list);
+    auto add = [this](Gtk::Widget* w) { m_ach_list.pack_start(*w, Gtk::PACK_SHRINK); w->show_all(); };
+    if (!res->answered) {
+        auto* l = Gtk::make_managed<Gtk::Label>(Glib::ustring::compose(
+            _("RetroAchievements could not be reached: %1"), res->error));
+        l->set_xalign(0.0f); l->set_line_wrap(true);
+        l->get_style_context()->add_class("dock-sub");
+        add(l);
+        std::lock_guard<std::mutex> lock(m_ach_mutex);
+        m_ach_cache.erase(m_ach_for);      // on retentera a la prochaine selection
+        return;
+    }
+    if (res->list.empty()) { m_ach_exp.hide(); return; }
+    m_ach_sum.set_text(Glib::ustring::compose(_("%1 of %2 unlocked · %3 of %4 points"),
+                                              res->unlocked, res->list.size(),
+                                              res->points_unlocked, res->points));
+    // L'avertissement du serveur en tete, en clair : c'est lui qui dit si les
+    // succes peuvent compter (« Unknown Emulator »...).
+    if (!res->warning.empty())
+        add(SettingsUi::warning_card(_("RetroAchievements"), res->warning));
+    const std::string ok = SettingsUi::tone_hex(*this, "warning");
+    const std::string off = SettingsUi::tone_hex(*this, "muted");
+    for (const auto& a : res->list) {
+        auto* row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+        auto* mark = Gtk::make_managed<Gtk::Label>();
+        mark->set_markup("<span foreground=\"" + (a.unlocked ? ok : off) + "\">"
+                         + (a.unlocked ? "★" : "☆") + "</span>");
+        mark->set_valign(Gtk::ALIGN_START);
+        row->pack_start(*mark, Gtk::PACK_SHRINK);
+        auto* txt = Gtk::make_managed<Gtk::Label>();
+        txt->set_markup("<b>" + Glib::Markup::escape_text(a.title) + "</b>  <span alpha=\"60%\">"
+                        + std::to_string(a.points) + " pts</span>\n<span size=\"small\" alpha=\"70%\">"
+                        + Glib::Markup::escape_text(a.description) + "</span>");
+        txt->set_xalign(0.0f);
+        txt->set_line_wrap(true);
+        if (!a.unlocked) txt->set_opacity(0.6);
+        row->pack_start(*txt, Gtk::PACK_EXPAND_WIDGET);
+        add(row);
+    }
 }
 
 /* Ce qui manque a un jeu « incomplete » : son BIOS, son parent.
@@ -3146,7 +3269,12 @@ void MainWindow::on_play_clicked() {
     const bool keep_history = m_settings_panel.keeps_play_history();
     const bool share_playtime = m_settings_panel.shares_play_statistics();
 
-    pid_t pid = spawn_process(launch_args);
+    // RetroAchievements : le compte passe a FinalBurn Neo, qui debloque les
+    // succes lui-meme. Rien n'est transmis pour un jeu qu'il ne reconnaitrait pas.
+    const std::vector<std::string> ra_env = RetroAchievements::supports("fbneo", game_system)
+                                                ? RetroAchievements::launch_env()
+                                                : std::vector<std::string>();
+    pid_t pid = spawn_process(launch_args, ra_env);
     if (pid > 0) {
         // Detached watcher thread: waits for process exit, records playtime,
         // then checks whether FBNeo's own F6 screenshot hotkey was used during
@@ -4431,7 +4559,9 @@ Gtk::Widget* MainWindow::make_game_card(const Gtk::TreeModel::Row& row) {
     slbl->set_markup("<span foreground=\"" + std::string(dot) + "\">" + (status == "incomplete" ? "\u26A0" : "●") + "</span> " +
                      Glib::Markup::escape_text(system) +
                      (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
-                        ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "info") + "\">◆</span>") : ""));
+                        ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "info") + "\">◆</span>") : "") +
+                     (RetroAchievements::achievement_count(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
+                        ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "warning") + "\">\u2605</span>") : ""));
     slbl->set_ellipsize(Pango::ELLIPSIZE_END);
     slbl->set_max_width_chars(1); // let the cell govern width, not the text
     slbl->set_xalign(0.0f);
@@ -4738,6 +4868,20 @@ Gtk::Widget* MainWindow::make_list_row(const Gtk::TreeModel::Row& row) {
         hs->get_style_context()->add_class("hs-none");
     }
     box->pack_start(*hs, Gtk::PACK_SHRINK);
+
+    // Colonne RA : une etoile pour un jeu qui a des succes RetroAchievements.
+    auto* ra = Gtk::make_managed<Gtk::Label>();
+    ra->set_size_request(kColRa, -1);
+    ra->set_valign(Gtk::ALIGN_CENTER);
+    if (const unsigned n = RetroAchievements::achievement_count(
+            Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)) {
+        ra->set_markup("<span foreground=\"" + SettingsUi::tone_hex(*this, "warning") + "\">\u2605</span>");
+        ra->set_tooltip_text(Glib::ustring::compose(_("%1 RetroAchievements achievements"), n));
+    } else {
+        ra->set_text("\u2014");
+        ra->get_style_context()->add_class("hs-none");
+    }
+    box->pack_start(*ra, Gtk::PACK_SHRINK);
 
     return box;
 }
@@ -5121,6 +5265,7 @@ void MainWindow::on_random_game_clicked() {
     auto eligible = [&](const Game& g) {
         if (g.status != "available" || g.is_bios) return false;
         if (opt.hiscore_only   && !game_ranks_online(g.emulator, g.system, g.name)) return false;
+        if (opt.achievements_only && !RetroAchievements::achievement_count(g.emulator, g.system, g.name)) return false;
         if (opt.originals_only && !g.cloneof.empty()) return false;
         if (opt.unplayed_only  && g.play_count > 0) return false;
         if (!opt.from_shown && !opt.systems.empty() &&
@@ -7261,6 +7406,20 @@ void MainWindow::populate_filter_tree() {
             (*hi)[m_filter_columns.m_col_count] = ranked_count;
         }
     }
+    // Les jeux d'arcade qui ont des succes RetroAchievements.
+    {
+        int with_ach = 0;
+        for (const auto& game : m_cached_games)
+            if (emulator_in_scope(game) && RetroAchievements::achievement_count(game.emulator, game.system, game.name)) with_ach++;
+        if (with_ach > 0) {
+            auto ra = m_model_filters->append();
+            (*ra)[m_filter_columns.m_col_icon] = get_filter_icon("Achievements");
+            (*ra)[m_filter_columns.m_col_name] = std::string("\u2605 ") + _("Achievements");
+            (*ra)[m_filter_columns.m_col_type] = "achievements";
+            (*ra)[m_filter_columns.m_col_value] = "1";
+            (*ra)[m_filter_columns.m_col_count] = with_ach;
+        }
+    }
 
     // En-tetes de section. Purement visuels, type "section" : ils ne
     // filtrent rien et ne se selectionnent pas. La colonne portait onze
@@ -7732,6 +7891,9 @@ void MainWindow::apply_tree_filters() {
             if (filter_type == "hiscore" && !game_ranks_online(game.emulator, game.system, game.name)) {
                 matches = false; break;
             }
+            if (filter_type == "achievements" && !RetroAchievements::achievement_count(game.emulator, game.system, game.name)) {
+                matches = false; break;
+            }
         }
 
         if (!matches) continue;
@@ -7825,6 +7987,8 @@ Glib::RefPtr<Gdk::Pixbuf> MainWindow::get_filter_icon(const std::string& categor
         body = "<path d='M8 2l1.9 3.8 4.1.6-3 2.9.7 4.1L8 11.5 4.3 13.4l.7-4.1-3-2.9 4.1-.6z'/>";
     } else if (category == "Highscore") {
         body = "<path d='M8 2l4 6-4 6-4-6z'/>";
+    } else if (category == "Achievements") {   // une medaille
+        body = "<circle cx='8' cy='10' r='4'/><path d='M5.5 6.5L4 2h3l1 3M10.5 6.5L12 2H9L8 5'/>";
     } else if (category == "Emulator") {   // une puce
         body = "<rect x='4' y='4' width='8' height='8' rx='1'/>"
                "<path d='M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5"
@@ -7883,6 +8047,7 @@ void MainWindow::rebuild_filter_chips() {
         if (k == "players")      return _("Players");
         if (k == "mode")         return _("Mode");
         if (k == "hiscore")      return _("Highscore");
+        if (k == "achievements") return _("Achievements");
         return k;
     };
     auto value_label = [](const std::string& k, const std::string& v) -> std::string {
@@ -8670,6 +8835,8 @@ void MainWindow::build_mlist_header() {
     flat(m_hdr_year,   _("YEAR"),   kColYear,   0.0f);
     plain(m_hdr_status, _("STATUS"), kColStatus);
     plain(m_hdr_hs,     _("HS"),     kColHs);
+    plain(m_hdr_ra,     _("RA"),     kColRa);
+    m_hdr_ra.set_tooltip_text(_("RetroAchievements"));
 
     m_mlist_head.pack_start(m_hdr_game,   Gtk::PACK_EXPAND_WIDGET);
     m_mlist_head.pack_start(m_hdr_emu,    Gtk::PACK_SHRINK);
@@ -8677,6 +8844,7 @@ void MainWindow::build_mlist_header() {
     m_mlist_head.pack_start(m_hdr_year,   Gtk::PACK_SHRINK);
     m_mlist_head.pack_start(m_hdr_status, Gtk::PACK_SHRINK);
     m_mlist_head.pack_start(m_hdr_hs,     Gtk::PACK_SHRINK);
+    m_mlist_head.pack_start(m_hdr_ra,     Gtk::PACK_SHRINK);
     m_mlist_head.get_style_context()->add_class("mlist-head");
 
     // Le tri passe par le combo, source unique. Cliquer « GAME » quand il est
