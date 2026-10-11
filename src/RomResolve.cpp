@@ -8,7 +8,6 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 #include <cctype>
 #include <filesystem>
@@ -232,16 +231,6 @@ std::string chd_header_sha1(const std::string& path) {
     return out;
 }
 
-// Where FinalBurn Neo itself reads a CHD : support/hdd/<parent set>/<disk>.chd,
-// under its own data folder. The DAT says which set owns a disk (a clone's
-// merge= points at its parent's), this only adds the emulator's own folder to
-// the places searched.
-std::string fbneo_hdd_dir() {
-    const char* home = std::getenv("HOME");
-    if (!home || !*home) return std::string();
-    return (fs::path(home) / ".local" / "share" / "fbneo" / "support" / "hdd").string();
-}
-
 DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& roots) {
     DiskResult res;
     if (game.disks.empty()) return res;
@@ -259,11 +248,8 @@ DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& root
         if (!d.merge.empty())
             for (const std::string& up : {game.cloneof, game.romof})
                 if (!up.empty()) homes.emplace_back(up, d.merge);
-        const bool fbneo = game.emulator != "mame";
         const std::string folder = expected_folder(game);
-        std::vector<std::string> search = roots;
-        if (fbneo && !fbneo_hdd_dir().empty()) search.push_back(fbneo_hdd_dir());
-        for (const auto& root : search) {
+        for (const auto& root : roots) {
             if (root.empty()) continue;
             std::vector<fs::path> candidates;
             for (const auto& [set, disk] : homes) {
@@ -648,30 +634,22 @@ const DatLayout::Archive* LayoutBook::archive_for(const Game& game, std::string*
 }
 
 DiskResult evaluate_layout_disks(const std::string& set, const std::vector<DatLayout::DiskEntry>& disks,
-                                 const std::vector<std::string>& roots, const std::string& folder,
-                                 bool fbneo_hdd) {
+                                 const std::vector<std::string>& roots, const std::string& folder) {
     DiskResult res;
     if (disks.empty()) return res;
     std::error_code ec;
     bool all_present = true, all_correct = true;
-    std::vector<std::string> sets{set};
-    std::vector<std::string> search = roots;
-    if (fbneo_hdd && !fbneo_hdd_dir().empty()) search.push_back(fbneo_hdd_dir());
     for (const auto& d : disks) {
         DiskVerdict v;
         v.name = d.name;
         v.sha1 = d.sha1;
-        for (const auto& root : search) {
+        for (const auto& root : roots) {
             if (root.empty()) continue;
             const fs::path base(root);
             std::vector<fs::path> candidates;
-            const bool is_emulator_dir = fbneo_hdd && root == fbneo_hdd_dir();
-            for (const std::string& one : sets) {
-                if (is_emulator_dir) { candidates.push_back(base / one / (d.name + ".chd")); continue; }
-                if (!folder.empty()) candidates.push_back(base / folder / one / (d.name + ".chd"));
-                if (lower(base.filename().string()) == lower(folder) || folder.empty())
-                    candidates.push_back(base / one / (d.name + ".chd"));
-            }
+            if (!folder.empty()) candidates.push_back(base / folder / set / (d.name + ".chd"));
+            if (lower(base.filename().string()) == lower(folder) || folder.empty())
+                candidates.push_back(base / set / (d.name + ".chd"));
             for (const fs::path& p : candidates) {
                 if (!fs::is_regular_file(p, ec)) continue;
                 const std::string sha1 = chd_header_sha1(p.string());
