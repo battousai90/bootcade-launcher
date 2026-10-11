@@ -3454,6 +3454,19 @@ void MainWindow::on_play_clicked() {
             if (!alive->alive) return;
             // FBNeo writes the .hi on exit, so this must come after the wait.
             submit_session_score(game_system, rom_name, fbneo_rom_name, score_path, hi_before, hiscore_player, hiscore_country, hiscore_enabled, share_playtime, launch_time);
+            // Les succes debloques pendant la partie : la liste gardee en memoire
+            // date d'avant. On la relit maintenant, sans attendre un redemarrage.
+            if (RetroAchievements::signed_in()
+                && RetroAchievements::achievement_count("fbneo", game_system, rom_name)) {
+                auto fresh = std::make_shared<RetroAchievements::GameAchievements>(RetroAchievements::fetch(rom_name));
+                if (fresh->answered) {
+                    {
+                        std::lock_guard<std::mutex> lock(m_ach_mutex);
+                        m_ach_cache[rom_name] = fresh;
+                    }
+                    m_ach_dispatcher.emit();
+                }
+            }
             // FBNeo has just written config/games/<rom>.ini on exit : this is
             // the only moment a complete file exists to repair.
             ControllerManager::fix_player2_input_conflicts(fbneo_rom_name);
@@ -6667,7 +6680,9 @@ void MainWindow::submit_session_score(const std::string& system,
         }
 
         if (!notice.message.empty()) {
-            if (r.report) {
+            // Un score publie n'a rien a signaler : le bouton n'est propose que
+            // quand quelque chose n'a pas marche.
+            if (r.report && !r.accepted && c != "accepted") {
                 notice.offer_report         = true;
                 notice.report.submission    = r.submission;
                 notice.report.system        = system;
