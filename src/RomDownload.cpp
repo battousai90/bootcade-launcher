@@ -5,7 +5,7 @@
 #include "HiscoreClient.h"
 #include "i18n.h"
 
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -297,7 +297,7 @@ Result download(const std::string& dat_header, const std::string& name,
     const std::string url = roms_url() + "/roms/" + escape(curl, dat_header) + "/" + escape(curl, name) + ".zip";
 
     Sink sink;
-    sink.file = std::fopen(part_path.c_str(), "wb");
+    sink.file = std::fopen(part_path.string().c_str(), "wb");
     if (!sink.file) { curl_easy_cleanup(curl); r.reason = "cannot write " + part_path.string(); return r; }
     sink.cancelled = &cancelled;
     sink.progress = &progress;

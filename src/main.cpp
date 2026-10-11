@@ -20,12 +20,15 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include "Platform.h"
+#ifndef _WIN32
 #include <malloc.h>
+#endif
 #include <iostream>
 #include <fstream>
 #include <memory>
 #include <nlohmann/json.hpp>
-#include <curl/curl.h>
+#include "CurlInit.h"
 
 /* Chien de garde de la boucle GTK (diagnostic, BOOTCADE_WATCHDOG=1).
  *
@@ -52,11 +55,13 @@ static void start_main_loop_watchdog() {
             // Every 5 s : what the allocator holds, against what it hands out.
             // In-use bytes that climb are a leak or a growing cache ; a total
             // that climbs while in-use stays flat is fragmentation.
+#ifndef _WIN32
             if (++ticks % 50 == 0) {
                 struct mallinfo2 mi = mallinfo2();
                 std::cout << "[MEM] t=" << now_ms() / 1000 << "s malloc_inuse=" << (mi.uordblks + mi.hblkhd) / (1024 * 1024)
                           << "MB malloc_total=" << (mi.arena + mi.hblkhd) / (1024 * 1024) << "MB" << std::endl;
             }
+#endif
             const int64_t gap = now_ms() - last_beat;
             if (gap > 500 && !blocked) { blocked = true; since = last_beat; }
             else if (gap <= 500 && blocked) {
@@ -71,6 +76,8 @@ static void start_main_loop_watchdog() {
 }
 
 int main(int argc, char *argv[]) {
+    Platform::init();   // Windows : pose HOME depuis %USERPROFILE% ; sans effet sous Linux
+
     // Once, before any thread : curl_global_init is not thread-safe, and the
     // hiscore probe, the artwork downloader and the DAT client all use curl.
     curl_global_init(CURL_GLOBAL_DEFAULT);

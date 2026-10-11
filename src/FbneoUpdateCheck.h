@@ -26,7 +26,14 @@ struct Result {
 };
 
 // GET https://api.github.com/repos/battousai90/FBNeo/releases/tags/latest
+// Sous Windows : finalburnneo/FBNeo, le fork ne publie que le build SDL2/Linux.
 Result fetch_latest();
+
+// Le fichier a telecharger pour installer FinalBurn Neo, et le nom de son
+// executable une fois extrait : build SDL2 du fork sous Linux, build Windows
+// officiel de finalburnneo/FBNeo sous Windows.
+std::string download_url();
+std::string executable_name();
 
     // La derniere version publiee du lanceur lui-meme. Le flatpak est
     // distribue en bundle et non par un depot, l'AppImage et l'archive n'ont

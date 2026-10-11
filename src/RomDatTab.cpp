@@ -1,5 +1,7 @@
 // src/RomDatTab.cpp
+#include "FileChooser.h"
 #include "RomDatTab.h"
+#include "Platform.h"
 
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
@@ -995,7 +997,7 @@ void RomDatTab::on_source_changed() {
 
 void RomDatTab::on_browse_folder() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-    Gtk::FileChooserDialog dlg(_("Select the DAT folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    BcFileChooser dlg(_("Select the DAT folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Select"), Gtk::RESPONSE_OK);
@@ -1013,7 +1015,7 @@ void RomDatTab::on_browse_folder() {
 void RomDatTab::on_add_files() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
     if (group().folder.empty()) { if (top) ui::notice(*top, _("No DAT folder"), _("Choose the group's folder first.")); return; }
-    Gtk::FileChooserDialog dlg(_("Add DAT files"), Gtk::FILE_CHOOSER_ACTION_OPEN);
+    BcFileChooser dlg(_("Add DAT files"), Gtk::FILE_CHOOSER_ACTION_OPEN);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Add"), Gtk::RESPONSE_OK);

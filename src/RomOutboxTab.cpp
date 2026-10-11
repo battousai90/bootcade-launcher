@@ -1,4 +1,5 @@
 // src/RomOutboxTab.cpp
+#include "FileChooser.h"
 #include "RomOutboxTab.h"
 #include "FileCopy.h"
 
@@ -364,7 +365,7 @@ void RomOutboxTab::apply_outbox_path(const std::string& folder) {
 
 void RomOutboxTab::on_browse_folder() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-    Gtk::FileChooserDialog dlg(_("Select the outbox folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    BcFileChooser dlg(_("Select the outbox folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Select"), Gtk::RESPONSE_OK);
@@ -458,7 +459,7 @@ void RomOutboxTab::on_edit_destinations() {
         line->pack_start(*entry, Gtk::PACK_EXPAND_WIDGET);
         auto* browse = ui::button(_("Browse…"), "bc-folder.svg");
         browse->signal_clicked().connect([&dlg, entry] {
-            Gtk::FileChooserDialog fc(dlg, _("Select the destination directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+            BcFileChooser fc(dlg, _("Select the destination directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
             fc.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
             fc.add_button(_("Select"), Gtk::RESPONSE_OK);
             if (fc.run() == Gtk::RESPONSE_OK) entry->set_text(fc.get_filename());

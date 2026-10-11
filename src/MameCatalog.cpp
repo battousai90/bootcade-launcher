@@ -2,10 +2,14 @@
 #include "MameCatalog.h"
 #include "DefaultFolders.h"
 
+#include "Platform.h"
+#include "ProcessWin.h"
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <pugixml.hpp>
 #include <zip.h>
 #include <nlohmann/json.hpp>
@@ -36,6 +40,9 @@ namespace {
 // Rend false si le processus n'a pas pu demarrer.
 bool run_streaming(const std::vector<std::string>& args,
                    const std::function<bool(const char*, size_t)>& sink) {
+#ifdef _WIN32
+    return WinProc::run_streaming(args, {}, sink);
+#else
     const std::vector<std::string> cmd = AppContext::host_command(args);
 
     int fds[2];
@@ -69,6 +76,7 @@ bool run_streaming(const std::vector<std::string>& args,
     int status = 0;
     waitpid(pid, &status, 0);
     return true;
+#endif
 }
 
 // Toute la sortie d'une commande courte, sans passer par un shell.
@@ -145,12 +153,20 @@ bool is_runnable(const std::string& exe) {
 std::string find_executable() {
     // Les emplacements usuels d'abord : Debian et Fedora ne rangent pas MAME
     // au meme endroit, et `which` coute un processus de plus.
+#ifdef _WIN32
+    // `where` est le `which` de Windows ; il rend une ligne par resultat.
+    std::string found = run_capture({"where", "mame"});
+    found = found.substr(0, found.find_first_of("\r\n"));
+    if (!found.empty() && is_runnable(found)) return found;
+    return {};
+#else
     for (const char* p : {"/usr/games/mame", "/usr/bin/mame", "/usr/local/bin/mame"}) {
         if (is_runnable(p)) return p;
     }
     const std::string found = run_capture({"which", "mame"});
     if (found.find('/') != std::string::npos) return found;
     return flatpak_wrapper();
+#endif
 }
 
 /* MAME installe en Flatpak (org.mamedev.MAME).

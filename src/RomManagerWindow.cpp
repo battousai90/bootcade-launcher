@@ -1,4 +1,5 @@
 // src/RomManagerWindow.cpp
+#include "FileChooser.h"
 #include "RomManagerWindow.h"
 #include "RomArchive.h"
 #include "RomImportTab.h"
@@ -278,7 +279,7 @@ RomManagerWindow::~RomManagerWindow() = default;
 // ── Import tab ───────────────────────────────────────────────────────────────
 
 void RomManagerWindow::on_browse(Gtk::Entry* entry) {
-    Gtk::FileChooserDialog dialog(*this, _("Select Folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    BcFileChooser dialog(*this, _("Select Folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
     auto current = entry->get_text();

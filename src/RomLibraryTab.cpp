@@ -1,5 +1,7 @@
 // src/RomLibraryTab.cpp
+#include "FileChooser.h"
 #include "RomLibraryTab.h"
+#include "Platform.h"
 #include "FileCopy.h"
 
 #include "AppContext.h"
@@ -1422,7 +1424,7 @@ void RomLibraryTab::worker_fix() {
 void RomLibraryTab::on_export(int format) {
     if (!m_audit_ever_run) { flash(_("Run an audit first.")); return; }
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-    Gtk::FileChooserDialog dlg(_("Export audit"), Gtk::FILE_CHOOSER_ACTION_SAVE);
+    BcFileChooser dlg(_("Export audit"), Gtk::FILE_CHOOSER_ACTION_SAVE);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Save"),   Gtk::RESPONSE_OK);

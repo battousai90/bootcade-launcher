@@ -8,6 +8,7 @@
 // signal. C'est volontaire : une refonte visuelle qui reecrit au passage la
 // lecture de la configuration, le balayage des ROMs ou la connexion au compte
 // ne se debogue plus, parce qu'on ne sait plus ce qui a change.
+#include "FileChooser.h"
 #include "SettingsPanel.h"
 #include "DefaultFolders.h"
 #include "RetroAchievements.h"
@@ -47,7 +48,10 @@
 #include <mutex>
 #include <thread>
 #include <sys/stat.h>
+#include "Platform.h"
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 
 namespace {
@@ -1169,7 +1173,7 @@ Gtk::Widget* SettingsPanel::build_page_library() {
     m_btn_browse_catver.set_always_show_image(true);
     m_btn_browse_catver.set_tooltip_text(_("Browse..."));
     m_btn_browse_catver.signal_clicked().connect([this] {
-        auto chooser = Gtk::FileChooserDialog(_("Select catver.ini"),
+        auto chooser = BcFileChooser(_("Select catver.ini"),
                                               Gtk::FILE_CHOOSER_ACTION_OPEN);
         if (auto* win = dynamic_cast<Gtk::Window*>(get_toplevel()))
             chooser.set_transient_for(*win);
@@ -1462,7 +1466,7 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     m_button_browse_fbneo.set_image(*ui::image("bc-folder.svg", ui::kIconButton));
     m_button_browse_fbneo.set_always_show_image(true);
     m_button_browse_fbneo.signal_clicked().connect([this] {
-        auto dialog = Gtk::FileChooserDialog(_("Select FBNeo Executable"), Gtk::FILE_CHOOSER_ACTION_OPEN);
+        auto dialog = BcFileChooser(_("Select FBNeo Executable"), Gtk::FILE_CHOOSER_ACTION_OPEN);
         dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
         dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
 
@@ -1526,7 +1530,11 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
         // ecrit son mode d'emploi et s'arrete aussitot, sans aucune fenetre.
         Glib::Pid pid = 0;
         try {
+#ifdef _WIN32
+            Glib::spawn_async("", std::vector<std::string>{path},
+#else
             Glib::spawn_async("", AppContext::host_command({path, "-menu"}),
+#endif
                               Glib::SPAWN_SEARCH_PATH | Glib::SPAWN_DO_NOT_REAP_CHILD,
                               Glib::SlotSpawnChildSetup(), &pid);
         } catch (const Glib::Error& e) {
@@ -1651,7 +1659,7 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     m_button_browse_mame.set_image(*ui::image("bc-folder.svg", ui::kIconButton));
     m_button_browse_mame.set_always_show_image(true);
     m_button_browse_mame.signal_clicked().connect([this] {
-        auto dialog = Gtk::FileChooserDialog(_("Select MAME Executable"),
+        auto dialog = BcFileChooser(_("Select MAME Executable"),
                                              Gtk::FILE_CHOOSER_ACTION_OPEN);
         dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
         dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
@@ -4056,7 +4064,7 @@ void SettingsPanel::set_language(const std::string& code) {
 }
 
 void SettingsPanel::on_folder_clicked(Gtk::Entry* entry) {
-    auto dialog = Gtk::FileChooserDialog(_("Select Folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    auto dialog = BcFileChooser(_("Select Folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
 
@@ -4596,7 +4604,7 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
 
 // --- New methods for ROMs path management ---
 void SettingsPanel::on_add_roms_path_clicked() {
-    auto dialog = Gtk::FileChooserDialog(_("Select ROMs Directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    auto dialog = BcFileChooser(_("Select ROMs Directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
 
@@ -4655,7 +4663,7 @@ void SettingsPanel::on_download_fbneo_clicked() {
         // finalburnneo/FBNeo stopped maintaining the SDL/Linux build (missing DAT
         // export calls for several systems, upstream declined the fix) : this fork
         // tracks their master daily and carries just that fix. See website FAQ.
-        "https://github.com/battousai90/FBNeo/releases/download/latest/linux-sdl2-x86_64.zip",
+        FbneoUpdateCheck::download_url(),
         folder
     );
 

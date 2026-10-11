@@ -1,10 +1,11 @@
 // src/AppUpdater.cpp
 #include "AppUpdater.h"
+#include "Platform.h"
 
 #include "AppContext.h"
 #include "DatSource.h"
 
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <glibmm.h>
 #include <unistd.h>
 
@@ -24,12 +25,16 @@ const char* const kAppId = "io.github.battousai90.Bootcade";
 // une fois le fichier remplace, /proc/self/exe se termine par « (deleted) ».
 const std::string& own_executable() {
     static const std::string path = [] {
+#ifdef _WIN32
+        return Platform::executable_path();
+#else
         std::error_code ec;
         std::string p = fs::read_symlink("/proc/self/exe", ec).string();
         const std::string deleted = " (deleted)";
         if (p.size() > deleted.size() && p.compare(p.size() - deleted.size(), deleted.size(), deleted) == 0)
             p.erase(p.size() - deleted.size());
         return p;
+#endif
     }();
     return path;
 }
@@ -199,7 +204,7 @@ std::string install_tarball(const std::string& file) {
     if (root.empty()) return "install folder unknown";
     std::vector<std::string> cmd{"tar", "-xzf", file, "--strip-components=1", "-C", root.string()};
     // Un dossier du systeme (/opt, /usr/local) : il faut le mot de passe.
-    if (::access(root.c_str(), W_OK) != 0) cmd.insert(cmd.begin(), "pkexec");
+    if (::access(root.string().c_str(), W_OK) != 0) cmd.insert(cmd.begin(), "pkexec");
     std::string out;
     if (run(cmd, &out) != 0) return out.empty() ? "tar failed" : out;
     return {};
@@ -208,6 +213,10 @@ std::string install_tarball(const std::string& file) {
 }  // namespace
 
 Install detect() {
+    // Windows : pas de mise a jour automatique pour l'instant (etape suivante).
+#ifdef _WIN32
+    return Install::Unknown;
+#endif
     if (AppContext::in_flatpak()) return Install::Flatpak;
     if (const char* a = std::getenv("APPIMAGE"); a && *a) return Install::AppImage;
     const std::string& exe = own_executable();
@@ -264,6 +273,9 @@ std::string install(const Assets& assets, const Progress& progress) {
 }
 
 void restart_after_exit() {
+#ifdef _WIN32
+    return;
+#endif
     const Install how = detect();
     std::vector<std::string> cmd;
     if (how == Install::Flatpak) {

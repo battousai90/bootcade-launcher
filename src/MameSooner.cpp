@@ -1,11 +1,12 @@
 // src/MameSooner.cpp
 #include "MameSooner.h"
+#include "Platform.h"
 
 #include "AppContext.h"
 #include "DatSource.h"
 #include "MameCatalog.h"
 
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <glibmm.h>
 #include <nlohmann/json.hpp>
 #include <sys/stat.h>

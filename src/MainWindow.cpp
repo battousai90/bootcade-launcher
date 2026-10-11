@@ -1,4 +1,5 @@
 // src/MainWindow.cpp
+#include "FileChooser.h"
 #include "MainWindow.h"
 #include "EmulatorRegistry.h"
 #include "MameCatalog.h"
@@ -21,6 +22,7 @@
 #include "GameListSetup.h"
 #include "GenerateDAT.h"
 #include "FbneoUpdateCheck.h"
+#include "FbneoPaths.h"
 #include "ScreenshotAssignDialog.h"
 #include "HiscoreReportDialog.h"
 #include "SystemPrefix.h"
@@ -47,7 +49,11 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include "Platform.h"
+#include "ProcessWin.h"
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #include <zip.h>
 #include <iomanip>
 #include <sstream>
@@ -141,6 +147,13 @@ static bool fbneo_can_start(const std::string& exe);
 
 // `env` : variables « NOM=valeur » pour ce seul processus. Sous Flatpak elles
 // doivent traverser flatpak-spawn, qui ne transmet pas notre environnement.
+#ifdef _WIN32
+// Windows : CreateProcess (voir ProcessWin.cpp). Pas de Flatpak ni d'hote.
+static pid_t spawn_process(const std::vector<std::string>& args,
+                           const std::vector<std::string>& env = {}) {
+    return WinProc::spawn(args, env);
+}
+#else
 static pid_t spawn_process(const std::vector<std::string>& args,
                            const std::vector<std::string>& env = {}) {
     if (args.empty()) return -1;
@@ -170,6 +183,7 @@ static pid_t spawn_process(const std::vector<std::string>& args,
     }
     return pid; // parent gets child PID
 }
+#endif
 
 // Watch a child process and record its playtime in the database when it exits.
 /* `record` porte le reglage « Keep play history ».
@@ -189,7 +203,11 @@ static void watch_playtime(pid_t pid,
 {
     auto start = std::chrono::steady_clock::now();
     int status = 0;
+#ifdef _WIN32
+    status = WinProc::wait(pid);
+#else
     waitpid(pid, &status, 0); // blocking wait
+#endif
     auto end = std::chrono::steady_clock::now();
     int elapsed = (int)std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
     if (record && elapsed > 0)
@@ -200,8 +218,7 @@ static void watch_playtime(pid_t pid,
 // support exits. Named after the FBNeo ROM name, which carries the console
 // prefix : not after the catalogue name used to identify the game online.
 static std::string fbneo_hiscores_dir() {
-    const char* home = std::getenv("HOME");
-    return std::string(home ? home : "") + "/.local/share/fbneo/support/hiscores";
+    return FbneoPaths::hiscores_dir();
 }
 
 static std::string fbneo_hiscore_path(const std::string& fbneo_rom_name) {
@@ -212,9 +229,7 @@ static std::string fbneo_hiscore_path(const std::string& fbneo_rom_name) {
 // memory range, so no .hi is ever written for Metal Slug or King of Fighters.
 // FBNeo saves that SRAM here instead, with a 96 byte header the server strips.
 static std::string fbneo_saveram_path(const std::string& fbneo_rom_name) {
-    const char* home = std::getenv("HOME");
-    return std::string(home ? home : "") +
-           "/.local/share/fbneo/config/games/" + fbneo_rom_name + ".fs";
+    return FbneoPaths::games_dir() + "/" + fbneo_rom_name + ".fs";
 }
 
 /* Laisse par le FBNeo de Bootcade quand on quitte un jeu Neo Geo avant que
@@ -225,9 +240,7 @@ static std::string fbneo_saveram_path(const std::string& fbneo_rom_name) {
  * est lu une seule fois, puis efface : un FBNeo plus ancien ne le remettrait
  * pas, et il annoncerait a tort la meme perte a chaque partie. */
 static bool take_unsaved_scores_marker(const std::string& fbneo_rom_name) {
-    const char* home = std::getenv("HOME");
-    const std::string path = std::string(home ? home : "") +
-        "/.local/share/fbneo/config/games/" + fbneo_rom_name + ".unsaved";
+    const std::string path = FbneoPaths::games_dir() + "/" + fbneo_rom_name + ".unsaved";
     std::error_code ec;
     if (!std::filesystem::exists(path, ec)) return false;
     std::filesystem::remove(path, ec);
@@ -3325,6 +3338,11 @@ void MainWindow::on_play_clicked() {
         }
     }
     update_fbneo_config(launch_dirs);
+#ifdef _WIN32
+    // Le FBNeo Windows n'ecrit les scores (.hi) que si on le lui demande ; le
+    // build SDL du fork le fait de lui-meme.
+    FbneoPaths::set_ini_value("EnableHiscores", "1");
+#endif
     
     
     // Set the correct system in FBNeo config before launching
@@ -3347,6 +3365,13 @@ void MainWindow::on_play_clicked() {
     // === Build launch args ===
     std::vector<std::string> launch_args;
     launch_args.push_back(fbneo_executable);
+#ifdef _WIN32
+    // Le FBNeo Windows attend le nom du jeu d'abord, puis « -w » pour une
+    // fenetre : il demarre en plein ecran sans option. Les options SDL
+    // (-fullscreen, filtres, arguments libres) ne lui sont pas transmises.
+    launch_args.push_back(fbneo_rom_name);
+    if (!m_launch_fullscreen) launch_args.push_back("-w");
+#else
     // No "-joy": that flag makes FBNeo map the pad onto EVERY player, so a
     // single controller ends up driving both P1 and P2 coin/start : one press
     // inserts two credits and starts a two-player game. Verified by running
@@ -3374,6 +3399,7 @@ void MainWindow::on_play_clicked() {
         while (words >> one) launch_args.push_back(one);
     }
     launch_args.push_back(fbneo_rom_name);
+#endif
 
     std::cout << "Launching " << game_system << " game:";
     for (const auto& a : launch_args) std::cout << " " << a;
@@ -3544,8 +3570,7 @@ std::string MainWindow::get_fbneo_screenshots_dir() {
     // le launcher y cherchait des captures qui n'y arrivent jamais, et la
     // question « utiliser cette capture comme artwork ? » ne venait plus.
     // Meme construction que les scores et les .ini des manettes plus haut.
-    const char* home = getenv("HOME");
-    return std::string(home ? home : "") + "/.local/share/fbneo/screenshots";
+    return FbneoPaths::screenshots_dir();
 }
 
 std::vector<std::string> MainWindow::find_session_screenshots(const std::string& fbneo_rom_name, std::time_t launch_time) {
@@ -3680,18 +3705,12 @@ void MainWindow::on_download_art_clicked() {
 }
 
 void MainWindow::update_fbneo_config(const std::vector<std::string>& roms_paths) {
-    const char* home = getenv("HOME");
-    std::string config_file = std::string(home ? home : "") + "/.local/share/fbneo/config/fbneo.ini";
+    std::string config_file = FbneoPaths::ini_path();
     
     // Prepare paths with trailing slashes
     std::vector<std::string> normalized_paths;
-    for (const auto& path : roms_paths) {
-        std::string path_with_slash = path;
-        if (!path_with_slash.empty() && path_with_slash.back() != '/') {
-            path_with_slash += "/";
-        }
-        normalized_paths.push_back(path_with_slash);
-    }
+    for (const auto& path : roms_paths)
+        normalized_paths.push_back(FbneoPaths::with_trailing_separator(path));
     
     // Read the current config to check if paths are already correctly set.
     // Absent sur une installation neuve : FinalBurn Neo ne l'ecrit qu'en
@@ -3792,8 +3811,7 @@ void MainWindow::update_fbneo_config(const std::vector<std::string>& roms_paths)
 }
 
 void MainWindow::set_fbneo_system(const std::string& system) {
-    const char* home = getenv("HOME");
-    std::string config_file = std::string(home ? home : "") + "/.local/share/fbneo/config/fbneo.ini";
+    std::string config_file = FbneoPaths::ini_path();
     
     // System-specific filter values from FBNeo
     int filter_value = 0; // Default
@@ -4309,7 +4327,7 @@ void MainWindow::refresh_setup_guide() {
 }
 
 void MainWindow::on_guide_choose_roms() {
-    Gtk::FileChooserDialog dialog(*this, _("Select ROMs Directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    BcFileChooser dialog(*this, _("Select ROMs Directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
     if (const char* home = std::getenv("HOME")) dialog.set_current_folder(home);
@@ -5263,7 +5281,7 @@ std::string MainWindow::escape_markup(const std::string& text) {
 
 void MainWindow::on_export_game_list() {
     // Export game list to CSV/JSON
-    Gtk::FileChooserDialog dialog(*this, "Export Game List", Gtk::FILE_CHOOSER_ACTION_SAVE);
+    BcFileChooser dialog(*this, "Export Game List", Gtk::FILE_CHOOSER_ACTION_SAVE);
     dialog.set_transient_for(*this);
     dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dialog.add_button(_("Save"), Gtk::RESPONSE_OK);
@@ -5289,7 +5307,11 @@ void MainWindow::on_fbneo_menu() {
     // Launch FBNeo with menu
     std::string fbneo_executable = m_settings_panel.get_fbneo_executable();
     std::cout << "Opening FBNeo menu: " << fbneo_executable << std::endl;
+#ifdef _WIN32
+    spawn_process({fbneo_executable});   // son propre ecran de choix, sans argument
+#else
     spawn_process({fbneo_executable, "-menu"});
+#endif
 }
 
 void MainWindow::on_video_settings() {
@@ -7040,7 +7062,7 @@ void MainWindow::on_download_latest_fbneo() {
         *this,
         // See SettingsPanel::on_download_fbneo_clicked for why this points at our
         // own fork instead of finalburnneo/FBNeo directly.
-        "https://github.com/battousai90/FBNeo/releases/download/latest/linux-sdl2-x86_64.zip",
+        FbneoUpdateCheck::download_url(),
         folder
     );
 

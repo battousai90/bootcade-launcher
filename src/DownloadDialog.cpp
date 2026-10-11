@@ -1,12 +1,15 @@
 // src/DownloadDialog.cpp
+#include "FileChooser.h"
 #include "DownloadDialog.h"
+#include "Platform.h"
+#include "FbneoUpdateCheck.h"
 #include "DefaultFolders.h"
 #include "i18n.h"
 #include "SettingsUi.h"
 #include "IconManager.h"
 #include "AppContext.h"
 #include "HostLibraries.h"
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <zip.h>
 #include <fstream>
 #include <filesystem>
@@ -56,7 +59,7 @@ std::string DownloadDialog::choose_fbneo_folder(Gtk::Window& parent, const std::
         fs::create_directories(folder, ec);
     }
 
-    Gtk::FileChooserDialog dialog(parent, _("Install FinalBurn Neo in"),
+    BcFileChooser dialog(parent, _("Install FinalBurn Neo in"),
                                   Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dialog.add_button(_("Install here"), Gtk::RESPONSE_OK);
@@ -138,7 +141,7 @@ DownloadDialog::DownloadDialog(Gtk::Window& parent, const std::string& url, cons
             // Built from the actual extraction destination, not a hardcoded
             // "./fbneo" : a relative literal would land in config.json and
             // break as soon as Bootcade starts from another directory.
-            std::string fbneo_path = (std::filesystem::path(m_destination) / "fbneo").string();
+            std::string fbneo_path = (std::filesystem::path(m_destination) / FbneoUpdateCheck::executable_name()).string();
 
             // On vient de le telecharger POUR s'en servir : il devient
             // l'emulateur, sans question. La demander ne servait qu'a

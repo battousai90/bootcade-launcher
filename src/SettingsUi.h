@@ -115,10 +115,10 @@ void refresh_fold(const Fold& f);
 bool open_uri(const std::string& uri, Gtk::Window* parent = nullptr);
 
 // Taille commune des fenetres de travail (Settings, ROM Manager, Controller
-// Configuration) : 1400 x 900, bornee a 90 % de l'ecran de `near`.
+// Configuration) : 1400 x 900, bornee a 90 % de l'ecran de `anchor`.
 inline constexpr int kWorkWindowWidth  = 1400;
 inline constexpr int kWorkWindowHeight = 900;
-void size_work_window(Gtk::Window& win, Gtk::Window* near = nullptr);
+void size_work_window(Gtk::Window& win, Gtk::Window* anchor = nullptr);
 // Tant que `win` est affichee, `main` porte la classe « behind-work » : la
 // feuille de style l'assombrit quand elle n'est pas la fenetre active.
 void dim_behind(Gtk::Window& win, Gtk::Window& main);

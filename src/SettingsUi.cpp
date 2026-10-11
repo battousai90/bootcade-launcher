@@ -1,5 +1,7 @@
 // src/SettingsUi.cpp
+#include "FileChooser.h"
 #include "SettingsUi.h"
+#include "Platform.h"
 #include <gio/gio.h>
 #include <sstream>
 #include "AppContext.h"
@@ -780,7 +782,7 @@ bool LogPanel::auto_scroll() const { return m_follow ? m_follow->get_active() : 
 
 void LogPanel::on_export() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-    Gtk::FileChooserDialog dlg(_("Export log"), Gtk::FILE_CHOOSER_ACTION_SAVE);
+    BcFileChooser dlg(_("Export log"), Gtk::FILE_CHOOSER_ACTION_SAVE);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Save"),   Gtk::RESPONSE_OK);
@@ -1071,13 +1073,13 @@ void refresh_fold(const Fold& f) {
  * (1080p, ou 4K affichee a 200 %) : 1400 x 900 y tient avec la barre des
  * taches et la barre de titre. La borne a 90 % de la zone de travail ne sert
  * qu'aux ecrans plus petits. */
-void size_work_window(Gtk::Window& win, Gtk::Window* near) {
+void size_work_window(Gtk::Window& win, Gtk::Window* anchor) {
     int w = kWorkWindowWidth, h = kWorkWindowHeight;
     auto display = Gdk::Display::get_default();
     Glib::RefPtr<Gdk::Monitor> monitor;
     if (display) {
-        if (near && near->get_window())
-            monitor = display->get_monitor_at_window(near->get_window());
+        if (anchor && anchor->get_window())
+            monitor = display->get_monitor_at_window(anchor->get_window());
         if (!monitor) monitor = display->get_primary_monitor();
         if (!monitor && display->get_n_monitors() > 0) monitor = display->get_monitor(0);
     }
@@ -1181,6 +1183,12 @@ bool open_with_portal(const std::string& uri) {
 
 bool open_uri(const std::string& uri, Gtk::Window* parent) {
     if (uri.empty()) return false;
+#ifdef _WIN32
+    (void)parent;
+    try { return Gio::AppInfo::launch_default_for_uri(uri); }
+    catch (const Glib::Error& e) { std::cerr << "[OPEN] " << e.what() << std::endl; }
+    return false;
+#else
     const bool is_file = uri.rfind("file:", 0) == 0;
 
     // Dans le Flatpak, GTK passe deja par le portail, et c'est la seule voie.
@@ -1205,6 +1213,7 @@ bool open_uri(const std::string& uri, Gtk::Window* parent) {
     try { return Gio::AppInfo::launch_default_for_uri(uri); }
     catch (const Glib::Error& e) { std::cerr << "[OPEN] " << e.what() << std::endl; }
     return false;
+#endif
 }
 
 }  // namespace SettingsUi

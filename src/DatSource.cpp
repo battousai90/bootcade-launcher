@@ -1,5 +1,6 @@
 // src/DatSource.cpp
 #include "DatSource.h"
+#include "Platform.h"
 #include "DatParser.h"
 
 #include "AppContext.h"
@@ -8,7 +9,7 @@
 
 #include <archive.h>
 #include <archive_entry.h>
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <glibmm/checksum.h>
 #include <nlohmann/json.hpp>
 #include <pugixml.hpp>
@@ -744,7 +745,7 @@ bool fetch_direct(const std::string& url, const std::string& folder,
     struct archive* a = archive_read_new();
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
-    bool ok = archive_read_open_filename(a, tmp.c_str(), 1 << 16) == ARCHIVE_OK;
+    bool ok = archive_read_open_filename(a, tmp.string().c_str(), 1 << 16) == ARCHIVE_OK;
     if (!ok) error = archive_error_string(a) ? archive_error_string(a) : "cannot open the archive";
     struct archive_entry* e = nullptr;
     while (ok && archive_read_next_header(a, &e) == ARCHIVE_OK) {

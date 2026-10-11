@@ -3,11 +3,16 @@
 #include <ctime>
 #include <fstream>
 #include <nlohmann/json.hpp>
-#include <unistd.h>
+#include "Platform.h"
 #include <limits.h>
 #include <sys/stat.h>
 #include <cstdlib>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
 #include <malloc.h>
+#endif
 #include <filesystem>
 #include <iostream>
 #include <vector>
@@ -21,6 +26,14 @@ std::string AppContext::get_executable_dir() {
         return s_executable_dir;
     }
 
+#ifdef _WIN32
+    const std::string exe = Platform::executable_path();
+    if (!exe.empty()) {
+        s_executable_dir = std::filesystem::path(exe).parent_path().string();
+        std::cout << "[DEBUG] Executable directory cached: " << s_executable_dir << std::endl;
+        return s_executable_dir;
+    }
+#else
     char result[PATH_MAX];
     ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
     if (count != -1) {
@@ -29,8 +42,9 @@ std::string AppContext::get_executable_dir() {
         std::cout << "[DEBUG] Executable directory cached: " << s_executable_dir << std::endl;
         return s_executable_dir;
     }
+#endif
 
-    std::cerr << "[ERROR] Failed to read /proc/self/exe. Using '.'" << std::endl;
+    std::cerr << "[ERROR] Failed to read the executable path. Using '.'" << std::endl;
     s_executable_dir = ".";
     return s_executable_dir;
 }
@@ -129,7 +143,14 @@ std::string AppContext::get_user_config_dir() {
         return ".";
     }
 
+#ifdef _WIN32
+    // %APPDATA%\bootcade : l'emplacement normal d'une application Windows.
+    const char* appdata = std::getenv("APPDATA");
+    const std::string config_dir = (appdata && *appdata ? std::string(appdata) : std::string(home))
+                                   + "/bootcade";
+#else
     const std::string config_dir = std::string(home) + "/.config/bootcade";
+#endif
     if (holds_library(config_dir)) return config_dir;
 
     // Pas de bibliotheque ici : soit c'est une premiere installation, soit une
@@ -197,9 +218,11 @@ std::string AppContext::get_data_dir() {
 #ifdef BOOTCADE_INSTALL_DATA_DIR
     candidates.push_back(BOOTCADE_INSTALL_DATA_DIR);                             // baked in at configure time
 #endif
+#ifndef _WIN32
     candidates.push_back("/usr/share/bootcade");
     candidates.push_back("/usr/local/share/bootcade");
     candidates.push_back("/app/share/bootcade");                // Flatpak prefix
+#endif
 
     std::error_code ec;
     for (const auto& c : candidates) {

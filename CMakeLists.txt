@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.16)
 #
 # Packaging (CPack, plus bas) l'utilise tel quel : un nom de paquet veut un
 # numero de release propre, jamais une empreinte de commit.
-project(bootcade VERSION 1.8.0 LANGUAGES CXX)
+project(bootcade VERSION 2.0.0 LANGUAGES CXX)
 
 # --- Ce que le binaire annonce -------------------------------------------
 #
@@ -122,10 +122,21 @@ if(NOT BOOTCADE_ON_RELEASE_TAG EQUAL 0)
 endif()
 message(STATUS "bootcade version: ${BOOTCADE_VERSION_STRING}")
 
+# Les ressources Windows (icone de l'exe) passent par windres.
+if(WIN32)
+    enable_language(RC)
+endif()
+
 set(APP_ID "io.github.battousai90.Bootcade")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+# mingw-w64 cache derriere __STRICT_ANSI__ une partie de l'API POSIX/Windows
+# (access, gmtime_r...) : sous Windows on compile donc en gnu++17.
+if(WIN32)
+    set(CMAKE_CXX_EXTENSIONS ON)
+else()
+    set(CMAKE_CXX_EXTENSIONS OFF)
+endif()
 # --- Find packages ---
 # Ensure that the required packages are found and linked correctly  
 find_package(PkgConfig REQUIRED)
@@ -215,6 +226,7 @@ add_executable(bootcade
     src/MameControls.cpp
     src/ControllerDialog.cpp
     src/i18n.cpp
+    src/FbneoPaths.cpp
 )
 # --- Source files ---
 target_link_libraries(bootcade
@@ -254,6 +266,28 @@ set_target_properties(bootcade PROPERTIES
     INSTALL_RPATH "$ORIGIN/lib:$ORIGIN/lib64"
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Windows (MSYS2 / mingw-w64). Build a part : se configure dans un shell MSYS2
+# MINGW64, voir .github/workflows/windows.yml. Le chemin Linux n'est pas touche.
+#
+# Pas de console par defaut (sous-systeme fenetre) : stderr va deja dans
+# debug.log du dossier de configuration. BOOTCADE_WIN_CONSOLE=ON la rend, pour
+# lire le journal en direct.
+# ─────────────────────────────────────────────────────────────────────────────
+if(WIN32)
+    option(BOOTCADE_WIN_CONSOLE "Keep a console window on Windows (debug)" OFF)
+    # Icone et fiche de version de l'exe. Le .ico et le .rc se retrouvent dans
+    # le dossier de build, ou le .rc les cherche.
+    configure_file(packaging/windows/bootcade.ico "${CMAKE_BINARY_DIR}/bootcade.ico" COPYONLY)
+    configure_file(packaging/windows/bootcade.manifest "${CMAKE_BINARY_DIR}/bootcade.manifest" COPYONLY)
+    configure_file(packaging/windows/bootcade.rc.in "${CMAKE_BINARY_DIR}/bootcade.rc" @ONLY)
+    target_sources(bootcade PRIVATE "${CMAKE_BINARY_DIR}/bootcade.rc" src/ProcessWin.cpp)
+    target_link_libraries(bootcade ws2_32 shlwapi winmm)
+    if(NOT BOOTCADE_WIN_CONSOLE)
+        target_link_options(bootcade PRIVATE -mwindows)
+    endif()
+endif()
+
 # Baked-in fallback for the packaged layout. AppContext probes several locations
 # at runtime; this is the one an FHS install ends up using.
 target_compile_definitions(bootcade PRIVATE
@@ -278,6 +312,12 @@ add_custom_target(copy_assets ALL
 # ─────────────────────────────────────────────────────────────────────────────
 include(GNUInstallDirs)
 
+if(WIN32)
+    # Dossier portable : bootcade.exe, assets/ et locale/ cote a cote, ce que
+    # AppContext::get_data_dir() trouve en premier (le dossier de l'exe).
+    install(TARGETS bootcade RUNTIME DESTINATION .)
+    install(DIRECTORY assets locale DESTINATION .)
+else()
 install(TARGETS bootcade RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 install(DIRECTORY assets locale
@@ -292,6 +332,7 @@ install(FILES packaging/${APP_ID}.metainfo.xml
 install(FILES assets/logo.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
         RENAME ${APP_ID}.svg)
+endif()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Outils de developpement, jamais livres aux joueurs : OFF par defaut, donc

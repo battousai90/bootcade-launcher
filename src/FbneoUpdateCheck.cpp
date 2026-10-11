@@ -1,7 +1,8 @@
 // src/FbneoUpdateCheck.cpp
 #include "FbneoUpdateCheck.h"
+#include "Platform.h"
 
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <nlohmann/json.hpp>
 #include <ctime>
 
@@ -71,7 +72,27 @@ Result fetch_release(const char* url) {
 } // namespace
 
 Result fetch_latest() {
+#ifdef _WIN32
+    return fetch_release("https://api.github.com/repos/finalburnneo/FBNeo/releases/tags/latest");
+#else
     return fetch_release("https://api.github.com/repos/battousai90/FBNeo/releases/tags/latest");
+#endif
+}
+
+std::string download_url() {
+#ifdef _WIN32
+    return "https://github.com/finalburnneo/FBNeo/releases/download/latest/windows-x86_64.zip";
+#else
+    return "https://github.com/battousai90/FBNeo/releases/download/latest/linux-sdl2-x86_64.zip";
+#endif
+}
+
+std::string executable_name() {
+#ifdef _WIN32
+    return "fbneo64.exe";
+#else
+    return "fbneo";
+#endif
 }
 
 Result fetch_launcher_latest() {

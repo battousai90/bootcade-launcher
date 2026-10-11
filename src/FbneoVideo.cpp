@@ -1,13 +1,17 @@
 // src/FbneoVideo.cpp
 #include "FbneoVideo.h"
 
-#include <poll.h>
+#include "Platform.h"
+#include "ProcessWin.h"
 #include <cerrno>
 #include <signal.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <poll.h>
+#include <sys/wait.h>
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -34,6 +38,13 @@ namespace {
  * alors que la commande, elle, part telle quelle sur l'hote.
  */
 std::string capture(const std::string& exe, int timeout_ms) {
+#ifdef _WIN32
+    // -list-video-json est une option du build SDL : le FBNeo Windows la
+    // prendrait pour un nom de jeu et ouvrirait sa fenetre. Il n'a pas de
+    // reglages video SDL a decrire.
+    (void)exe; (void)timeout_ms;
+    return {};
+#else
     const std::vector<std::string> cmd = AppContext::host_command(
         {"env", "SDL_VIDEODRIVER=dummy", "SDL_AUDIODRIVER=dummy", exe, "-list-video-json"});
 
@@ -81,6 +92,7 @@ std::string capture(const std::string& exe, int timeout_ms) {
     }
     waitpid(pid, nullptr, 0);
     return out;
+#endif
 }
 
 Range read_range(const nlohmann::json& ranges, const char* key, Range fallback) {

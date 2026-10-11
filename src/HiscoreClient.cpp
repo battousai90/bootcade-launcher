@@ -2,7 +2,7 @@
 #include "HiscoreClient.h"
 #include "BootcadeAuth.h"
 
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <atomic>
