@@ -13,6 +13,8 @@
 #include "SettingsPanel.h"
 #include "SettingsUi.h"
 #include "AppUpdater.h"
+#include "RetroAchievements.h"
+#include <map>
 #include "RomResolve.h"
 #include "DownloadDialog.h"
 #include "HostLibraries.h"
@@ -47,6 +49,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <zip.h>
+#include <iomanip>
 #include <sstream>
 #include <locale>
 #include <ctime>
@@ -63,6 +66,7 @@ static constexpr int kColEmu    = 104;
 static constexpr int kColYear   = 46;
 static constexpr int kColStatus = 54;
 static constexpr int kColHs     = 38;
+static constexpr int kColRa     = 38;
 
 /* La marque d'un emulateur, posee dans les vues.
  *
@@ -282,6 +286,17 @@ static std::string short_date(const std::string& iso8601) {
 
 // "2 h 14", "37 min", "45 s" : the coarsest unit that still says something.
 // A session is read at a glance, so seconds past the first minute are noise.
+// « 128 KB », « 4.5 MB » : la taille d'une ROM, lisible d'un coup d'oeil.
+static std::string format_size(uint64_t bytes) {
+    static const char* units[] = {"B", "KB", "MB", "GB"};
+    double v = (double)bytes;
+    int u = 0;
+    while (v >= 1024.0 && u < 3) { v /= 1024.0; ++u; }
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(v < 10.0 && u > 0 ? 1 : 0) << v << ' ' << units[u];
+    return os.str();
+}
+
 static std::string format_duration(int seconds) {
     if (seconds <= 0) return "";
     if (seconds < 60)   return std::to_string(seconds) + " s";
@@ -388,7 +403,12 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
      * reelle est reprise des preferences juste apres, quand elles existent.
      */
     set_default_size(1760, 1000);
-    set_border_width(8);
+    // Marge de 8 px a gauche, a droite et en bas, mais PAS en haut : sous la
+    // barre de titre elle laissait une bande vide au-dessus de tout le contenu.
+    set_border_width(0);
+    m_main_box.set_margin_start(8);
+    m_main_box.set_margin_end(8);
+    m_main_box.set_margin_bottom(8);
     try { set_icon(Gdk::Pixbuf::create_from_file(AppContext::get_asset_path("logo.svg"), 64, 64)); } catch (...) {}
 
     // === Modern theme ===
@@ -483,6 +503,12 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_account_pending =
         std::filesystem::exists(BootcadeAuth::session_path());
     m_account_settled.connect([this] {
+        // Compte Bootcade connu : le lien RetroAchievements y est remis a jour
+        // (connexion RA faite avant celle de Bootcade, ou depuis une autre machine).
+        std::thread([] {
+            const std::string err = RetroAchievements::sync_bootcade_link();
+            if (!err.empty()) std::cerr << "[RA] link to Bootcade account: " << err << std::endl;
+        }).detach();
         m_account_pending = false;
         if (m_account_question_waiting) {
             m_account_question_waiting = false;
@@ -985,8 +1011,8 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // contenu, sans quoi les cartes touchent le bord et paraissent serrees.
     m_details_box.set_margin_start(18);
     m_details_box.set_margin_end(18);
-    m_details_box.set_margin_top(16);
-    m_details_box.set_margin_bottom(18);
+    m_details_box.set_margin_top(0);
+    m_details_box.set_margin_bottom(8);
 
     // Group A : the two artworks (Title + Preview). Orientation flips per dock.
     m_title_image.get_style_context()->add_class("dock-thumb");
@@ -1005,8 +1031,18 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
      * ce sont eux qu'on vient voir. En bas, le preview illustre la fiche au
      * lieu de disputer la place a ce qui compte.
      */
+    // Les images vivent dans l'onglet « Game info » : le preview en grand,
+    // puis l'ecran titre. Plus de cadre vide en haut du volet.
+    m_preview_image.set_valign(Gtk::ALIGN_START);
+    m_detail_image_wrap.set_orientation(Gtk::ORIENTATION_VERTICAL);
+    // L'ecran titre reste TOUT EN HAUT du volet, au-dessus du nom du jeu et des
+    // onglets, comme avant. Le preview, lui, ouvre l'onglet « Game info ».
+    m_preview_image.set_valign(Gtk::ALIGN_START);
     m_detail_image_wrap.pack_start(m_title_image, Gtk::PACK_SHRINK);
     m_detail_image_wrap.set_hexpand(false);
+    m_title_image.set_halign(Gtk::ALIGN_CENTER);
+    m_title_image.set_valign(Gtk::ALIGN_START);
+    m_preview_image.set_halign(Gtk::ALIGN_FILL);
     m_details_box.pack_start(m_detail_image_wrap, Gtk::PACK_SHRINK);
 
     // Group B : big title + full metadata block.
@@ -1026,7 +1062,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
 
     // Deux colonnes : intitule en retrait, valeur en avant. C'est ce qui fait
     // qu'on trouve une information d'un coup d'oeil au lieu de lire une liste.
-    m_specs_grid.set_row_spacing(5);
+    m_specs_grid.set_row_spacing(0);
     m_specs_grid.set_column_spacing(18);
     m_specs_grid.set_hexpand(true);
 
@@ -1040,7 +1076,6 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // Les pastilles d'etat remontent sous le titre : elles decrivent le jeu,
     // leur place n'est pas en bas a cote des boutons d'action.
     m_detail_text_col.pack_start(m_dock_pills, Gtk::PACK_SHRINK);
-    m_detail_text_col.pack_start(m_label_info, Gtk::PACK_SHRINK);
     // Les caracteristiques dans une carte, comme le tableau des scores : deux
     // blocs identifiables valent mieux qu'un ruissellement de lignes.
     m_specs_grid.get_style_context()->add_class("spec-card");
@@ -1075,20 +1110,87 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
      * sa construction se poursuit plus bas : pack_start fixe la position,
      * pas le moment ou l'on remplit.
      */
-    m_detail_text_col.pack_start(m_hiscore_box,  Gtk::PACK_SHRINK);
-    build_dock_section(m_activity_exp, m_activity_sum, _("Your activity"), m_activity_grid);
-    build_dock_section(m_specs_exp,    m_specs_sum,    _("Game information"), m_specs_row);
-    m_detail_text_col.pack_start(m_activity_exp, Gtk::PACK_SHRINK);
-    m_detail_text_col.pack_start(m_specs_exp,    Gtk::PACK_SHRINK);
-    // Fiche a gauche, capture a droite : la seconde donne une idee du jeu
-    // que dix lignes de caracteristiques ne donnent pas.
-    m_specs_row.pack_start(m_specs_grid,     Gtk::PACK_EXPAND_WIDGET);
-    m_preview_image.set_valign(Gtk::ALIGN_START);
-    m_specs_row.pack_start(m_preview_image,  Gtk::PACK_SHRINK);
-    // Calage en haut : sans lui, la grille occupait toute la hauteur
-    // disponible et « Game information » devenait absurde.
-    m_specs_row.set_valign(Gtk::ALIGN_START);
-    m_specs_grid.set_valign(Gtk::ALIGN_START);
+    // Les succes RetroAchievements juste sous le classement (page Records).
+    m_ach_list.get_style_context()->add_class("dock-card");
+    m_ach_list.get_style_context()->add_class("ach-card");
+    m_ach_list.set_margin_top(14);
+    m_ach_list.set_no_show_all(true);
+    m_roms_card.get_style_context()->add_class("spec-card");
+    m_roms_grid.set_column_spacing(14);
+    m_roms_grid.set_row_spacing(3);
+    m_roms_scroll.set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+    m_roms_scroll.set_propagate_natural_height(true);
+    m_roms_scroll.set_max_content_height(260);
+    m_roms_scroll.add(m_roms_grid);
+    m_roms_card.pack_start(m_roms_scroll, Gtk::PACK_SHRINK);
+
+    auto make_empty = [](Gtk::Label& l, const std::string& text) {
+        l.set_text(text);
+        l.set_xalign(0.0f);
+        l.set_line_wrap(true);
+        l.set_max_width_chars(1);
+        l.set_margin_top(14);
+        l.get_style_context()->add_class("dock-sub");
+        l.set_no_show_all(true);
+    };
+    auto heading = [](const std::string& text) {
+        auto* l = Gtk::make_managed<Gtk::Label>(text);
+        l->set_xalign(0.0f);
+        l->get_style_context()->add_class("dock-section");
+        return l;
+    };
+
+    // Game info : image, description, fiche.
+    m_label_info.set_margin_top(2);
+    m_page_info.pack_start(m_preview_image, Gtk::PACK_SHRINK);
+    m_page_info.pack_start(m_label_info, Gtk::PACK_SHRINK);
+    m_page_info.pack_start(*heading(_("Game information")), Gtk::PACK_SHRINK);
+    m_page_info.pack_start(m_specs_grid, Gtk::PACK_SHRINK);
+    // Records : classement puis succes.
+    make_empty(m_records_empty, _("No online ranking or achievements for this game."));
+    m_page_records.pack_start(m_hiscore_box, Gtk::PACK_SHRINK);
+    m_page_records.pack_start(m_ach_list, Gtk::PACK_SHRINK);
+    m_page_records.pack_start(m_records_empty, Gtk::PACK_SHRINK);
+    // Activity : ce que le joueur a fait.
+    make_empty(m_activity_empty, _("You have not played this game yet. Your plays, time and last session will show here."));
+    m_page_activity.pack_start(*heading(_("Your activity")), Gtk::PACK_SHRINK);
+    m_page_activity.pack_start(m_activity_grid, Gtk::PACK_SHRINK);
+    m_page_activity.pack_start(m_activity_empty, Gtk::PACK_SHRINK);
+    // ROMs : l'etat, puis les fichiers attendus.
+    m_roms_status.set_xalign(0.0f);
+    m_roms_status.set_line_wrap(true);
+    m_roms_status.set_max_width_chars(1);
+    m_roms_status.get_style_context()->add_class("dock-sub");
+    make_empty(m_roms_empty, _("The DAT lists no ROM file for this set."));
+    m_page_roms.pack_start(*heading(_("ROM files")), Gtk::PACK_SHRINK);
+    m_page_roms.pack_start(m_roms_status, Gtk::PACK_SHRINK);
+    m_page_roms.pack_start(m_roms_card, Gtk::PACK_SHRINK);
+    m_page_roms.pack_start(m_roms_empty, Gtk::PACK_SHRINK);
+
+    for (Gtk::Box* page : {&m_page_info, &m_page_records, &m_page_activity, &m_page_roms})
+        page->set_valign(Gtk::ALIGN_START);
+    m_dock_stack.add(m_page_info,     "info",     _("Game info"));
+    m_dock_stack.add(m_page_records,  "records",  _("Records"));
+    m_dock_stack.add(m_page_activity, "activity", _("Activity"));
+    m_dock_stack.add(m_page_roms,     "roms",     _("ROMs"));
+    m_dock_stack.set_transition_type(Gtk::STACK_TRANSITION_TYPE_NONE);
+    // Largeur commune, hauteur propre a chaque page : sinon chaque page aurait
+    // la hauteur de la plus haute, et un grand vide sous les petites.
+    m_dock_stack.set_hhomogeneous(true);
+    m_dock_stack.set_vhomogeneous(false);
+    m_dock_tabs.set_stack(m_dock_stack);
+    m_dock_tabs.get_style_context()->add_class("dock-tabs");
+    m_dock_tabs.set_halign(Gtk::ALIGN_FILL);
+    m_dock_tabs.set_margin_top(4);
+    m_dock_tabs.set_margin_bottom(2);
+    m_dock_stack.set_valign(Gtk::ALIGN_START);
+    m_detail_text_col.pack_start(m_dock_tabs, Gtk::PACK_SHRINK);
+    m_detail_text_col.pack_start(m_dock_stack, Gtk::PACK_SHRINK);
+    // Changer d'onglet remet le volet en haut : on lit une nouvelle page.
+    m_dock_stack.property_visible_child_name().signal_changed().connect([this] {
+        m_details_scroll.get_vadjustment()->set_value(0);
+        save_launch_prefs();
+    });
     m_activity_box.set_valign(Gtk::ALIGN_START);
     m_detail_text_col.set_valign(Gtk::ALIGN_START);
 
@@ -1501,7 +1603,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // === Layout: sidebar | (chips, views, detail dock) ===
     m_chips_box.set_margin_start(12);
     m_chips_box.set_margin_end(12);
-    m_chips_box.set_margin_top(8);
+    m_chips_box.set_margin_top(0);
     m_chips_box.get_style_context()->add_class("chips-bar");
     m_right_box.pack_start(m_chips_box, Gtk::PACK_SHRINK);
     // A resizable split between the game views and the detail dock. The view
@@ -2076,6 +2178,20 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // bouton « Update », apparait aussi dans la fenetre principale.
     m_settings_panel.signal_update_found().connect([this] { check_app_update_async(true); });
     check_app_update_async();
+    // Le catalogue RetroAchievements : lu sur le disque tout de suite (pastilles
+    // et filtre sans attendre), rafraichi au plus une fois par jour.
+    m_ach_dispatcher.connect(sigc::mem_fun(*this, &MainWindow::on_achievements_ready));
+    m_ra_catalog_dispatcher.connect([this] {
+        populate_filter_tree();
+        refresh_active_view();
+        auto sel = m_treeview_games.get_selection();
+        if (sel) { if (auto it = sel->get_selected()) show_game_details(*it); }
+    });
+    std::thread([this, alive = m_alive_token] {
+        const bool changed = RetroAchievements::refresh_catalog();
+        std::lock_guard<std::mutex> live(alive->mutex);
+        if (changed && alive->alive) m_ra_catalog_dispatcher.emit();
+    }).detach();
     m_status_rules_dispatcher.connect([this] {
         m_cached_games = load_all_catalogs();
         m_search_blobs.clear();
@@ -2252,11 +2368,11 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     };
     // 360 de large : la banniere occupe la colonne du volet, comme le
     // mockup, au lieu d'une vignette perdue au milieu.
-    load_art(m_title_image,   m_settings_panel.get_titles_path(m_last_selected_emulator),   430, 215);
+    load_art(m_title_image,   m_settings_panel.get_titles_path(m_last_selected_emulator),   360, 120);
     // 200 x 150 et non 320 x 240 : la capture accompagne desormais la fiche
     // technique au lieu de trôner en tete, et a l'ancienne taille elle
     // ecrasait le tableau qu'elle est censee illustrer.
-    load_art(m_preview_image, m_settings_panel.get_previews_path(m_last_selected_emulator), 240, 180);
+    load_art(m_preview_image, m_settings_panel.get_previews_path(m_last_selected_emulator), 360, 360);
 
     std::string manufacturer = Glib::ustring(row[m_columns.m_col_manufacturer]).raw();
     std::string year         = Glib::ustring(row[m_columns.m_col_year]).raw();
@@ -2325,20 +2441,17 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     add_spec(_("Video"),        video_type);
     add_spec(_("Aspect"),       aspect);
     add_spec(_("Driver"),       driver_status);
-
-    m_specs_grid.show_all();
-    // Resume de l'en-tete : ce qu'on veut savoir d'un coup d'oeil quand la
-    // section est repliee.
     {
-        std::vector<std::string> bits;
-        for (const std::string& b : {system, year, manufacturer})
-            if (!b.empty()) bits.push_back(b);
-        std::string line;
-        for (size_t i = 0; i < bits.size(); ++i)
-            line += (i ? "  \u00b7  " : "") + bits[i];
-        m_specs_sum.set_text(line);
+        // Ce que le DAT et le catalogue savent du jeu : genre, serie, joueurs.
+        const Game full = m_database->getGame(name, system,
+            Glib::ustring(row[m_columns.m_col_emulator]).raw().empty() ? "fbneo"
+                : Glib::ustring(row[m_columns.m_col_emulator]).raw());
+        add_spec(_("Genre"),   full.genre);
+        add_spec(_("Series"),  full.family);
+        if (full.players > 0) add_spec(_("Players"), std::to_string(full.players));
     }
 
+    m_specs_grid.show_all();
     // Activite personnelle, dans son propre bloc et seulement si elle existe.
     SettingsUi::destroy_children(m_activity_grid);
     // Relu avec la cle qui a servi a l'ecrire, sans quoi la fiche d'une
@@ -2369,17 +2482,20 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
         // duree deja donnee deux lignes plus haut et ne disait jamais si
         // c'etait hier ou l'an dernier.
         add_act(_("Last played"), relative_day(stats.last_played));
-        m_activity_sum.set_text(
-            std::to_string(stats.play_count) + " " + _("plays") + "  \u00b7  "
-            + format_duration(stats.play_time_secs));
-        m_activity_exp.show_all();
+        add_act(_("Favorite"), fav ? std::string(_("Yes")) : std::string(_("No")));
+        m_activity_grid.show_all();
+        m_activity_empty.hide();
     } else {
-        m_activity_exp.hide();
+        m_activity_grid.hide();
+        m_activity_empty.show();
     }
+    show_achievements(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name);
+    show_rom_files(name, system, Glib::ustring(row[m_columns.m_col_emulator]).raw());
 
     std::string info;
     if (!comment.empty()) info = escape_markup(comment);
     m_label_info.set_markup(info);
+    m_label_info.set_visible(!info.empty());
 
     /* Le bloc des classements ne parait que s'il a quelque chose a dire.
      *
@@ -2466,8 +2582,12 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
         add_pill("● " + _("Missing"), "pill-muted");
     }
     if (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name))
-        add_pill("◆ " + _("Highscore"), "pill-hiscore");
+        add_pill("\U0001F3C6 " + _("Highscore"), "pill-hiscore");
+    if (const unsigned n = RetroAchievements::achievement_count(
+            Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name))
+        add_pill("\U0001F3C5 " + Glib::ustring::compose(_("%1 achievements"), n).raw(), "pill-ach");
     m_dock_pills.show_all();
+    update_records_tab();
 
     m_button_favorite.set_image(*SettingsUi::image(fav ? "star-gold.svg" : "star.svg", 24));
     m_button_favorite.set_sensitive(true);
@@ -2618,8 +2738,8 @@ void MainWindow::set_dock_position(const std::string& pos) {
     m_detail_text_col.set_size_request(right ? 420 : -1, -1);
     m_dock_pills.set_halign(lead);
     m_dock_pills.set_spacing(10);
-    m_dock_pills.set_margin_top(6);
-    m_dock_pills.set_margin_bottom(4);
+    m_dock_pills.set_margin_top(2);
+    m_dock_pills.set_margin_bottom(0);
     m_specs_grid.set_halign(Gtk::ALIGN_FILL);
     m_detail_actions.set_halign(lead);
     m_detail_actions_col.set_halign(lead);
@@ -2650,6 +2770,166 @@ void MainWindow::set_dock_position(const std::string& pos) {
     }
 
     save_launch_prefs();
+}
+
+/* La section « Achievements » du volet.
+ *
+ * Le nombre vient du catalogue, toujours disponible. La liste et ce que le
+ * joueur a debloque demandent son compte et deux requetes : elles partent en
+ * arriere-plan, et la reponse ne s'affiche que si le jeu est encore celui
+ * qu'on regarde. Gardee en memoire le temps de la session. */
+void MainWindow::show_achievements(const std::string& emulator, const std::string& system,
+                                   const std::string& name) {
+    SettingsUi::destroy_children(m_ach_list);
+    const unsigned n = RetroAchievements::achievement_count(emulator, system, name);
+    if (!n) { m_ach_list.hide(); update_records_tab(); return; }
+    m_ach_list.show();
+    update_records_tab();
+
+    // En-tete commun : la medaille, le titre, le nombre de succes.
+    auto* head = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+    auto* title = Gtk::make_managed<Gtk::Label>();
+    title->set_markup("\U0001F3C5  <b>" + Glib::Markup::escape_text(_("Achievements")) + "</b>");
+    title->get_style_context()->add_class("best-title");
+    head->pack_start(*title, Gtk::PACK_SHRINK);
+    m_ach_list.pack_start(*head, Gtk::PACK_SHRINK);
+    head->show_all();
+
+    auto note = [this](const std::string& text) {
+        auto* l = Gtk::make_managed<Gtk::Label>(text);
+        l->set_xalign(0.0f);
+        l->set_line_wrap(true);
+        l->set_max_width_chars(1);
+        l->get_style_context()->add_class("hi-note");
+        m_ach_list.pack_start(*l, Gtk::PACK_SHRINK);
+        l->show();
+    };
+    if (!RetroAchievements::signed_in()) {
+        note(Glib::ustring::compose(_("%1 achievements to unlock. Sign in to RetroAchievements in Settings › Online to earn them and follow your progress."), n));
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_ach_mutex);
+        m_ach_for = name;
+        if (!m_ach_cache.count(name)) {
+            note(_("Loading achievements…"));
+            std::thread([this, alive = m_alive_token, name] {
+                auto res = std::make_shared<RetroAchievements::GameAchievements>(RetroAchievements::fetch(name));
+                std::lock_guard<std::mutex> live(alive->mutex);
+                if (!alive->alive) return;
+                {
+                    std::lock_guard<std::mutex> lock(m_ach_mutex);
+                    m_ach_cache[name] = res;
+                }
+                m_ach_dispatcher.emit();
+            }).detach();
+            return;
+        }
+    }
+    on_achievements_ready();
+}
+
+/* La carte remplie : deux grands compteurs (succes, points) comme le score de
+ * « Your best », une barre de progression, l'avertissement du serveur s'il y
+ * en a un, puis la liste, repliee, dans l'ordre du serveur. */
+void MainWindow::on_achievements_ready() {
+    std::shared_ptr<RetroAchievements::GameAchievements> res;
+    {
+        std::lock_guard<std::mutex> lock(m_ach_mutex);
+        auto it = m_ach_cache.find(m_ach_for);
+        if (it == m_ach_cache.end()) return;
+        res = std::static_pointer_cast<RetroAchievements::GameAchievements>(it->second);
+    }
+    // Tout est rebati : la reponse peut arriver deux fois (deux selections
+    // rapprochees du meme jeu), et rien ne doit s'empiler.
+    SettingsUi::destroy_children(m_ach_list);
+    auto add = [this](Gtk::Widget* w) { m_ach_list.pack_start(*w, Gtk::PACK_SHRINK); w->show_all(); };
+    auto* head = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+    auto* title = Gtk::make_managed<Gtk::Label>();
+    title->set_markup("\U0001F3C5  <b>" + Glib::Markup::escape_text(_("Achievements")) + "</b>");
+    title->get_style_context()->add_class("best-title");
+    head->pack_start(*title, Gtk::PACK_SHRINK);
+    add(head);
+
+    if (!res->answered) {
+        auto* l = Gtk::make_managed<Gtk::Label>(Glib::ustring::compose(
+            _("RetroAchievements could not be reached: %1"), res->error));
+        l->set_xalign(0.0f); l->set_line_wrap(true);
+        l->get_style_context()->add_class("hi-note");
+        add(l);
+        std::lock_guard<std::mutex> lock(m_ach_mutex);
+        m_ach_cache.erase(m_ach_for);      // on retentera a la prochaine selection
+        return;
+    }
+    if (res->list.empty()) { m_ach_list.hide(); update_records_tab(); return; }
+
+    // Le lien vers la page du jeu, dans l'en-tete.
+    {
+        auto* link = Gtk::make_managed<Gtk::LinkButton>(
+            "https://retroachievements.org/game/" + std::to_string(res->game_id), _("View all"));
+        link->set_relief(Gtk::RELIEF_NONE);
+        link->get_style_context()->add_class("dock-link");
+        link->set_tooltip_text(_("View on RetroAchievements"));
+        head->pack_end(*link, Gtk::PACK_SHRINK);
+        link->show();
+    }
+
+    // L'avertissement « emulateur inconnu » (mode Hardcore) n'est plus repete sur
+    // chaque jeu : il est dit une fois, dans Settings sous le reglage Hardcore.
+
+    // Deux compteurs, en grand.
+    auto counter = [](const std::string& value, const std::string& label) {
+        auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
+        auto* v = Gtk::make_managed<Gtk::Label>(value);
+        v->set_xalign(0.0f);
+        v->get_style_context()->add_class("best-score");
+        auto* l = Gtk::make_managed<Gtk::Label>(label);
+        l->set_xalign(0.0f);
+        l->get_style_context()->add_class("best-who");
+        box->pack_start(*v, Gtk::PACK_SHRINK);
+        box->pack_start(*l, Gtk::PACK_SHRINK);
+        return box;
+    };
+    auto* counters = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 28);
+    counters->pack_start(*counter(std::to_string(res->unlocked) + " / " + std::to_string(res->list.size()),
+                                  _("achievements unlocked")), Gtk::PACK_SHRINK);
+    counters->pack_start(*counter(std::to_string(res->points_unlocked) + " / " + std::to_string(res->points),
+                                  _("points")), Gtk::PACK_SHRINK);
+    add(counters);
+    auto* bar = Gtk::make_managed<Gtk::ProgressBar>();
+    bar->set_fraction(res->list.empty() ? 0.0 : double(res->unlocked) / double(res->list.size()));
+    add(bar);
+
+    // La liste, repliee : vingt-neuf lignes repousseraient tout le volet.
+    auto* rows = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 8);
+    for (const auto& a : res->list) {
+        auto* row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+        row->get_style_context()->add_class("ach-row");
+        if (!a.unlocked) row->get_style_context()->add_class("ach-locked");
+        auto* medal = Gtk::make_managed<Gtk::Label>("\U0001F3C5");
+        medal->get_style_context()->add_class("ach-medal");
+        medal->set_valign(Gtk::ALIGN_START);
+        row->pack_start(*medal, Gtk::PACK_SHRINK);
+        auto* txt = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 1);
+        auto* t = Gtk::make_managed<Gtk::Label>(a.title);
+        t->set_xalign(0.0f); t->set_line_wrap(true); t->set_max_width_chars(1);
+        t->get_style_context()->add_class("ach-title");
+        auto* d = Gtk::make_managed<Gtk::Label>(a.description);
+        d->set_xalign(0.0f); d->set_line_wrap(true); d->set_max_width_chars(1);
+        d->get_style_context()->add_class("best-who");
+        txt->pack_start(*t, Gtk::PACK_SHRINK);
+        txt->pack_start(*d, Gtk::PACK_SHRINK);
+        row->pack_start(*txt, Gtk::PACK_EXPAND_WIDGET);
+        auto* pts = Gtk::make_managed<Gtk::Label>(std::to_string(a.points));
+        pts->get_style_context()->add_class("pill");
+        pts->get_style_context()->add_class("ach-points");
+        pts->set_valign(Gtk::ALIGN_START);
+        row->pack_end(*pts, Gtk::PACK_SHRINK);
+        rows->pack_start(*row, Gtk::PACK_SHRINK);
+    }
+    auto* exp = Gtk::make_managed<Gtk::Expander>(Glib::ustring::compose(_("Show the %1 achievements"), res->list.size()));
+    exp->add(*rows);
+    add(exp);
 }
 
 /* Ce qui manque a un jeu « incomplete » : son BIOS, son parent.
@@ -3146,7 +3426,12 @@ void MainWindow::on_play_clicked() {
     const bool keep_history = m_settings_panel.keeps_play_history();
     const bool share_playtime = m_settings_panel.shares_play_statistics();
 
-    pid_t pid = spawn_process(launch_args);
+    // RetroAchievements : le compte passe a FinalBurn Neo, qui debloque les
+    // succes lui-meme. Rien n'est transmis pour un jeu qu'il ne reconnaitrait pas.
+    const std::vector<std::string> ra_env = RetroAchievements::supports("fbneo", game_system)
+                                                ? RetroAchievements::launch_env()
+                                                : std::vector<std::string>();
+    pid_t pid = spawn_process(launch_args, ra_env);
     if (pid > 0) {
         // Detached watcher thread: waits for process exit, records playtime,
         // then checks whether FBNeo's own F6 screenshot hotkey was used during
@@ -3169,6 +3454,19 @@ void MainWindow::on_play_clicked() {
             if (!alive->alive) return;
             // FBNeo writes the .hi on exit, so this must come after the wait.
             submit_session_score(game_system, rom_name, fbneo_rom_name, score_path, hi_before, hiscore_player, hiscore_country, hiscore_enabled, share_playtime, launch_time);
+            // Les succes debloques pendant la partie : la liste gardee en memoire
+            // date d'avant. On la relit maintenant, sans attendre un redemarrage.
+            if (RetroAchievements::signed_in()
+                && RetroAchievements::achievement_count("fbneo", game_system, rom_name)) {
+                auto fresh = std::make_shared<RetroAchievements::GameAchievements>(RetroAchievements::fetch(rom_name));
+                if (fresh->answered) {
+                    {
+                        std::lock_guard<std::mutex> lock(m_ach_mutex);
+                        m_ach_cache[rom_name] = fresh;
+                    }
+                    m_ach_dispatcher.emit();
+                }
+            }
             // FBNeo has just written config/games/<rom>.ini on exit : this is
             // the only moment a complete file exists to repair.
             ControllerManager::fix_player2_input_conflicts(fbneo_rom_name);
@@ -4426,18 +4724,20 @@ Gtk::Widget* MainWindow::make_game_card(const Gtk::TreeModel::Row& row) {
     nlbl->get_style_context()->add_class("card-name");
     meta->pack_start(*nlbl, Gtk::PACK_SHRINK);
     auto* slbl = Gtk::make_managed<Gtk::Label>();
-    // The ◆ rides on the system line rather than getting a row of its own: a
+    // The trophy rides on the system line rather than getting a row of its own: a
     // card is 176 px wide, and a second line would push the title out.
     slbl->set_markup("<span foreground=\"" + std::string(dot) + "\">" + (status == "incomplete" ? "\u26A0" : "●") + "</span> " +
                      Glib::Markup::escape_text(system) +
                      (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
-                        ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "info") + "\">◆</span>") : ""));
+                        ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "warning") + "\">\U0001F3C6</span>") : "") +
+                     (RetroAchievements::achievement_count(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
+                        ? std::string("  \U0001F3C5") : ""));
     slbl->set_ellipsize(Pango::ELLIPSIZE_END);
     slbl->set_max_width_chars(1); // let the cell govern width, not the text
     slbl->set_xalign(0.0f);
     slbl->get_style_context()->add_class("card-sys");
 
-    // La marque monte sur la ligne du systeme, comme le ◆ : une ligne de
+    // La marque monte sur la ligne du systeme, comme la coupe : une ligne de
     // plus pousserait le titre hors de la carte.
     if (show_emulator_marks()) {
         auto* sysrow = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 5);
@@ -4738,6 +5038,20 @@ Gtk::Widget* MainWindow::make_list_row(const Gtk::TreeModel::Row& row) {
         hs->get_style_context()->add_class("hs-none");
     }
     box->pack_start(*hs, Gtk::PACK_SHRINK);
+
+    // Colonne RA : une etoile pour un jeu qui a des succes RetroAchievements.
+    auto* ra = Gtk::make_managed<Gtk::Label>();
+    ra->set_size_request(kColRa, -1);
+    ra->set_valign(Gtk::ALIGN_CENTER);
+    if (const unsigned n = RetroAchievements::achievement_count(
+            Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)) {
+        ra->set_text("\U0001F3C5");
+        ra->set_tooltip_text(Glib::ustring::compose(_("%1 RetroAchievements achievements"), n));
+    } else {
+        ra->set_text("\u2014");
+        ra->get_style_context()->add_class("hs-none");
+    }
+    box->pack_start(*ra, Gtk::PACK_SHRINK);
 
     return box;
 }
@@ -5121,6 +5435,7 @@ void MainWindow::on_random_game_clicked() {
     auto eligible = [&](const Game& g) {
         if (g.status != "available" || g.is_bios) return false;
         if (opt.hiscore_only   && !game_ranks_online(g.emulator, g.system, g.name)) return false;
+        if (opt.achievements_only && !RetroAchievements::achievement_count(g.emulator, g.system, g.name)) return false;
         if (opt.originals_only && !g.cloneof.empty()) return false;
         if (opt.unplayed_only  && g.play_count > 0) return false;
         if (!opt.from_shown && !opt.systems.empty() &&
@@ -6365,7 +6680,9 @@ void MainWindow::submit_session_score(const std::string& system,
         }
 
         if (!notice.message.empty()) {
-            if (r.report) {
+            // Un score publie n'a rien a signaler : le bouton n'est propose que
+            // quand quelque chose n'a pas marche.
+            if (r.report && !r.accepted && c != "accepted") {
                 notice.offer_report         = true;
                 notice.report.submission    = r.submission;
                 notice.report.system        = system;
@@ -6966,6 +7283,10 @@ void MainWindow::on_scan_dialog_complete() {
 
     m_scan_bg_poll_timer.disconnect();
 
+    // La liste MAME lit mame_catalog : on y reporte le verdict du scan.
+    if (m_scan_dialog && m_scan_dialog->emulator() == "mame" && !m_scan_dialog->was_cancelled())
+        m_database->syncMameCatalogFromGames();
+
     m_cached_games = load_all_catalogs();
     m_search_blobs.clear();   // the haystacks describe the old vector
     // Et m_filtered_games pointait dedans : le laisser en place, c'est garder
@@ -7239,7 +7560,7 @@ void MainWindow::populate_filter_tree() {
     {
         auto fav = m_model_filters->append();
         (*fav)[m_filter_columns.m_col_icon] = get_filter_icon("Favorites");
-        (*fav)[m_filter_columns.m_col_name] = std::string("★ ") + _("Favorites");
+        (*fav)[m_filter_columns.m_col_name] = _("Favorites");
         (*fav)[m_filter_columns.m_col_type] = "favorite";
         (*fav)[m_filter_columns.m_col_value] = "1";
         (*fav)[m_filter_columns.m_col_count] = favorite_count;
@@ -7249,16 +7570,38 @@ void MainWindow::populate_filter_tree() {
     // running total because the supported list can land after the tree is
     // first built, and the node has to show a truthful number either way.
     {
-        int ranked_count = 0;
+        // Un jeu compte UNE fois : un jeu Neo Geo existe en double (systemes
+        // Arcade et Neo Geo) et comptait pour deux, alors que le service de
+        // scores et sa page d'administration parlent de jeux, pas de lignes.
+        std::unordered_set<std::string> ranked_games;
         for (const auto& game : m_cached_games)
-            if (emulator_in_scope(game) && game_ranks_online(game.emulator, game.system, game.name)) ranked_count++;
+            if (emulator_in_scope(game) && game_ranks_online(game.emulator, game.system, game.name))
+                ranked_games.insert(game.emulator + '\x1f' + game.name);
+        const int ranked_count = (int)ranked_games.size();
         if (ranked_count > 0) {
             auto hi = m_model_filters->append();
             (*hi)[m_filter_columns.m_col_icon] = get_filter_icon("Highscore");
-            (*hi)[m_filter_columns.m_col_name] = std::string("◆ ") + _("Highscore");
+            (*hi)[m_filter_columns.m_col_name] = _("Highscore");
             (*hi)[m_filter_columns.m_col_type] = "hiscore";
             (*hi)[m_filter_columns.m_col_value] = "1";
             (*hi)[m_filter_columns.m_col_count] = ranked_count;
+        }
+    }
+    // Les jeux d'arcade qui ont des succes RetroAchievements.
+    {
+        // Meme regle : un jeu compte une fois, pas une fois par systeme.
+        std::unordered_set<std::string> ach_games;
+        for (const auto& game : m_cached_games)
+            if (emulator_in_scope(game) && RetroAchievements::achievement_count(game.emulator, game.system, game.name))
+                ach_games.insert(game.emulator + '\x1f' + game.name);
+        const int with_ach = (int)ach_games.size();
+        if (with_ach > 0) {
+            auto ra = m_model_filters->append();
+            (*ra)[m_filter_columns.m_col_icon] = get_filter_icon("Achievements");
+            (*ra)[m_filter_columns.m_col_name] = _("Achievements");
+            (*ra)[m_filter_columns.m_col_type] = "achievements";
+            (*ra)[m_filter_columns.m_col_value] = "1";
+            (*ra)[m_filter_columns.m_col_count] = with_ach;
         }
     }
 
@@ -7732,6 +8075,9 @@ void MainWindow::apply_tree_filters() {
             if (filter_type == "hiscore" && !game_ranks_online(game.emulator, game.system, game.name)) {
                 matches = false; break;
             }
+            if (filter_type == "achievements" && !RetroAchievements::achievement_count(game.emulator, game.system, game.name)) {
+                matches = false; break;
+            }
         }
 
         if (!matches) continue;
@@ -7824,7 +8170,10 @@ Glib::RefPtr<Gdk::Pixbuf> MainWindow::get_filter_icon(const std::string& categor
     } else if (category == "Favorites") {
         body = "<path d='M8 2l1.9 3.8 4.1.6-3 2.9.7 4.1L8 11.5 4.3 13.4l.7-4.1-3-2.9 4.1-.6z'/>";
     } else if (category == "Highscore") {
-        body = "<path d='M8 2l4 6-4 6-4-6z'/>";
+        // une coupe : le trophee du classement, comme dans la colonne HS
+        body = "<path d='M5 2h6v4.2a3 3 0 0 1-6 0z'/><path d='M5 3.4H3.2a.7.7 0 0 0-.7.7c0 1.6 1 2.6 2.7 2.6M11 3.4h1.8a.7.7 0 0 1 .7.7c0 1.6-1 2.6-2.7 2.6'/><path d='M8 9.2V12M5.6 14h4.8'/>";
+    } else if (category == "Achievements") {   // une medaille
+        body = "<circle cx='8' cy='10' r='4'/><path d='M5.5 6.5L4 2h3l1 3M10.5 6.5L12 2H9L8 5'/>";
     } else if (category == "Emulator") {   // une puce
         body = "<rect x='4' y='4' width='8' height='8' rx='1'/>"
                "<path d='M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5"
@@ -7883,6 +8232,7 @@ void MainWindow::rebuild_filter_chips() {
         if (k == "players")      return _("Players");
         if (k == "mode")         return _("Mode");
         if (k == "hiscore")      return _("Highscore");
+        if (k == "achievements") return _("Achievements");
         return k;
     };
     auto value_label = [](const std::string& k, const std::string& v) -> std::string {
@@ -7947,6 +8297,7 @@ void MainWindow::rebuild_filter_chips() {
     }
 
     m_chips_box.show_all();
+    m_chips_box.set_margin_top(m_chips_box.get_children().empty() ? 0 : 8);
     m_chips_box.set_visible(!m_chips_box.get_children().empty());
 }
 
@@ -8134,10 +8485,10 @@ void MainWindow::load_launch_prefs() {
         m_last_selected_system = j.value("startup_last_selected_system", std::string());
         m_last_selected_emulator = j.value("startup_last_selected_emulator", std::string());
 
-        if (j.value("dock_sections_set", false)) {
-            m_dock_prefs_known = true;
-            m_activity_exp.set_expanded(j.value("dock_activity_open", true));
-            m_specs_exp.set_expanded(j.value("dock_specs_open", true));
+        {
+            const std::string tab = j.value("dock_tab", std::string("info"));
+            if (tab == "info" || tab == "records" || tab == "activity" || tab == "roms")
+                m_dock_stack.set_visible_child(tab);
         }
     } catch (...) {}
     // Reflect loaded state in menu checkitems (block toggled signal to avoid side-effect)
@@ -8210,9 +8561,7 @@ void MainWindow::save_launch_prefs() {
      * ressembleraient a une absence de preference et le repli automatique
      * viendrait contredire un choix explicite a chaque redemarrage.
      */
-    j["dock_sections_set"] = m_dock_prefs_known;
-    j["dock_activity_open"] = m_activity_exp.get_expanded();
-    j["dock_specs_open"]    = m_specs_exp.get_expanded();
+    j["dock_tab"] = m_dock_stack.get_visible_child_name();
     std::ofstream fo(cfg);
     if (fo) fo << j.dump(4) << std::endl;
 }
@@ -8670,6 +9019,8 @@ void MainWindow::build_mlist_header() {
     flat(m_hdr_year,   _("YEAR"),   kColYear,   0.0f);
     plain(m_hdr_status, _("STATUS"), kColStatus);
     plain(m_hdr_hs,     _("HS"),     kColHs);
+    plain(m_hdr_ra,     _("RA"),     kColRa);
+    m_hdr_ra.set_tooltip_text(_("RetroAchievements"));
 
     m_mlist_head.pack_start(m_hdr_game,   Gtk::PACK_EXPAND_WIDGET);
     m_mlist_head.pack_start(m_hdr_emu,    Gtk::PACK_SHRINK);
@@ -8677,6 +9028,7 @@ void MainWindow::build_mlist_header() {
     m_mlist_head.pack_start(m_hdr_year,   Gtk::PACK_SHRINK);
     m_mlist_head.pack_start(m_hdr_status, Gtk::PACK_SHRINK);
     m_mlist_head.pack_start(m_hdr_hs,     Gtk::PACK_SHRINK);
+    m_mlist_head.pack_start(m_hdr_ra,     Gtk::PACK_SHRINK);
     m_mlist_head.get_style_context()->add_class("mlist-head");
 
     // Le tri passe par le combo, source unique. Cliquer « GAME » quand il est
@@ -8753,39 +9105,71 @@ void MainWindow::update_dock_width() {
  * « Arcade, 1996, Capcom » sur une seule ligne suffit le plus souvent, et
  * c'est ce qui rend le repli acceptable plutot que subi.
  */
-void MainWindow::build_dock_section(Gtk::Expander& exp, Gtk::Label& sum,
-                                    const std::string& title, Gtk::Widget& body) {
-    auto* head = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
-    auto* lbl  = Gtk::make_managed<Gtk::Label>(title);
-    lbl->get_style_context()->add_class("dock-section");
-    sum.set_xalign(0.0f);
-    sum.set_ellipsize(Pango::ELLIPSIZE_END);
-    sum.get_style_context()->add_class("dock-summary");
-    head->pack_start(*lbl, Gtk::PACK_SHRINK);
-    head->pack_start(sum,  Gtk::PACK_SHRINK);
-    head->show_all();
-
-    exp.set_label_widget(*head);
-    /* Repliees par defaut.
-     *
-     * Le repli automatique selon la hauteur partait d'une bonne intention
-     * mais devinait mal et changeait d'avis au redimensionnement. Les deux
-     * sections partent donc fermees : le classement et le bouton Play sont
-     * visibles d'emblee quelle que soit la fenetre, et le joueur ouvre ce
-     * dont il a besoin. Son choix est ensuite retenu.
-     */
-    exp.set_expanded(false);
-    exp.add(body);
-    // La carte garde la hauteur de son contenu, ouverte comme fermee.
-    exp.set_valign(Gtk::ALIGN_START);
-    body.set_valign(Gtk::ALIGN_START);
-    exp.property_expanded().signal_changed().connect([this] {
-        m_dock_prefs_known = true;   // choix explicite : on ne le contredira plus
-        save_launch_prefs();
-    });
+// La section « ROM files » du volet : ce que le DAT attend pour ce set.
+// L'onglet Records n'est jamais un grand cadre vide : sans classement ni succes,
+// il le dit.
+void MainWindow::update_records_tab() {
+    m_records_empty.set_visible(!m_hiscore_box.get_visible() && !m_ach_list.get_visible());
 }
 
+void MainWindow::show_rom_files(const std::string& name, const std::string& system,
+                                const std::string& emulator) {
+    SettingsUi::destroy_children(m_roms_grid);
+    const std::string emu = emulator.empty() ? "fbneo" : emulator;
+    Game g = m_database->getGame(name, system, emu);
+    if (g.roms.empty()) g = m_database->getGameAnySystem(name, emu);
+    if (g.roms.empty()) {
+        m_roms_card.hide();
+        m_roms_status.hide();
+        m_roms_empty.show();
+        return;
+    }
+    m_roms_empty.hide();
+    m_roms_card.show();
 
+    uint64_t total = 0;
+    int r = 0;
+    for (const Rom& rom : g.roms) {
+        auto* n = Gtk::make_managed<Gtk::Label>(rom.name);
+        n->set_xalign(0.0f);
+        n->set_hexpand(true);
+        // Une largeur naturelle nulle : un nom long ne doit jamais elargir
+        // le volet, il se coupe et se lit en entier dans l'infobulle.
+        n->set_max_width_chars(1);
+        n->set_ellipsize(Pango::ELLIPSIZE_MIDDLE);
+        n->set_tooltip_text(rom.name);
+        n->get_style_context()->add_class("spec-val");
+        auto* sz = Gtk::make_managed<Gtk::Label>(format_size(rom.size));
+        sz->set_xalign(1.0f);
+        sz->get_style_context()->add_class("spec-key");
+        std::string crc = rom.crc;
+        for (char& c : crc) c = (char)std::toupper((unsigned char)c);
+        auto* cr = Gtk::make_managed<Gtk::Label>(crc);
+        cr->set_xalign(0.0f);
+        cr->get_style_context()->add_class("spec-key");
+        cr->get_style_context()->add_class("rom-crc");
+        m_roms_grid.attach(*n,  0, r, 1, 1);
+        m_roms_grid.attach(*sz, 1, r, 1, 1);
+        m_roms_grid.attach(*cr, 2, r, 1, 1);
+        total += rom.size;
+        ++r;
+    }
+    // L'essentiel avant la liste : l'etat, l'archive attendue, le nombre de
+    // fichiers et leur poids.
+    {
+        std::string state = g.status;
+        if (!state.empty()) state[0] = (char)std::toupper((unsigned char)state[0]);
+        std::string line;
+        if (!state.empty()) line += state + "  \u00b7  ";
+        line += name + ".zip  \u00b7  "
+              + Glib::ustring::compose(_("%1 files"), g.roms.size()).raw()
+              + "  \u00b7  " + format_size(total);
+        if (!g.cloneof.empty()) line += "\n" + std::string(_("Needs the parent set")) + " : " + g.cloneof;
+        m_roms_status.set_text(line);
+        m_roms_status.show();
+    }
+    m_roms_grid.show_all();
+}
 
 /* Choisit le jeu montre au demarrage.
  *

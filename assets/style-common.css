@@ -256,7 +256,7 @@ treeview header button:hover {
 paned > separator, paned separator { background-color: @border; }
 .detail-dock {
   background-color: @surface;
-  border-top: 1px solid @border;
+  border-top: none;
 }
 
 /* ═══ Progression et barres de defilement ═════════════════════════════════ */
@@ -378,6 +378,7 @@ button.chip-clear:hover { opacity: 1; }
 /* Caracteristiques : intitule en retrait, valeur en avant. */
 .spec-key { color: @text_muted; font-size: 0.86em; }
 .spec-val { font-size: 0.92em; font-weight: 500; }
+.rom-crc { font-family: monospace; }
 
 /* ---- Tableau des scores ----
    Dessine comme l'ecran d'une borne : fond en creux, chiffres alignes en
@@ -428,6 +429,19 @@ button.chip-clear:hover { opacity: 1; }
 /* Bleu, a part du trio vert/ambre/gris : ceux-la disent si la ROM marche,
    celui-ci dit que le jeu peut etre classe en ligne. */
 .pill-hiscore { color: @info; border-color: alpha(@info, 0.45); background-color: alpha(@info, 0.12); }
+
+/* RetroAchievements : l'or des medailles, distinct du bleu des Highscores. */
+.pill-ach { color: @star; border-color: alpha(@star, 0.45); background-color: alpha(@star, 0.12); }
+.ach-card progressbar trough   { min-height: 6px; }
+.ach-card progressbar progress { min-height: 6px; background-image: none; background-color: @star; }
+.ach-row     { padding: 4px 0; }
+.ach-medal   { font-size: 1.35em; }
+.ach-title   { font-weight: bold; }
+.ach-points  { color: @star; border-color: alpha(@star, 0.45); background-color: alpha(@star, 0.10);
+               padding: 2px 9px; font-size: 0.80em; }
+/* Pas encore debloque : la ligne s'efface, la medaille aussi. */
+.ach-locked  { opacity: 0.45; }
+.ach-warning { color: @warning; font-size: 0.86em; }
 
 /* ═══ Bandeaux (GtkInfoBar) ═══════════════════════════════════════════════
    GTK colore un InfoBar d'apres son message-type, mais ses regles visent les
@@ -690,8 +704,8 @@ headerbar { padding-left: 10px; padding-right: 10px; }
 
 /* ─── Densite du volet de details : tout doit tenir dans 1440 px ─────── */
 .spec-card, .dock-card { padding: 11px 14px; }
-.dock-section { margin-top: 11px; margin-bottom: 4px; }
-.dock-title   { font-size: 1.42em; margin-top: 10px; margin-bottom: 0; }
+.dock-section { margin-top: 6px; margin-bottom: 3px; }
+.dock-title   { font-size: 1.42em; margin-top: 2px; margin-bottom: 0; }
 .hi-row, .hi-score, .hi-score-top, .hi-when, .hi-free, .hi-mine {
   padding-top: 3px;
   padding-bottom: 3px;
@@ -1510,3 +1524,44 @@ expander > title { min-height: 0; padding: 2px 0; }
 .emu-card.selected {
   border-color: @accent;
 }
+
+/* ═══ Onglets du volet de details ═════════════════════════════════════════
+   Quatre pages (Game info, Records, Activity, ROMs) : un onglet actif se
+   reconnait a son soulignement d'accent, sans cadre ni fond. */
+.dock-tabs button {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 2px solid alpha(@border, 0.6);
+  padding: 7px 4px;
+  color: @text_muted;
+  font-weight: 600;
+  box-shadow: none;
+}
+.dock-tabs button:hover { color: @text; }
+.dock-tabs button:checked {
+  color: @text;
+  border-bottom-color: @accent;
+}
+
+/* Volet compact : rien de blanc au-dessus, peu d'air entre les blocs. */
+.dock-art { padding: 2px; margin-bottom: 4px; }
+.dock-meta { margin-bottom: 4px; }
+.pill { padding-top: 3px; padding-bottom: 3px; }
+.dock-tabs button { padding-top: 5px; padding-bottom: 5px; }
+
+/* Plus d'air mort : l'ecran titre colle au bord du volet, le nom colle a
+   l'image, l'apercu colle au titre de la fiche. */
+.dock-art { margin-bottom: 0; }
+.dock-title { margin-top: -6px; }
+.detail-dock scrolledwindow undershoot, .detail-dock scrolledwindow overshoot { background: none; }
+.dock-section { margin-top: 0; }
+.spec-card { padding-top: 8px; padding-bottom: 8px; }
+
+/* Entre-lignes serres dans le volet : fiche, titres de section, onglets. */
+.spec-key, .spec-val { padding-top: 0; padding-bottom: 0; margin-top: -1px; margin-bottom: -1px; }
+.spec-card { padding-top: 5px; padding-bottom: 5px; }
+.dock-section { margin-top: -4px; margin-bottom: 0; }
+.dock-tabs button { padding-top: 3px; padding-bottom: 3px; }
+.dock-title { margin-bottom: -2px; }
+.dock-meta { margin-bottom: 0; }

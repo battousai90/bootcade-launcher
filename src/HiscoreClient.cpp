@@ -166,6 +166,12 @@ Fetched<std::set<std::string>> fetch_supported() {
         std::string system = item.value("system", "");
         std::string game   = item.value("game", "");
         if (system.empty() || game.empty()) continue;
+        /* Tous les jeux que le serveur annonce portent la pastille, y compris
+         * ceux sans table d'usine eprouvee (`baseline` faux) : le serveur les
+         * classe a partir de la deuxieme partie, et le dit au joueur dans son
+         * verdict. Les ecarter retirait aussi leur type de fichier (saveram,
+         * metrique) : le lanceur n'envoyait alors jamais le bon fichier, et
+         * aucun score n'etait possible, ni a la premiere partie ni apres. */
         out.insert(key(system, game));
         {
             std::lock_guard<std::mutex> lock(g_saveram_mutex);

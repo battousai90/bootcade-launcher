@@ -10,6 +10,7 @@
 // ne se debogue plus, parce qu'on ne sait plus ce qui a change.
 #include "SettingsPanel.h"
 #include "DefaultFolders.h"
+#include "RetroAchievements.h"
 #include "BootcadeAuth.h"
 #include "IconManager.h"
 #include "LoginDialog.h"
@@ -792,7 +793,7 @@ Gtk::Widget* SettingsPanel::build_page_random() {
     ui::add_row(rnd_rows, *ui::row("bc-sliders.svg", _("Draw from"),
                                    _("The current filters and search, or your own choice of systems."),
                                    &m_combo_random_from));
-    for (auto* sw : {&m_switch_random_hiscore, &m_switch_random_originals,
+    for (auto* sw : {&m_switch_random_hiscore, &m_switch_random_achievements, &m_switch_random_originals,
                      &m_switch_random_unplayed, &m_switch_random_launch}) {
         sw->set_active(false);
         sw->set_valign(Gtk::ALIGN_CENTER);
@@ -800,6 +801,9 @@ Gtk::Widget* SettingsPanel::build_page_random() {
     ui::add_row(rnd_rows, *ui::row("bc-trophy.svg", _("Only games with a leaderboard"),
                                    _("Games that carry the Highscore badge."),
                                    &m_switch_random_hiscore));
+    ui::add_row(rnd_rows, *ui::row("bc-trophy.svg", _("Only games with achievements"),
+                                   _("Arcade games with RetroAchievements achievements."),
+                                   &m_switch_random_achievements));
     ui::add_row(rnd_rows, *ui::row("bc-package.svg", _("Only originals"),
                                    _("Leave clones and alternate versions out."),
                                    &m_switch_random_originals));
@@ -3473,6 +3477,12 @@ Gtk::Widget* SettingsPanel::build_page_online() {
         ui::open_uri(url, dynamic_cast<Gtk::Window*>(get_toplevel()));
     });
     m_profile_signed.pack_start(m_btn_view_profile, Gtk::PACK_SHRINK);
+    // Le compte RetroAchievements relie, et un lien vers sa page.
+    m_profile_ra.set_relief(Gtk::RELIEF_NONE);
+    m_profile_ra.set_halign(Gtk::ALIGN_CENTER);
+    m_profile_ra.get_style_context()->add_class("dock-link");
+    m_profile_ra.set_no_show_all(true);
+    m_profile_signed.pack_start(m_profile_ra, Gtk::PACK_SHRINK);
     profile.body->pack_start(m_profile_signed, Gtk::PACK_SHRINK);
 
     // Sans compte, la carte explique ce qu'un compte apporte : elle n'annonce
@@ -3490,8 +3500,156 @@ Gtk::Widget* SettingsPanel::build_page_online() {
     m_profile_empty.pack_start(*empty_sub, Gtk::PACK_SHRINK);
     profile.body->pack_start(m_profile_empty, Gtk::PACK_SHRINK);
 
-    page->pack_start(*profile.frame, Gtk::PACK_SHRINK);
+    // ── Colonne de droite : le profil, puis RetroAchievements ────────────
+    auto* right = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, ui::kCardSpacing);
+    right->pack_start(*profile.frame, Gtk::PACK_SHRINK);
+
+    /* Un compte a part, chez RetroAchievements : c'est FinalBurn Neo qui
+     * debloque les succes pendant la partie, le launcher ne fait que lui
+     * passer le compte. On garde le jeton du compte, jamais le mot de passe. */
+    auto ra = ui::card("bc-trophy.svg", _("RetroAchievements"),
+                       _("Unlock achievements in arcade games with your RetroAchievements account."));
+    auto* ra_rows = ui::rows();
+    m_ra_state.set_xalign(0.0f);
+    m_btn_ra.set_valign(Gtk::ALIGN_CENTER);
+    m_btn_ra.signal_clicked().connect(sigc::mem_fun(*this, &SettingsPanel::on_ra_button));
+    {
+        auto* line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+        line->get_style_context()->add_class("set-row");
+        auto* txt = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 1);
+        txt->set_valign(Gtk::ALIGN_CENTER);
+        txt->pack_start(*ui::title_label(_("Account")), Gtk::PACK_SHRINK);
+        m_ra_state.get_style_context()->add_class("set-sub");
+        txt->pack_start(m_ra_state, Gtk::PACK_SHRINK);
+        line->pack_start(*txt, Gtk::PACK_EXPAND_WIDGET);
+        line->pack_end(m_btn_ra, Gtk::PACK_SHRINK);
+        ui::add_row(ra_rows, *line);
+    }
+    m_switch_ra_hardcore.set_valign(Gtk::ALIGN_CENTER);
+    m_switch_ra_hardcore.set_active(RetroAchievements::hardcore());
+    m_switch_ra_hardcore.property_active().signal_changed().connect([this] {
+        RetroAchievements::set_hardcore(m_switch_ra_hardcore.get_active());
+        m_ra_hardcore_note.set_visible(m_switch_ra_hardcore.get_active());
+    });
+    ui::add_row(ra_rows, *ui::row("bc-shield.svg", _("Hardcore mode"),
+                                  _("Achievements count for real : no save states, slow motion or cheats while playing."),
+                                  &m_switch_ra_hardcore));
+    ra.body->pack_start(*ra_rows, Gtk::PACK_SHRINK);
+    /* L'avertissement, une seule fois et seulement si on active Hardcore :
+     * RetroAchievements ne connait pas encore Bootcade comme emulateur, donc
+     * ses succes Hardcore ne comptent pas. Le dire sur chaque jeu prenait de
+     * la place dans le volet pour rien. */
+    m_ra_hardcore_note.set_text("\u26A0 " + std::string(_("RetroAchievements does not recognise Bootcade as an emulator yet : Hardcore unlocks cannot be earned for now.")));
+    m_ra_hardcore_note.set_xalign(0.0f);
+    m_ra_hardcore_note.set_line_wrap(true);
+    m_ra_hardcore_note.set_max_width_chars(1);
+    m_ra_hardcore_note.set_margin_top(8);
+    m_ra_hardcore_note.get_style_context()->add_class("ach-warning");
+    m_ra_hardcore_note.set_no_show_all(true);
+    m_ra_hardcore_note.set_visible(RetroAchievements::hardcore());
+    ra.body->pack_start(m_ra_hardcore_note, Gtk::PACK_SHRINK);
+    right->pack_start(*ra.frame, Gtk::PACK_SHRINK);
+    refresh_ra_row();
+
+    page->pack_start(*right, Gtk::PACK_SHRINK);
     return page;
+}
+
+void SettingsPanel::refresh_ra_row() {
+    const bool in = RetroAchievements::signed_in();
+    if (in) {
+        const std::string u = RetroAchievements::username();
+        m_profile_ra.set_label("\U0001F3C5 " + Glib::ustring::compose(_("RetroAchievements: %1"), u));
+        m_profile_ra.set_uri("https://retroachievements.org/user/" + Glib::uri_escape_string(u));
+        m_profile_ra.show();
+    } else {
+        m_profile_ra.hide();
+    }
+    m_ra_state.set_text(in ? Glib::ustring::compose(_("Signed in as %1"), RetroAchievements::username())
+                           : Glib::ustring(_("Not signed in")));
+    m_btn_ra.set_label(in ? _("Sign out") : _("Sign in"));
+    m_switch_ra_hardcore.set_sensitive(in);
+}
+
+/* La connexion : identifiant et mot de passe RetroAchievements, dans une
+ * boite de la charte. Le mot de passe sert une fois, a obtenir le jeton, et
+ * n'est garde nulle part. */
+void SettingsPanel::on_ra_button() {
+    // Le compte Bootcade suit : le nom RetroAchievements y est inscrit ou
+    // efface, pour que le profil du site le montre (voir sync_bootcade_link).
+    auto sync = [] {
+        std::thread([] {
+            const std::string err = RetroAchievements::sync_bootcade_link();
+            if (!err.empty()) std::cerr << "[RA] link to Bootcade account: " << err << std::endl;
+        }).detach();
+    };
+    if (RetroAchievements::signed_in()) {
+        RetroAchievements::sign_out();
+        refresh_ra_row();
+        sync();
+        return;
+    }
+    auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
+    Gtk::Dialog dlg;
+    if (parent) dlg.set_transient_for(*parent);
+    dlg.set_modal(true);
+    dlg.set_resizable(false);
+    dlg.set_default_size(440, -1);
+    dlg.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
+    ui::window_header(dlg, "bc-trophy.svg", _("Sign in to RetroAchievements"),
+                      _("Your RetroAchievements account, not your Bootcade one"),
+                      [&dlg] { dlg.response(Gtk::RESPONSE_CANCEL); });
+
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 10);
+    box->set_margin_top(18); box->set_margin_bottom(18);
+    box->set_margin_start(22); box->set_margin_end(22);
+    Gtk::Entry user, pass;
+    user.set_placeholder_text(_("User name"));
+    pass.set_placeholder_text(_("Password"));
+    pass.set_visibility(false);
+    pass.set_activates_default(true);
+    Gtk::Label error;
+    error.set_xalign(0.0f);
+    error.set_line_wrap(true);
+    error.get_style_context()->add_class("set-err");
+    error.set_no_show_all(true);
+    auto* hint = ui::sub_label(_("No account yet? Create one for free on retroachievements.org."));
+    box->pack_start(user, Gtk::PACK_SHRINK);
+    box->pack_start(pass, Gtk::PACK_SHRINK);
+    box->pack_start(error, Gtk::PACK_SHRINK);
+    box->pack_start(*hint, Gtk::PACK_SHRINK);
+    dlg.get_content_area()->set_spacing(0);
+    dlg.get_content_area()->pack_start(*box);
+
+    auto* foot = ui::footer();
+    auto* ok = ui::button(_("Sign in"), "bc-account.svg", ui::Tone::Accent);
+    auto* cancel = ui::button(_("Cancel"));
+    ok->set_can_default(true);
+    foot->pack_end(*ok, Gtk::PACK_SHRINK);
+    foot->pack_end(*cancel, Gtk::PACK_SHRINK);
+    dlg.get_content_area()->pack_end(*foot, Gtk::PACK_SHRINK);
+    dlg.set_default(*ok);
+    cancel->signal_clicked().connect([&dlg] { dlg.response(Gtk::RESPONSE_CANCEL); });
+    ok->signal_clicked().connect([&] {
+        ok->set_sensitive(false);
+        error.hide();
+        const std::string u = user.get_text(), p = pass.get_text();
+        // Hors du fil graphique : la fenetre ne doit pas se figer le temps
+        // de la reponse du serveur.
+        auto result = std::make_shared<std::string>();
+        auto done = std::make_shared<std::atomic<bool>>(false);
+        std::thread([u, p, result, done] { *result = RetroAchievements::login(u, p); *done = true; }).detach();
+        while (!*done) { while (Gtk::Main::events_pending()) Gtk::Main::iteration(false); g_usleep(20000); }
+        ok->set_sensitive(true);
+        if (result->empty()) { dlg.response(Gtk::RESPONSE_OK); return; }
+        error.set_text(*result);
+        error.show();
+    });
+    dlg.get_content_area()->show_all();
+    error.hide();
+    dlg.run();
+    refresh_ra_row();
+    if (RetroAchievements::signed_in()) sync();
 }
 
 void SettingsPanel::set_network_state(int state) {
@@ -4227,6 +4385,7 @@ bool SettingsPanel::load_from_file(const std::string& filename) {
         m_combo_random_from.set_active_id(j.value("random_from", std::string("shown")) == "own" ? "own" : "shown");
         m_switch_random_hiscore.set_active(j.value("random_hiscore_only", false));
         m_switch_random_originals.set_active(j.value("random_originals_only", false));
+        m_switch_random_achievements.set_active(j.value("random_achievements_only", false));
         m_switch_random_unplayed.set_active(j.value("random_unplayed_only", false));
         m_switch_random_launch.set_active(j.value("random_launch", false));
         m_random_systems_saved.clear();
@@ -4360,8 +4519,10 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
     j["scan_loose_files"] = fbneo.scan_loose_files;
 
     j["dat_path"] = get_dat_path();
-    j["rom_manager"]["outbox_path"]     = get_outbox_path();
-    j["rom_manager"]["quarantine_path"] = get_quarantine_path();
+    // Les dossiers Outbox et Quarantaine appartiennent aux onglets de ROM
+    // Manager, qui les ecrivent eux-memes au moment ou on les change. Ce
+    // panneau n'en garde qu'une copie lue au demarrage : la reecrire ici
+    // remettait l'ancien dossier a chaque enregistrement des reglages.
     j["fbneo_executable"] = get_fbneo_executable();
     j["theme"] = get_theme();
     j["language"] = get_language();
@@ -4377,6 +4538,7 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
     j["random_from"]           = m_combo_random_from.get_active_id() == "own" ? "own" : "shown";
     j["random_hiscore_only"]   = m_switch_random_hiscore.get_active();
     j["random_originals_only"] = m_switch_random_originals.get_active();
+    j["random_achievements_only"] = m_switch_random_achievements.get_active();
     j["random_unplayed_only"]  = m_switch_random_unplayed.get_active();
     j["random_launch"]         = m_switch_random_launch.get_active();
     {
@@ -4621,6 +4783,7 @@ SettingsPanel::RandomPick SettingsPanel::random_pick() const {
     RandomPick r;
     r.from_shown     = m_combo_random_from.get_active_id() != "own";
     r.hiscore_only   = m_switch_random_hiscore.get_active();
+    r.achievements_only = m_switch_random_achievements.get_active();
     r.originals_only = m_switch_random_originals.get_active();
     r.unplayed_only  = m_switch_random_unplayed.get_active();
     r.launch         = m_switch_random_launch.get_active();

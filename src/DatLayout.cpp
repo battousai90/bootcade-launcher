@@ -73,10 +73,11 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode) : 
             out.push_back({entry_path(r.name), crc_of(r.crc), (uint64_t)r.size, ""});
         }
     };
-    auto own_disks = [](const Game& g, std::vector<DiskEntry>& out) {
+    auto own_disks = [&](const Game& g, std::vector<DiskEntry>& out) {
         std::unordered_set<std::string> seen;
         for (const auto& d : g.disks) {
             if (!d.merge.empty() || !seen.insert(d.name).second) continue;
+            if (disk_is_parents(g, d, find(g.cloneof))) continue;   // the parent's one copy
             out.push_back({d.name, lower(d.sha1), ""});
         }
     };
@@ -186,8 +187,10 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode) : 
                 a.entries.push_back({entry_path(r.name), crc_of(r.crc), (uint64_t)r.size, ""});
             }
             std::unordered_set<std::string> disk_names;
-            for (const auto& d : g->disks)
+            for (const auto& d : g->disks) {
+                if (disk_is_parents(*g, d, find(g->cloneof))) continue;   // the parent's one copy
                 if (disk_names.insert(d.name).second) a.disks.push_back({d.name, lower(d.sha1), ""});
+            }
             if (mode == "non-merged") {
                 // Plus the ROMs of the devices it uses, followed through the
                 // devices' own. A name the set already uses keeps its own ROM.

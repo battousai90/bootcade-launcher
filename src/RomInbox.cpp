@@ -1,5 +1,6 @@
 // src/RomInbox.cpp
 #include "RomInbox.h"
+#include "FileCopy.h"
 #include "i18n.h"
 #include "RomArchive.h"
 #include "RomManifest.h"
@@ -358,7 +359,7 @@ bool move_file(const std::string& from, const std::string& to, std::string& erro
     if (!ec) return true;
 
     ec.clear();
-    fs::copy_file(from, to, fs::copy_options::overwrite_existing, ec);
+    copy_file_robust(from, to, true, ec);
     if (ec) {
         error = "cannot copy to " + to + ": " + ec.message();
         return false;
@@ -1015,7 +1016,7 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
             bool ok;
             if (already != relocated.end()) {
                 std::error_code cec;
-                fs::copy_file(already->second, plan.dest_path, fs::copy_options::overwrite_existing, cec);
+                copy_file_robust(already->second, plan.dest_path, true, cec);
                 ok = !cec;
                 if (!ok) error = "cannot copy from " + already->second + ": " + cec.message();
             } else {

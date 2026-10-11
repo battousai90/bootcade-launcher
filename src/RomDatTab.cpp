@@ -242,14 +242,17 @@ void RomDatTab::build_group_card() {
     folder_label->set_valign(Gtk::ALIGN_CENTER);
     m_entry_folder.set_hexpand(true);
     m_entry_folder.set_placeholder_text(_("/path/to/dat/files"));
-    m_entry_folder.signal_activate().connect([this] {
+    auto commit_folder = [this] {
         if (m_entry_folder.get_text().raw() == group().folder) return;
         group().folder = m_entry_folder.get_text().raw();
         save_groups();
         if (m_current == 0) m_sig_folder.emit(group().folder);
         refresh();
         groups_changed();
-    });
+    };
+    m_entry_folder.signal_activate().connect(commit_folder);
+    // Valider aussi en quittant le champ : sans cela la saisie etait perdue.
+    m_entry_folder.signal_focus_out_event().connect([commit_folder](GdkEventFocus*) { commit_folder(); return false; });
     m_btn_browse = ui::button(_("Browse…"), "bc-folder.svg");
     m_btn_browse->signal_clicked().connect(sigc::mem_fun(*this, &RomDatTab::on_browse_folder));
     folder_line->pack_start(*folder_label, Gtk::PACK_SHRINK);

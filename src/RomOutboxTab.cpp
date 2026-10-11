@@ -1,5 +1,6 @@
 // src/RomOutboxTab.cpp
 #include "RomOutboxTab.h"
+#include "FileCopy.h"
 
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
@@ -70,7 +71,7 @@ bool move_file(const fs::path& src, const fs::path& dest, std::string& error) {
     fs::rename(src, dest, ec);
     if (!ec) return true;
     std::error_code rec = ec;
-    fs::copy_file(src, dest, fs::copy_options::overwrite_existing, ec);
+    copy_file_robust(src, dest, true, ec);
     if (ec) { error = "copy failed: " + ec.message() + " (rename had failed: " + rec.message() + ")"; return false; }
     fs::remove(src, ec);
     return true;
@@ -132,6 +133,12 @@ void RomOutboxTab::build_header() {
     m_entry_folder.set_hexpand(true);
     m_entry_folder.set_placeholder_text(_("No outbox folder set yet"));
     m_entry_folder.signal_activate().connect([this] { apply_outbox_path(m_entry_folder.get_text().raw()); });
+    // Valider aussi en quittant le champ : la touche Entree n'etait pas la seule
+    // facon de dire « c'est bon », et la saisie etait perdue sans elle.
+    m_entry_folder.signal_focus_out_event().connect([this](GdkEventFocus*) {
+        apply_outbox_path(m_entry_folder.get_text().raw());
+        return false;
+    });
     m_btn_browse = ui::button(_("Browse…"), "bc-folder.svg");
     m_btn_browse->signal_clicked().connect(sigc::mem_fun(*this, &RomOutboxTab::on_browse_folder));
     path_line->pack_start(m_entry_folder, Gtk::PACK_EXPAND_WIDGET);
@@ -887,6 +894,7 @@ void RomOutboxTab::worker_move() {
         fs::path src(it.path);
         const fs::path dest_dir = it.disk ? fs::path(it.destination) / it.game : fs::path(it.destination);
         fs::path dest = dest_dir / src.filename();
+        fs::path kept_replaced;   // the previous library copy, once it sits in Quarantine
         push_progress(100.0 * (double)i / (double)job.items.size(), src.filename().string());
         touched_dirs.insert(src.parent_path());
         if (it.disk) touched_dirs.insert(src.parent_path().parent_path());
@@ -900,6 +908,19 @@ void RomOutboxTab::worker_move() {
         fs::create_directories(dest_dir, ec);
         const bool exists = fs::exists(dest, ec);
         const std::string rel = outbox_manifest.relative(it.path);
+        // The set is already where it belongs : the outbox folder can be (or
+        // sit inside) the library folder, whatever the layout a player chose.
+        // There is nothing to move, and above all nothing to "replace" : the
+        // destination IS the outbox file, so sending it to Quarantine to make
+        // room would send the very file we are placing.
+        std::error_code same_ec;
+        if (exists && fs::equivalent(src, dest, same_ec) && !same_ec) {
+            outbox_manifest.remove(rel, RomManifest::outcome::MovedToLibrary);
+            ++job.moved;
+            job.moved_emulators.insert(it.emulator);
+            push_log("in place " + src.filename().string() + " : already in its library folder, nothing to move");
+            continue;
+        }
         if (exists) {
             if (job.collision == Collision::Skip) {
                 push_log("skipped " + src.filename().string() + " : already in the library");
@@ -927,10 +948,13 @@ void RomOutboxTab::worker_move() {
                 }
                 std::string qerr;
                 if (!move_file(dest, qdest, qerr)) {
-                    push_log("FAILED " + src.filename().string() + " : could not keep the replaced file: " + qerr);
+                    push_log("FAILED " + src.filename().string() + " : could not keep the replaced file in the Quarantine folder ("
+                             + qdir.string() + ") : " + qerr
+                             + " . The library copy was left untouched ; check that folder's disk, or choose a Quarantine folder on the library's disk.");
                     ++job.failed;
                     continue;
                 }
+                kept_replaced = qdest;
                 RomManifest::Entry e;
                 e.file = quarantine_manifest.relative(qdest.string());
                 e.game = it.game;
@@ -950,6 +974,21 @@ void RomOutboxTab::worker_move() {
         std::string err;
         if (!move_file(src, dest, err)) {
             push_log("FAILED " + src.filename().string() + " : " + err);
+            // The previous library copy was already put in Quarantine to make
+            // room : without it the library would now hold nothing for this
+            // set. Put it back.
+            if (!kept_replaced.empty()) {
+                std::string back_err;
+                if (move_file(kept_replaced, dest, back_err)) {
+                    quarantine_manifest.remove(quarantine_manifest.relative(kept_replaced.string()),
+                                               RomManifest::outcome::Restored);
+                    push_log("restored " + src.filename().string() + " : the previous library copy is back in place");
+                    --job.replaced;
+                } else {
+                    push_log("WARNING " + src.filename().string() + " : could not put the previous library copy back ("
+                             + back_err + ") ; it is in the Quarantine folder : " + kept_replaced.string());
+                }
+            }
             ++job.failed;
             continue;
         }
