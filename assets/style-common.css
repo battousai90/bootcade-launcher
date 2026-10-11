@@ -704,8 +704,8 @@ headerbar { padding-left: 10px; padding-right: 10px; }
 
 /* ─── Densite du volet de details : tout doit tenir dans 1440 px ─────── */
 .spec-card, .dock-card { padding: 11px 14px; }
-.dock-section { margin-top: 11px; margin-bottom: 4px; }
-.dock-title   { font-size: 1.42em; margin-top: 10px; margin-bottom: 0; }
+.dock-section { margin-top: 6px; margin-bottom: 3px; }
+.dock-title   { font-size: 1.42em; margin-top: 2px; margin-bottom: 0; }
 .hi-row, .hi-score, .hi-score-top, .hi-when, .hi-free, .hi-mine {
   padding-top: 3px;
   padding-bottom: 3px;
@@ -1543,3 +1543,9 @@ expander > title { min-height: 0; padding: 2px 0; }
   color: @text;
   border-bottom-color: @accent;
 }
+
+/* Volet compact : rien de blanc au-dessus, peu d'air entre les blocs. */
+.dock-art { padding: 2px; margin-bottom: 4px; }
+.dock-meta { margin-bottom: 4px; }
+.pill { padding-top: 3px; padding-bottom: 3px; }
+.dock-tabs button { padding-top: 5px; padding-bottom: 5px; }

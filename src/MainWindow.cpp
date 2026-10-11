@@ -1006,8 +1006,8 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // contenu, sans quoi les cartes touchent le bord et paraissent serrees.
     m_details_box.set_margin_start(18);
     m_details_box.set_margin_end(18);
-    m_details_box.set_margin_top(16);
-    m_details_box.set_margin_bottom(18);
+    m_details_box.set_margin_top(0);
+    m_details_box.set_margin_bottom(8);
 
     // Group A : the two artworks (Title + Preview). Orientation flips per dock.
     m_title_image.get_style_context()->add_class("dock-thumb");
@@ -1030,11 +1030,12 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // puis l'ecran titre. Plus de cadre vide en haut du volet.
     m_preview_image.set_valign(Gtk::ALIGN_START);
     m_detail_image_wrap.set_orientation(Gtk::ORIENTATION_VERTICAL);
-    // L'ecran titre reste en haut, comme avant les onglets ; le preview vient
-    // dessous, en grand.
+    // L'ecran titre reste TOUT EN HAUT du volet, au-dessus du nom du jeu et des
+    // onglets, comme avant. Le preview, lui, ouvre l'onglet « Game info ».
+    m_preview_image.set_valign(Gtk::ALIGN_START);
     m_detail_image_wrap.pack_start(m_title_image, Gtk::PACK_SHRINK);
-    m_detail_image_wrap.pack_start(m_preview_image, Gtk::PACK_SHRINK);
     m_detail_image_wrap.set_hexpand(false);
+    m_details_box.pack_start(m_detail_image_wrap, Gtk::PACK_SHRINK);
 
     // Group B : big title + full metadata block.
     m_label_title.set_xalign(0.5f);
@@ -1133,7 +1134,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
 
     // Game info : image, description, fiche.
     m_label_info.set_margin_top(2);
-    m_page_info.pack_start(m_detail_image_wrap, Gtk::PACK_SHRINK);
+    m_page_info.pack_start(m_preview_image, Gtk::PACK_SHRINK);
     m_page_info.pack_start(m_label_info, Gtk::PACK_SHRINK);
     m_page_info.pack_start(*heading(_("Game information")), Gtk::PACK_SHRINK);
     m_page_info.pack_start(m_specs_grid, Gtk::PACK_SHRINK);
@@ -1172,8 +1173,8 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_dock_tabs.set_stack(m_dock_stack);
     m_dock_tabs.get_style_context()->add_class("dock-tabs");
     m_dock_tabs.set_halign(Gtk::ALIGN_FILL);
-    m_dock_tabs.set_margin_top(10);
-    m_dock_tabs.set_margin_bottom(4);
+    m_dock_tabs.set_margin_top(4);
+    m_dock_tabs.set_margin_bottom(2);
     m_dock_stack.set_valign(Gtk::ALIGN_START);
     m_detail_text_col.pack_start(m_dock_tabs, Gtk::PACK_SHRINK);
     m_detail_text_col.pack_start(m_dock_stack, Gtk::PACK_SHRINK);
@@ -2359,11 +2360,11 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     };
     // 360 de large : la banniere occupe la colonne du volet, comme le
     // mockup, au lieu d'une vignette perdue au milieu.
-    load_art(m_title_image,   m_settings_panel.get_titles_path(m_last_selected_emulator),   420, 210);
+    load_art(m_title_image,   m_settings_panel.get_titles_path(m_last_selected_emulator),   420, 150);
     // 200 x 150 et non 320 x 240 : la capture accompagne desormais la fiche
     // technique au lieu de trôner en tete, et a l'ancienne taille elle
     // ecrasait le tableau qu'elle est censee illustrer.
-    load_art(m_preview_image, m_settings_panel.get_previews_path(m_last_selected_emulator), 420, 400);
+    load_art(m_preview_image, m_settings_panel.get_previews_path(m_last_selected_emulator), 420, 250);
 
     std::string manufacturer = Glib::ustring(row[m_columns.m_col_manufacturer]).raw();
     std::string year         = Glib::ustring(row[m_columns.m_col_year]).raw();
@@ -2729,8 +2730,8 @@ void MainWindow::set_dock_position(const std::string& pos) {
     m_detail_text_col.set_size_request(right ? 420 : -1, -1);
     m_dock_pills.set_halign(lead);
     m_dock_pills.set_spacing(10);
-    m_dock_pills.set_margin_top(6);
-    m_dock_pills.set_margin_bottom(4);
+    m_dock_pills.set_margin_top(2);
+    m_dock_pills.set_margin_bottom(0);
     m_specs_grid.set_halign(Gtk::ALIGN_FILL);
     m_detail_actions.set_halign(lead);
     m_detail_actions_col.set_halign(lead);
