@@ -113,6 +113,11 @@ void RomQuarantineTab::build_header() {
     m_entry_folder.set_hexpand(true);
     m_entry_folder.set_placeholder_text(_("No quarantine folder set yet"));
     m_entry_folder.signal_activate().connect([this] { apply_quarantine_path(m_entry_folder.get_text().raw()); });
+    // Valider aussi en quittant le champ (voir l'onglet Outbox).
+    m_entry_folder.signal_focus_out_event().connect([this](GdkEventFocus*) {
+        apply_quarantine_path(m_entry_folder.get_text().raw());
+        return false;
+    });
     m_btn_browse = ui::button(_("Browse…"), "bc-folder.svg");
     m_btn_browse->signal_clicked().connect(sigc::mem_fun(*this, &RomQuarantineTab::on_browse_folder));
     path_line->pack_start(m_entry_folder, Gtk::PACK_EXPAND_WIDGET);

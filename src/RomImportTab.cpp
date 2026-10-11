@@ -211,6 +211,9 @@ void RomImportTab::build_options() {
     for (auto* r : {&m_radio_subfolder, &m_radio_delete, &m_radio_keep})
         r->signal_toggled().connect([this] { save_settings(); });
     m_entry_inbox.signal_activate().connect([this] { save_settings(); });
+    // Taper un dossier puis cliquer ailleurs doit suffire : sans cela, seule la
+    // touche Entree l'enregistrait et la saisie etait perdue en quittant.
+    m_entry_inbox.signal_focus_out_event().connect([this](GdkEventFocus*) { save_settings(); return false; });
 }
 
 void RomImportTab::build_results() {

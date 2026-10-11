@@ -4519,8 +4519,10 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
     j["scan_loose_files"] = fbneo.scan_loose_files;
 
     j["dat_path"] = get_dat_path();
-    j["rom_manager"]["outbox_path"]     = get_outbox_path();
-    j["rom_manager"]["quarantine_path"] = get_quarantine_path();
+    // Les dossiers Outbox et Quarantaine appartiennent aux onglets de ROM
+    // Manager, qui les ecrivent eux-memes au moment ou on les change. Ce
+    // panneau n'en garde qu'une copie lue au demarrage : la reecrire ici
+    // remettait l'ancien dossier a chaque enregistrement des reglages.
     j["fbneo_executable"] = get_fbneo_executable();
     j["theme"] = get_theme();
     j["language"] = get_language();
