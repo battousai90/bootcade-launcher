@@ -224,8 +224,12 @@ private:
 // of `folder` under each root : <root>/<folder>/<set>/<disk>.chd, or
 // <root>/<set>/<disk>.chd when the root is that folder. Judged by the SHA1
 // their header declares.
+//
+// With `fbneo_hdd`, FinalBurn Neo's own support/hdd/ folder is searched too
+// (<set>/<disk>.chd, where the set is the one that owns the disk).
 DiskResult evaluate_layout_disks(const std::string& set, const std::vector<DatLayout::DiskEntry>& disks,
-                                 const std::vector<std::string>& roots, const std::string& folder);
+                                 const std::vector<std::string>& roots, const std::string& folder,
+                                 bool fbneo_hdd = false);
 
 // ── The playable status (games.status, what the game list shows) ───────────
 //

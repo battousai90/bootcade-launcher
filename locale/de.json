@@ -184,6 +184,7 @@
   "Play": "Spielen",
   "Download Art": "Artwork laden",
   "Game information": "Spielinformationen",
+  "ROM files": "ROM-Dateien",
   "Your activity": "Deine Aktivität",
   "Fetch the latest scores now, without waiting for the next automatic refresh.": "Holt die neuesten Ergebnisse sofort, ohne auf die automatische Aktualisierung zu warten.",
   "Your best": "Deine beste Platzierung",
@@ -1874,6 +1875,7 @@
   "RetroAchievements": "RetroAchievements",
   "Unlock achievements in arcade games with your RetroAchievements account.": "Schalten Sie in Arcade-Spielen Erfolge mit Ihrem RetroAchievements-Konto frei.",
   "Hardcore mode": "Hardcore-Modus",
+  "RetroAchievements does not recognise Bootcade as an emulator yet : Hardcore unlocks cannot be earned for now.": "RetroAchievements erkennt Bootcade noch nicht als Emulator an: Hardcore-Erfolge können derzeit nicht erreicht werden.",
   "Achievements count for real : no save states, slow motion or cheats while playing.": "Erfolge zählen richtig: keine Speicherstände, keine Zeitlupe und keine Cheats beim Spielen.",
   "Sign in to RetroAchievements": "Bei RetroAchievements anmelden",
   "Your RetroAchievements account, not your Bootcade one": "Ihr RetroAchievements-Konto, nicht Ihr Bootcade-Konto",
@@ -1892,5 +1894,11 @@
   "%1 RetroAchievements achievements": "%1 RetroAchievements-Erfolge",
   "Sign in to RetroAchievements in Settings › Online to unlock them and follow your progress.": "Melden Sie sich in Settings › Online bei RetroAchievements an, um sie freizuschalten und Ihren Fortschritt zu verfolgen.",
   "Loading achievements…": "Erfolge werden geladen…",
-  "%1 of %2 unlocked · %3 of %4 points": "%1 von %2 freigeschaltet · %3 von %4 Punkten"
+  "%1 of %2 unlocked · %3 of %4 points": "%1 von %2 freigeschaltet · %3 von %4 Punkten",
+  "%1 achievements to unlock. Sign in to RetroAchievements in Settings › Online to earn them and follow your progress.": "%1 Erfolge freizuschalten. Melden Sie sich in Settings › Online bei RetroAchievements an, um sie zu erhalten und Ihren Fortschritt zu verfolgen.",
+  "View on RetroAchievements": "Auf RetroAchievements ansehen",
+  "achievements unlocked": "Erfolge freigeschaltet",
+  "points": "Punkte",
+  "Show the %1 achievements": "Die %1 Erfolge anzeigen",
+  "RetroAchievements: %1": "RetroAchievements: %1"
 }

@@ -19,7 +19,7 @@ namespace RetroAchievements {
 
 bool signed_in();
 std::string username();
-bool hardcore();                      // vrai par defaut
+bool hardcore();                      // faux par defaut
 void set_hardcore(bool on);
 
 // Bloquant. Rend un message d'erreur lisible, ou "" si la connexion a reussi.
@@ -66,6 +66,16 @@ GameAchievements fetch(const std::string& set_name);
 // Nombre de succes officiels du set, 0 s'il n'en a pas (ou catalogue absent).
 unsigned achievement_count(const std::string& emulator, const std::string& system,
                            const std::string& set_name);
+/* Relie le compte RetroAchievements au compte Bootcade.
+ *
+ * Le NOM du compte (jamais le jeton) est ecrit dans l'attribut Keycloak
+ * « retroachievements » du joueur, par l'API de compte de Keycloak, avec le
+ * jeton Bootcade : le site le lit dans le jeton pour l'afficher sur le profil.
+ * Efface quand le joueur se deconnecte de RetroAchievements. Sans compte
+ * Bootcade, ne fait rien. Bloquant : hors du fil graphique. Rend "" si
+ * l'attribut est a jour, sinon l'erreur. */
+std::string sync_bootcade_link();
+
 // Telecharge le catalogue s'il date de plus d'un jour. Bloquant, hors du fil
 // graphique. Rend true si le catalogue a change.
 bool refresh_catalog();

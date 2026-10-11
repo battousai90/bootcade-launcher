@@ -277,7 +277,8 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         if (!need_disks.empty()) {
             std::vector<DatLayout::DiskEntry> disks;
             for (size_t i : need_disks) disks.push_back(arc->disks[i]);
-            const RomResolve::DiskResult d = RomResolve::evaluate_layout_disks(arc->name, disks, roms_paths, folder);
+            const RomResolve::DiskResult d = RomResolve::evaluate_layout_disks(
+                arc->name, disks, roms_paths, folder, g.emulator != "mame");
             for (const auto& v : d.disks) {
                 RomEntry r;
                 r.name       = v.name + ".chd";

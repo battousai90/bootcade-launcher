@@ -184,6 +184,7 @@
   "Play": "开始游戏",
   "Download Art": "下载封面",
   "Game information": "游戏信息",
+  "ROM files": "ROM 文件",
   "Your activity": "你的活动",
   "Fetch the latest scores now, without waiting for the next automatic refresh.": "立即获取最新成绩，无需等待自动刷新。",
   "Your best": "你的最好成绩",
@@ -1874,6 +1875,7 @@
   "RetroAchievements": "RetroAchievements",
   "Unlock achievements in arcade games with your RetroAchievements account.": "使用您的 RetroAchievements 账户解锁街机游戏成就。",
   "Hardcore mode": "硬核模式",
+  "RetroAchievements does not recognise Bootcade as an emulator yet : Hardcore unlocks cannot be earned for now.": "RetroAchievements 尚未将 Bootcade 识别为模拟器，目前无法获得硬核模式成就。",
   "Achievements count for real : no save states, slow motion or cheats while playing.": "成就真正计入：游戏中不能使用即时存档、慢动作或作弊。",
   "Sign in to RetroAchievements": "登录 RetroAchievements",
   "Your RetroAchievements account, not your Bootcade one": "您的 RetroAchievements 账户，而非 Bootcade 账户",
@@ -1892,5 +1894,11 @@
   "%1 RetroAchievements achievements": "%1 项 RetroAchievements 成就",
   "Sign in to RetroAchievements in Settings › Online to unlock them and follow your progress.": "在 Settings › Online 中登录 RetroAchievements 即可解锁成就并查看进度。",
   "Loading achievements…": "正在加载成就…",
-  "%1 of %2 unlocked · %3 of %4 points": "已解锁 %1/%2 · %3/%4 分"
+  "%1 of %2 unlocked · %3 of %4 points": "已解锁 %1/%2 · %3/%4 分",
+  "%1 achievements to unlock. Sign in to RetroAchievements in Settings › Online to earn them and follow your progress.": "有 %1 项成就可解锁。在 Settings › Online 中登录 RetroAchievements 即可获得成就并查看进度。",
+  "View on RetroAchievements": "在 RetroAchievements 上查看",
+  "achievements unlocked": "已解锁成就",
+  "points": "分",
+  "Show the %1 achievements": "显示 %1 项成就",
+  "RetroAchievements: %1": "RetroAchievements：%1"
 }

@@ -184,6 +184,7 @@
   "Play": "Jugar",
   "Download Art": "Descargar carátula",
   "Game information": "Ficha del juego",
+  "ROM files": "Archivos ROM",
   "Your activity": "Tu actividad",
   "Fetch the latest scores now, without waiting for the next automatic refresh.": "Obtiene las últimas puntuaciones ahora, sin esperar a la actualización automática.",
   "Your best": "Tu mejor puesto",
@@ -1874,6 +1875,7 @@
   "RetroAchievements": "RetroAchievements",
   "Unlock achievements in arcade games with your RetroAchievements account.": "Desbloquee logros en juegos arcade con su cuenta de RetroAchievements.",
   "Hardcore mode": "Modo Hardcore",
+  "RetroAchievements does not recognise Bootcade as an emulator yet : Hardcore unlocks cannot be earned for now.": "RetroAchievements aún no reconoce Bootcade como emulador: por ahora no se pueden conseguir logros en modo Hardcore.",
   "Achievements count for real : no save states, slow motion or cheats while playing.": "Los logros cuentan de verdad: sin estados guardados, cámara lenta ni trucos durante la partida.",
   "Sign in to RetroAchievements": "Iniciar sesión en RetroAchievements",
   "Your RetroAchievements account, not your Bootcade one": "Su cuenta de RetroAchievements, no la de Bootcade",
@@ -1892,5 +1894,11 @@
   "%1 RetroAchievements achievements": "%1 logros de RetroAchievements",
   "Sign in to RetroAchievements in Settings › Online to unlock them and follow your progress.": "Inicie sesión en RetroAchievements en Settings › Online para desbloquearlos y seguir su progreso.",
   "Loading achievements…": "Cargando logros…",
-  "%1 of %2 unlocked · %3 of %4 points": "%1 de %2 desbloqueados · %3 de %4 puntos"
+  "%1 of %2 unlocked · %3 of %4 points": "%1 de %2 desbloqueados · %3 de %4 puntos",
+  "%1 achievements to unlock. Sign in to RetroAchievements in Settings › Online to earn them and follow your progress.": "%1 logros por desbloquear. Inicie sesión en RetroAchievements en Settings › Online para conseguirlos y seguir su progreso.",
+  "View on RetroAchievements": "Ver en RetroAchievements",
+  "achievements unlocked": "logros desbloqueados",
+  "points": "puntos",
+  "Show the %1 achievements": "Mostrar los %1 logros",
+  "RetroAchievements: %1": "RetroAchievements: %1"
 }

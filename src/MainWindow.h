@@ -789,9 +789,7 @@ private:
     Gtk::Button         m_hdr_game, m_hdr_emu, m_hdr_system, m_hdr_year;
     Gtk::Label          m_hdr_status, m_hdr_hs, m_hdr_ra;
     // RetroAchievements : la section du volet, et le catalogue charge au demarrage.
-    Gtk::Expander       m_ach_exp;
-    Gtk::Label          m_ach_sum;
-    Gtk::Box            m_ach_list{Gtk::ORIENTATION_VERTICAL, 6};
+    Gtk::Box            m_ach_list{Gtk::ORIENTATION_VERTICAL, 10};   // la carte, rebatie a chaque jeu
     Glib::Dispatcher    m_ach_dispatcher;          // la liste d'un jeu est arrivee
     Glib::Dispatcher    m_ra_catalog_dispatcher;   // le catalogue a change
     std::mutex          m_ach_mutex;
@@ -1005,6 +1003,14 @@ private:
     Gtk::Expander m_specs_exp;
     Gtk::Label    m_activity_sum;
     Gtk::Label    m_specs_sum;
+    // « ROM files » : les fichiers que le DAT attend pour le set, replies.
+    Gtk::Expander       m_roms_exp;
+    Gtk::Label          m_roms_sum;
+    Gtk::Box            m_roms_card{Gtk::ORIENTATION_VERTICAL, 0};
+    Gtk::ScrolledWindow m_roms_scroll;
+    Gtk::Grid           m_roms_grid;
+    void show_rom_files(const std::string& name, const std::string& system,
+                        const std::string& emulator);
     bool          m_dock_prefs_known = false;   // l'utilisateur a-t-il deja choisi ?
     void          build_dock_section(Gtk::Expander& exp, Gtk::Label& sum,
                                      const std::string& title, Gtk::Widget& body);

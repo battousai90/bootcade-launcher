@@ -378,6 +378,7 @@ button.chip-clear:hover { opacity: 1; }
 /* Caracteristiques : intitule en retrait, valeur en avant. */
 .spec-key { color: @text_muted; font-size: 0.86em; }
 .spec-val { font-size: 0.92em; font-weight: 500; }
+.rom-crc { font-family: monospace; }
 
 /* ---- Tableau des scores ----
    Dessine comme l'ecran d'une borne : fond en creux, chiffres alignes en
@@ -428,6 +429,19 @@ button.chip-clear:hover { opacity: 1; }
 /* Bleu, a part du trio vert/ambre/gris : ceux-la disent si la ROM marche,
    celui-ci dit que le jeu peut etre classe en ligne. */
 .pill-hiscore { color: @info; border-color: alpha(@info, 0.45); background-color: alpha(@info, 0.12); }
+
+/* RetroAchievements : l'or des medailles, distinct du bleu des Highscores. */
+.pill-ach { color: @star; border-color: alpha(@star, 0.45); background-color: alpha(@star, 0.12); }
+.ach-card progressbar trough   { min-height: 6px; }
+.ach-card progressbar progress { min-height: 6px; background-image: none; background-color: @star; }
+.ach-row     { padding: 4px 0; }
+.ach-medal   { font-size: 1.35em; }
+.ach-title   { font-weight: bold; }
+.ach-points  { color: @star; border-color: alpha(@star, 0.45); background-color: alpha(@star, 0.10);
+               padding: 2px 9px; font-size: 0.80em; }
+/* Pas encore debloque : la ligne s'efface, la medaille aussi. */
+.ach-locked  { opacity: 0.45; }
+.ach-warning { color: @warning; font-size: 0.86em; }
 
 /* ═══ Bandeaux (GtkInfoBar) ═══════════════════════════════════════════════
    GTK colore un InfoBar d'apres son message-type, mais ses regles visent les

@@ -184,6 +184,7 @@
   "Play": "เล่น",
   "Download Art": "ดาวน์โหลดภาพ",
   "Game information": "ข้อมูลเกม",
+  "ROM files": "ไฟล์ ROM",
   "Your activity": "กิจกรรมของคุณ",
   "Fetch the latest scores now, without waiting for the next automatic refresh.": "ดึงคะแนนล่าสุดทันที โดยไม่ต้องรอการรีเฟรชอัตโนมัติ",
   "Your best": "อันดับที่ดีที่สุดของคุณ",
@@ -1874,6 +1875,7 @@
   "RetroAchievements": "RetroAchievements",
   "Unlock achievements in arcade games with your RetroAchievements account.": "ปลดล็อกความสำเร็จในเกมอาร์เคดด้วยบัญชี RetroAchievements ของคุณ",
   "Hardcore mode": "โหมดฮาร์ดคอร์",
+  "RetroAchievements does not recognise Bootcade as an emulator yet : Hardcore unlocks cannot be earned for now.": "RetroAchievements ยังไม่รู้จัก Bootcade ว่าเป็นอีมูเลเตอร์ ตอนนี้จึงยังปลดล็อกความสำเร็จโหมด Hardcore ไม่ได้",
   "Achievements count for real : no save states, slow motion or cheats while playing.": "ความสำเร็จนับจริง: ห้ามบันทึกสถานะ สโลว์โมชัน หรือโกงระหว่างเล่น",
   "Sign in to RetroAchievements": "ลงชื่อเข้าใช้ RetroAchievements",
   "Your RetroAchievements account, not your Bootcade one": "บัญชี RetroAchievements ของคุณ ไม่ใช่บัญชี Bootcade",
@@ -1892,5 +1894,11 @@
   "%1 RetroAchievements achievements": "%1 ความสำเร็จของ RetroAchievements",
   "Sign in to RetroAchievements in Settings › Online to unlock them and follow your progress.": "ลงชื่อเข้าใช้ RetroAchievements ใน Settings › Online เพื่อปลดล็อกและติดตามความคืบหน้า",
   "Loading achievements…": "กำลังโหลดความสำเร็จ…",
-  "%1 of %2 unlocked · %3 of %4 points": "ปลดล็อก %1 จาก %2 · %3 จาก %4 คะแนน"
+  "%1 of %2 unlocked · %3 of %4 points": "ปลดล็อก %1 จาก %2 · %3 จาก %4 คะแนน",
+  "%1 achievements to unlock. Sign in to RetroAchievements in Settings › Online to earn them and follow your progress.": "มี %1 ความสำเร็จให้ปลดล็อก ลงชื่อเข้าใช้ RetroAchievements ใน Settings › Online เพื่อรับและติดตามความคืบหน้า",
+  "View on RetroAchievements": "ดูบน RetroAchievements",
+  "achievements unlocked": "ความสำเร็จที่ปลดล็อก",
+  "points": "คะแนน",
+  "Show the %1 achievements": "แสดง %1 ความสำเร็จ",
+  "RetroAchievements: %1": "RetroAchievements: %1"
 }

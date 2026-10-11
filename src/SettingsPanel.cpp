@@ -3477,6 +3477,12 @@ Gtk::Widget* SettingsPanel::build_page_online() {
         ui::open_uri(url, dynamic_cast<Gtk::Window*>(get_toplevel()));
     });
     m_profile_signed.pack_start(m_btn_view_profile, Gtk::PACK_SHRINK);
+    // Le compte RetroAchievements relie, et un lien vers sa page.
+    m_profile_ra.set_relief(Gtk::RELIEF_NONE);
+    m_profile_ra.set_halign(Gtk::ALIGN_CENTER);
+    m_profile_ra.get_style_context()->add_class("dock-link");
+    m_profile_ra.set_no_show_all(true);
+    m_profile_signed.pack_start(m_profile_ra, Gtk::PACK_SHRINK);
     profile.body->pack_start(m_profile_signed, Gtk::PACK_SHRINK);
 
     // Sans compte, la carte explique ce qu'un compte apporte : elle n'annonce
@@ -3523,11 +3529,25 @@ Gtk::Widget* SettingsPanel::build_page_online() {
     m_switch_ra_hardcore.set_active(RetroAchievements::hardcore());
     m_switch_ra_hardcore.property_active().signal_changed().connect([this] {
         RetroAchievements::set_hardcore(m_switch_ra_hardcore.get_active());
+        m_ra_hardcore_note.set_visible(m_switch_ra_hardcore.get_active());
     });
     ui::add_row(ra_rows, *ui::row("bc-shield.svg", _("Hardcore mode"),
                                   _("Achievements count for real : no save states, slow motion or cheats while playing."),
                                   &m_switch_ra_hardcore));
     ra.body->pack_start(*ra_rows, Gtk::PACK_SHRINK);
+    /* L'avertissement, une seule fois et seulement si on active Hardcore :
+     * RetroAchievements ne connait pas encore Bootcade comme emulateur, donc
+     * ses succes Hardcore ne comptent pas. Le dire sur chaque jeu prenait de
+     * la place dans le volet pour rien. */
+    m_ra_hardcore_note.set_text("\u26A0 " + std::string(_("RetroAchievements does not recognise Bootcade as an emulator yet : Hardcore unlocks cannot be earned for now.")));
+    m_ra_hardcore_note.set_xalign(0.0f);
+    m_ra_hardcore_note.set_line_wrap(true);
+    m_ra_hardcore_note.set_max_width_chars(1);
+    m_ra_hardcore_note.set_margin_top(8);
+    m_ra_hardcore_note.get_style_context()->add_class("ach-warning");
+    m_ra_hardcore_note.set_no_show_all(true);
+    m_ra_hardcore_note.set_visible(RetroAchievements::hardcore());
+    ra.body->pack_start(m_ra_hardcore_note, Gtk::PACK_SHRINK);
     right->pack_start(*ra.frame, Gtk::PACK_SHRINK);
     refresh_ra_row();
 
@@ -3537,6 +3557,14 @@ Gtk::Widget* SettingsPanel::build_page_online() {
 
 void SettingsPanel::refresh_ra_row() {
     const bool in = RetroAchievements::signed_in();
+    if (in) {
+        const std::string u = RetroAchievements::username();
+        m_profile_ra.set_label("\U0001F3C5 " + Glib::ustring::compose(_("RetroAchievements: %1"), u));
+        m_profile_ra.set_uri("https://retroachievements.org/user/" + Glib::uri_escape_string(u));
+        m_profile_ra.show();
+    } else {
+        m_profile_ra.hide();
+    }
     m_ra_state.set_text(in ? Glib::ustring::compose(_("Signed in as %1"), RetroAchievements::username())
                            : Glib::ustring(_("Not signed in")));
     m_btn_ra.set_label(in ? _("Sign out") : _("Sign in"));
@@ -3547,9 +3575,18 @@ void SettingsPanel::refresh_ra_row() {
  * boite de la charte. Le mot de passe sert une fois, a obtenir le jeton, et
  * n'est garde nulle part. */
 void SettingsPanel::on_ra_button() {
+    // Le compte Bootcade suit : le nom RetroAchievements y est inscrit ou
+    // efface, pour que le profil du site le montre (voir sync_bootcade_link).
+    auto sync = [] {
+        std::thread([] {
+            const std::string err = RetroAchievements::sync_bootcade_link();
+            if (!err.empty()) std::cerr << "[RA] link to Bootcade account: " << err << std::endl;
+        }).detach();
+    };
     if (RetroAchievements::signed_in()) {
         RetroAchievements::sign_out();
         refresh_ra_row();
+        sync();
         return;
     }
     auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
@@ -3612,6 +3649,7 @@ void SettingsPanel::on_ra_button() {
     error.hide();
     dlg.run();
     refresh_ra_row();
+    if (RetroAchievements::signed_in()) sync();
 }
 
 void SettingsPanel::set_network_state(int state) {

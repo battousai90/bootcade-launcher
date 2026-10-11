@@ -2,6 +2,7 @@
 #include "RetroAchievements.h"
 
 #include "AppContext.h"
+#include "BootcadeAuth.h"
 #include "i18n.h"
 
 #include <curl/curl.h>
@@ -25,7 +26,9 @@ const char* const kServer = "https://retroachievements.org/dorequest.php";
 std::mutex g_mutex;
 bool g_loaded = false;
 std::string g_user, g_token;
-bool g_hardcore = true;
+// Desactive par defaut : tant que RetroAchievements n'a pas approuve
+// Bootcade, le serveur refuse tout succes Hardcore (« Unknown Emulator »).
+bool g_hardcore = false;
 
 std::string path() {
     return AppContext::get_user_config_dir() + "/retroachievements.json";
@@ -41,7 +44,7 @@ void load_locked() {
         f >> j;
         g_user     = j.value("user", std::string());
         g_token    = j.value("token", std::string());
-        g_hardcore = j.value("hardcore", true);
+        g_hardcore = j.value("hardcore", false);
     } catch (...) {}
 }
 
@@ -247,6 +250,57 @@ bool refresh_catalog() {
     std::ofstream f(catalog_path(), std::ios::trunc);
     if (f) f << body;
     return g_cat.size() != before;
+}
+
+std::string sync_bootcade_link() {
+    const std::string token = BootcadeAuth::access_token();
+    if (token.empty()) return {};                       // pas de compte Bootcade : rien a relier
+    const std::string wanted = signed_in() ? username() : std::string();
+    const std::string url = BootcadeAuth::account_console_url() + "/";
+
+    auto call = [&](const char* method, const std::string& body, std::string& out) -> long {
+        CURL* curl = curl_easy_init();
+        if (!curl) return 0;
+        struct curl_slist* h = nullptr;
+        h = curl_slist_append(h, ("Authorization: Bearer " + token).c_str());
+        h = curl_slist_append(h, "Accept: application/json");
+        if (!body.empty()) h = curl_slist_append(h, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, h);
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+        if (!body.empty()) curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, to_string);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+        long status = 0;
+        if (curl_easy_perform(curl) == CURLE_OK) curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+        curl_slist_free_all(h);
+        curl_easy_cleanup(curl);
+        return status;
+    };
+
+    std::string body;
+    const long got = call("GET", "", body);
+    if (got != 200) return "account GET HTTP " + std::to_string(got);
+    nlohmann::json acc;
+    try { acc = nlohmann::json::parse(body); } catch (...) { return "account: bad JSON"; }
+    if (!acc.is_object()) return "account: bad JSON";
+    std::string current;
+    if (acc.contains("attributes") && acc["attributes"].is_object() && acc["attributes"].contains("retroachievements")) {
+        const auto& v = acc["attributes"]["retroachievements"];
+        if (v.is_array() && !v.empty() && v[0].is_string()) current = v[0].get<std::string>();
+        else if (v.is_string()) current = v.get<std::string>();
+    }
+    if (current == wanted) return {};
+    // La representation se renvoie ENTIERE : n'envoyer que l'attribut
+    // effacerait l'e-mail, le prenom, l'avatar, le pays.
+    if (!acc.contains("attributes") || !acc["attributes"].is_object()) acc["attributes"] = nlohmann::json::object();
+    if (wanted.empty()) acc["attributes"].erase("retroachievements");
+    else acc["attributes"]["retroachievements"] = nlohmann::json::array({wanted});
+    std::string ignored;
+    const long put = call("POST", acc.dump(), ignored);
+    if (put != 200 && put != 204) return "account POST HTTP " + std::to_string(put) + " " + ignored.substr(0, 200);
+    return {};
 }
 
 GameAchievements fetch(const std::string& set_name) {

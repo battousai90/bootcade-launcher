@@ -184,6 +184,7 @@
   "Play": "プレイ",
   "Download Art": "アートを取得",
   "Game information": "ゲーム情報",
+  "ROM files": "ROM ファイル",
   "Your activity": "あなたの記録",
   "Fetch the latest scores now, without waiting for the next automatic refresh.": "自動更新を待たずに、いま最新のスコアを取得します。",
   "Your best": "自己ベスト",
@@ -1874,6 +1875,7 @@
   "RetroAchievements": "RetroAchievements",
   "Unlock achievements in arcade games with your RetroAchievements account.": "RetroAchievements アカウントでアーケードゲームの実績を解除できます。",
   "Hardcore mode": "ハードコアモード",
+  "RetroAchievements does not recognise Bootcade as an emulator yet : Hardcore unlocks cannot be earned for now.": "RetroAchievements はまだ Bootcade をエミュレーターとして認識していないため、現時点ではハードコアの実績は獲得できません。",
   "Achievements count for real : no save states, slow motion or cheats while playing.": "実績が正式にカウントされます：プレイ中はステートセーブ、スローモーション、チートは使えません。",
   "Sign in to RetroAchievements": "RetroAchievements にサインイン",
   "Your RetroAchievements account, not your Bootcade one": "Bootcade ではなく RetroAchievements のアカウントです",
@@ -1892,5 +1894,11 @@
   "%1 RetroAchievements achievements": "RetroAchievements の実績 %1 個",
   "Sign in to RetroAchievements in Settings › Online to unlock them and follow your progress.": "Settings › Online で RetroAchievements にサインインすると、実績の解除と進捗の確認ができます。",
   "Loading achievements…": "実績を読み込んでいます…",
-  "%1 of %2 unlocked · %3 of %4 points": "%2 個中 %1 個解除 · %4 ポイント中 %3"
+  "%1 of %2 unlocked · %3 of %4 points": "%2 個中 %1 個解除 · %4 ポイント中 %3",
+  "%1 achievements to unlock. Sign in to RetroAchievements in Settings › Online to earn them and follow your progress.": "解除できる実績が %1 個あります。Settings › Online で RetroAchievements にサインインすると、獲得と進捗の確認ができます。",
+  "View on RetroAchievements": "RetroAchievements で見る",
+  "achievements unlocked": "解除した実績",
+  "points": "ポイント",
+  "Show the %1 achievements": "%1 個の実績を表示",
+  "RetroAchievements: %1": "RetroAchievements: %1"
 }

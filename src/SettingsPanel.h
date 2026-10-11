@@ -741,8 +741,10 @@ private:
     Gtk::Button m_btn_view_profile;
     // RetroAchievements : le compte, et le mode Hardcore.
     Gtk::Label  m_ra_state;
+    Gtk::LinkButton m_profile_ra;     // « RetroAchievements : nom » dans la carte du profil
     Gtk::Button m_btn_ra;
     Gtk::Switch m_switch_ra_hardcore;
+    Gtk::Label  m_ra_hardcore_note;   // dit une fois que Hardcore ne compte pas encore
     void refresh_ra_row();
     void on_ra_button();
     // Trois compteurs, tous LOCAUX et tous verifiables : les classements

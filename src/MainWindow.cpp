@@ -49,6 +49,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <zip.h>
+#include <iomanip>
 #include <sstream>
 #include <locale>
 #include <ctime>
@@ -285,6 +286,17 @@ static std::string short_date(const std::string& iso8601) {
 
 // "2 h 14", "37 min", "45 s" : the coarsest unit that still says something.
 // A session is read at a glance, so seconds past the first minute are noise.
+// « 128 KB », « 4.5 MB » : la taille d'une ROM, lisible d'un coup d'oeil.
+static std::string format_size(uint64_t bytes) {
+    static const char* units[] = {"B", "KB", "MB", "GB"};
+    double v = (double)bytes;
+    int u = 0;
+    while (v >= 1024.0 && u < 3) { v /= 1024.0; ++u; }
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(v < 10.0 && u > 0 ? 1 : 0) << v << ' ' << units[u];
+    return os.str();
+}
+
 static std::string format_duration(int seconds) {
     if (seconds <= 0) return "";
     if (seconds < 60)   return std::to_string(seconds) + " s";
@@ -486,6 +498,12 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_account_pending =
         std::filesystem::exists(BootcadeAuth::session_path());
     m_account_settled.connect([this] {
+        // Compte Bootcade connu : le lien RetroAchievements y est remis a jour
+        // (connexion RA faite avant celle de Bootcade, ou depuis une autre machine).
+        std::thread([] {
+            const std::string err = RetroAchievements::sync_bootcade_link();
+            if (!err.empty()) std::cerr << "[RA] link to Bootcade account: " << err << std::endl;
+        }).detach();
         m_account_pending = false;
         if (m_account_question_waiting) {
             m_account_question_waiting = false;
@@ -1079,13 +1097,31 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
      * pas le moment ou l'on remplit.
      */
     m_detail_text_col.pack_start(m_hiscore_box,  Gtk::PACK_SHRINK);
+    // Les succes RetroAchievements juste sous le classement : c'est aussi ce
+    // que le joueur a accompli, avant son activite et la fiche du jeu.
+    m_ach_list.get_style_context()->add_class("dock-card");
+    m_ach_list.get_style_context()->add_class("ach-card");
+    m_ach_list.set_margin_top(14);
+    m_ach_list.set_no_show_all(true);
+    m_detail_text_col.pack_start(m_ach_list, Gtk::PACK_SHRINK);
     build_dock_section(m_activity_exp, m_activity_sum, _("Your activity"), m_activity_grid);
     build_dock_section(m_specs_exp,    m_specs_sum,    _("Game information"), m_specs_row);
     m_detail_text_col.pack_start(m_activity_exp, Gtk::PACK_SHRINK);
     m_detail_text_col.pack_start(m_specs_exp,    Gtk::PACK_SHRINK);
-    build_dock_section(m_ach_exp, m_ach_sum, _("Achievements"), m_ach_list);
-    m_ach_exp.set_no_show_all(true);
-    m_detail_text_col.pack_start(m_ach_exp, Gtk::PACK_SHRINK);
+    /* « ROM files », comme dans le catalogue du site : les fichiers que le
+     * DAT attend pour ce set, nom, taille et CRC. Une carte peut en compter
+     * des centaines : la liste defile au-dela d'une hauteur fixe plutot que
+     * d'allonger le volet. */
+    m_roms_card.get_style_context()->add_class("spec-card");
+    m_roms_grid.set_column_spacing(14);
+    m_roms_grid.set_row_spacing(3);
+    m_roms_scroll.set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+    m_roms_scroll.set_propagate_natural_height(true);
+    m_roms_scroll.set_max_content_height(260);
+    m_roms_scroll.add(m_roms_grid);
+    m_roms_card.pack_start(m_roms_scroll, Gtk::PACK_SHRINK);
+    build_dock_section(m_roms_exp, m_roms_sum, _("ROM files"), m_roms_card);
+    m_detail_text_col.pack_start(m_roms_exp, Gtk::PACK_SHRINK);
     // Fiche a gauche, capture a droite : la seconde donne une idee du jeu
     // que dix lignes de caracteristiques ne donnent pas.
     m_specs_row.pack_start(m_specs_grid,     Gtk::PACK_EXPAND_WIDGET);
@@ -2397,6 +2433,7 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
         m_activity_exp.hide();
     }
     show_achievements(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name);
+    show_rom_files(name, system, Glib::ustring(row[m_columns.m_col_emulator]).raw());
 
     std::string info;
     if (!comment.empty()) info = escape_markup(comment);
@@ -2490,7 +2527,7 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
         add_pill("◆ " + _("Highscore"), "pill-hiscore");
     if (const unsigned n = RetroAchievements::achievement_count(
             Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name))
-        add_pill("\u2605 " + Glib::ustring::compose(_("%1 achievements"), n).raw(), "pill-warn");
+        add_pill("\U0001F3C5 " + Glib::ustring::compose(_("%1 achievements"), n).raw(), "pill-ach");
     m_dock_pills.show_all();
 
     m_button_favorite.set_image(*SettingsUi::image(fav ? "star-gold.svg" : "star.svg", 24));
@@ -2686,29 +2723,35 @@ void MainWindow::show_achievements(const std::string& emulator, const std::strin
                                    const std::string& name) {
     SettingsUi::destroy_children(m_ach_list);
     const unsigned n = RetroAchievements::achievement_count(emulator, system, name);
-    if (!n) { m_ach_exp.hide(); return; }
-    m_ach_exp.show();
+    if (!n) { m_ach_list.hide(); return; }
     m_ach_list.show();
-    m_ach_exp.get_label_widget()->show_all();
-    m_ach_sum.set_text(Glib::ustring::compose(_("%1 achievements"), n));
+
+    // En-tete commun : la medaille, le titre, le nombre de succes.
+    auto* head = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+    auto* title = Gtk::make_managed<Gtk::Label>();
+    title->set_markup("\U0001F3C5  <b>" + Glib::Markup::escape_text(_("Achievements")) + "</b>");
+    title->get_style_context()->add_class("best-title");
+    head->pack_start(*title, Gtk::PACK_SHRINK);
+    m_ach_list.pack_start(*head, Gtk::PACK_SHRINK);
+    head->show_all();
+
     auto note = [this](const std::string& text) {
         auto* l = Gtk::make_managed<Gtk::Label>(text);
         l->set_xalign(0.0f);
         l->set_line_wrap(true);
-        l->get_style_context()->add_class("dock-sub");
+        l->set_max_width_chars(1);
+        l->get_style_context()->add_class("hi-note");
         m_ach_list.pack_start(*l, Gtk::PACK_SHRINK);
         l->show();
     };
     if (!RetroAchievements::signed_in()) {
-        note(_("Sign in to RetroAchievements in Settings › Online to unlock them and follow your progress."));
+        note(Glib::ustring::compose(_("%1 achievements to unlock. Sign in to RetroAchievements in Settings › Online to earn them and follow your progress."), n));
         return;
     }
     {
         std::lock_guard<std::mutex> lock(m_ach_mutex);
         m_ach_for = name;
-        if (m_ach_cache.count(name)) {
-            // deja recu : affiche sans attendre
-        } else {
+        if (!m_ach_cache.count(name)) {
             note(_("Loading achievements…"));
             std::thread([this, alive = m_alive_token, name] {
                 auto res = std::make_shared<RetroAchievements::GameAchievements>(RetroAchievements::fetch(name));
@@ -2726,6 +2769,9 @@ void MainWindow::show_achievements(const std::string& emulator, const std::strin
     on_achievements_ready();
 }
 
+/* La carte remplie : deux grands compteurs (succes, points) comme le score de
+ * « Your best », une barre de progression, l'avertissement du serveur s'il y
+ * en a un, puis la liste, repliee, dans l'ordre du serveur. */
 void MainWindow::on_achievements_ready() {
     std::shared_ptr<RetroAchievements::GameAchievements> res;
     {
@@ -2734,45 +2780,96 @@ void MainWindow::on_achievements_ready() {
         if (it == m_ach_cache.end()) return;
         res = std::static_pointer_cast<RetroAchievements::GameAchievements>(it->second);
     }
+    // Tout est rebati : la reponse peut arriver deux fois (deux selections
+    // rapprochees du meme jeu), et rien ne doit s'empiler.
     SettingsUi::destroy_children(m_ach_list);
     auto add = [this](Gtk::Widget* w) { m_ach_list.pack_start(*w, Gtk::PACK_SHRINK); w->show_all(); };
+    auto* head = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+    auto* title = Gtk::make_managed<Gtk::Label>();
+    title->set_markup("\U0001F3C5  <b>" + Glib::Markup::escape_text(_("Achievements")) + "</b>");
+    title->get_style_context()->add_class("best-title");
+    head->pack_start(*title, Gtk::PACK_SHRINK);
+    add(head);
+
     if (!res->answered) {
         auto* l = Gtk::make_managed<Gtk::Label>(Glib::ustring::compose(
             _("RetroAchievements could not be reached: %1"), res->error));
         l->set_xalign(0.0f); l->set_line_wrap(true);
-        l->get_style_context()->add_class("dock-sub");
+        l->get_style_context()->add_class("hi-note");
         add(l);
         std::lock_guard<std::mutex> lock(m_ach_mutex);
         m_ach_cache.erase(m_ach_for);      // on retentera a la prochaine selection
         return;
     }
-    if (res->list.empty()) { m_ach_exp.hide(); return; }
-    m_ach_sum.set_text(Glib::ustring::compose(_("%1 of %2 unlocked · %3 of %4 points"),
-                                              res->unlocked, res->list.size(),
-                                              res->points_unlocked, res->points));
-    // L'avertissement du serveur en tete, en clair : c'est lui qui dit si les
-    // succes peuvent compter (« Unknown Emulator »...).
-    if (!res->warning.empty())
-        add(SettingsUi::warning_card(_("RetroAchievements"), res->warning));
-    const std::string ok = SettingsUi::tone_hex(*this, "warning");
-    const std::string off = SettingsUi::tone_hex(*this, "muted");
-    for (const auto& a : res->list) {
-        auto* row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
-        auto* mark = Gtk::make_managed<Gtk::Label>();
-        mark->set_markup("<span foreground=\"" + (a.unlocked ? ok : off) + "\">"
-                         + (a.unlocked ? "★" : "☆") + "</span>");
-        mark->set_valign(Gtk::ALIGN_START);
-        row->pack_start(*mark, Gtk::PACK_SHRINK);
-        auto* txt = Gtk::make_managed<Gtk::Label>();
-        txt->set_markup("<b>" + Glib::Markup::escape_text(a.title) + "</b>  <span alpha=\"60%\">"
-                        + std::to_string(a.points) + " pts</span>\n<span size=\"small\" alpha=\"70%\">"
-                        + Glib::Markup::escape_text(a.description) + "</span>");
-        txt->set_xalign(0.0f);
-        txt->set_line_wrap(true);
-        if (!a.unlocked) txt->set_opacity(0.6);
-        row->pack_start(*txt, Gtk::PACK_EXPAND_WIDGET);
-        add(row);
+    if (res->list.empty()) { m_ach_list.hide(); return; }
+
+    // Le lien vers la page du jeu, dans l'en-tete.
+    {
+        auto* link = Gtk::make_managed<Gtk::LinkButton>(
+            "https://retroachievements.org/game/" + std::to_string(res->game_id), _("View all"));
+        link->set_relief(Gtk::RELIEF_NONE);
+        link->get_style_context()->add_class("dock-link");
+        link->set_tooltip_text(_("View on RetroAchievements"));
+        head->pack_end(*link, Gtk::PACK_SHRINK);
+        link->show();
     }
+
+    // L'avertissement « emulateur inconnu » (mode Hardcore) n'est plus repete sur
+    // chaque jeu : il est dit une fois, dans Settings sous le reglage Hardcore.
+
+    // Deux compteurs, en grand.
+    auto counter = [](const std::string& value, const std::string& label) {
+        auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
+        auto* v = Gtk::make_managed<Gtk::Label>(value);
+        v->set_xalign(0.0f);
+        v->get_style_context()->add_class("best-score");
+        auto* l = Gtk::make_managed<Gtk::Label>(label);
+        l->set_xalign(0.0f);
+        l->get_style_context()->add_class("best-who");
+        box->pack_start(*v, Gtk::PACK_SHRINK);
+        box->pack_start(*l, Gtk::PACK_SHRINK);
+        return box;
+    };
+    auto* counters = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 28);
+    counters->pack_start(*counter(std::to_string(res->unlocked) + " / " + std::to_string(res->list.size()),
+                                  _("achievements unlocked")), Gtk::PACK_SHRINK);
+    counters->pack_start(*counter(std::to_string(res->points_unlocked) + " / " + std::to_string(res->points),
+                                  _("points")), Gtk::PACK_SHRINK);
+    add(counters);
+    auto* bar = Gtk::make_managed<Gtk::ProgressBar>();
+    bar->set_fraction(res->list.empty() ? 0.0 : double(res->unlocked) / double(res->list.size()));
+    add(bar);
+
+    // La liste, repliee : vingt-neuf lignes repousseraient tout le volet.
+    auto* rows = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 8);
+    for (const auto& a : res->list) {
+        auto* row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+        row->get_style_context()->add_class("ach-row");
+        if (!a.unlocked) row->get_style_context()->add_class("ach-locked");
+        auto* medal = Gtk::make_managed<Gtk::Label>("\U0001F3C5");
+        medal->get_style_context()->add_class("ach-medal");
+        medal->set_valign(Gtk::ALIGN_START);
+        row->pack_start(*medal, Gtk::PACK_SHRINK);
+        auto* txt = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 1);
+        auto* t = Gtk::make_managed<Gtk::Label>(a.title);
+        t->set_xalign(0.0f); t->set_line_wrap(true); t->set_max_width_chars(1);
+        t->get_style_context()->add_class("ach-title");
+        auto* d = Gtk::make_managed<Gtk::Label>(a.description);
+        d->set_xalign(0.0f); d->set_line_wrap(true); d->set_max_width_chars(1);
+        d->get_style_context()->add_class("best-who");
+        txt->pack_start(*t, Gtk::PACK_SHRINK);
+        txt->pack_start(*d, Gtk::PACK_SHRINK);
+        row->pack_start(*txt, Gtk::PACK_EXPAND_WIDGET);
+        auto* pts = Gtk::make_managed<Gtk::Label>(std::to_string(a.points));
+        pts->get_style_context()->add_class("pill");
+        pts->get_style_context()->add_class("ach-points");
+        pts->set_valign(Gtk::ALIGN_START);
+        row->pack_end(*pts, Gtk::PACK_SHRINK);
+        rows->pack_start(*row, Gtk::PACK_SHRINK);
+    }
+    auto* exp = Gtk::make_managed<Gtk::Expander>(Glib::ustring::compose(_("Show the %1 achievements"), res->list.size()));
+    exp->add(*rows);
+    add(exp);
 }
 
 /* Ce qui manque a un jeu « incomplete » : son BIOS, son parent.
@@ -4561,7 +4658,7 @@ Gtk::Widget* MainWindow::make_game_card(const Gtk::TreeModel::Row& row) {
                      (game_ranks_online(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
                         ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "info") + "\">◆</span>") : "") +
                      (RetroAchievements::achievement_count(Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)
-                        ? std::string("  <span foreground=\"" + SettingsUi::tone_hex(*this, "warning") + "\">\u2605</span>") : ""));
+                        ? std::string("  \U0001F3C5") : ""));
     slbl->set_ellipsize(Pango::ELLIPSIZE_END);
     slbl->set_max_width_chars(1); // let the cell govern width, not the text
     slbl->set_xalign(0.0f);
@@ -4875,7 +4972,7 @@ Gtk::Widget* MainWindow::make_list_row(const Gtk::TreeModel::Row& row) {
     ra->set_valign(Gtk::ALIGN_CENTER);
     if (const unsigned n = RetroAchievements::achievement_count(
             Glib::ustring(row[m_columns.m_col_emulator]).raw(), system, name)) {
-        ra->set_markup("<span foreground=\"" + SettingsUi::tone_hex(*this, "warning") + "\">\u2605</span>");
+        ra->set_text("\U0001F3C5");
         ra->set_tooltip_text(Glib::ustring::compose(_("%1 RetroAchievements achievements"), n));
     } else {
         ra->set_text("\u2014");
@@ -7414,7 +7511,7 @@ void MainWindow::populate_filter_tree() {
         if (with_ach > 0) {
             auto ra = m_model_filters->append();
             (*ra)[m_filter_columns.m_col_icon] = get_filter_icon("Achievements");
-            (*ra)[m_filter_columns.m_col_name] = std::string("\u2605 ") + _("Achievements");
+            (*ra)[m_filter_columns.m_col_name] = std::string("\U0001F3C5 ") + _("Achievements");
             (*ra)[m_filter_columns.m_col_type] = "achievements";
             (*ra)[m_filter_columns.m_col_value] = "1";
             (*ra)[m_filter_columns.m_col_count] = with_ach;
@@ -8303,6 +8400,7 @@ void MainWindow::load_launch_prefs() {
             m_dock_prefs_known = true;
             m_activity_exp.set_expanded(j.value("dock_activity_open", true));
             m_specs_exp.set_expanded(j.value("dock_specs_open", true));
+            m_roms_exp.set_expanded(j.value("dock_roms_open", false));
         }
     } catch (...) {}
     // Reflect loaded state in menu checkitems (block toggled signal to avoid side-effect)
@@ -8378,6 +8476,7 @@ void MainWindow::save_launch_prefs() {
     j["dock_sections_set"] = m_dock_prefs_known;
     j["dock_activity_open"] = m_activity_exp.get_expanded();
     j["dock_specs_open"]    = m_specs_exp.get_expanded();
+    j["dock_roms_open"]     = m_roms_exp.get_expanded();
     std::ofstream fo(cfg);
     if (fo) fo << j.dump(4) << std::endl;
 }
@@ -8921,6 +9020,46 @@ void MainWindow::update_dock_width() {
  * « Arcade, 1996, Capcom » sur une seule ligne suffit le plus souvent, et
  * c'est ce qui rend le repli acceptable plutot que subi.
  */
+// La section « ROM files » du volet : ce que le DAT attend pour ce set.
+void MainWindow::show_rom_files(const std::string& name, const std::string& system,
+                                const std::string& emulator) {
+    SettingsUi::destroy_children(m_roms_grid);
+    const Game g = m_database->getGame(name, system, emulator.empty() ? "fbneo" : emulator);
+    if (g.roms.empty()) { m_roms_exp.hide(); return; }
+
+    uint64_t total = 0;
+    int r = 0;
+    for (const Rom& rom : g.roms) {
+        auto* n = Gtk::make_managed<Gtk::Label>(rom.name);
+        n->set_xalign(0.0f);
+        n->set_hexpand(true);
+        // Une largeur naturelle nulle : un nom long ne doit jamais elargir
+        // le volet, il se coupe et se lit en entier dans l'infobulle.
+        n->set_max_width_chars(1);
+        n->set_ellipsize(Pango::ELLIPSIZE_MIDDLE);
+        n->set_tooltip_text(rom.name);
+        n->get_style_context()->add_class("spec-val");
+        auto* sz = Gtk::make_managed<Gtk::Label>(format_size(rom.size));
+        sz->set_xalign(1.0f);
+        sz->get_style_context()->add_class("spec-key");
+        std::string crc = rom.crc;
+        for (char& c : crc) c = (char)std::toupper((unsigned char)c);
+        auto* cr = Gtk::make_managed<Gtk::Label>(crc);
+        cr->set_xalign(0.0f);
+        cr->get_style_context()->add_class("spec-key");
+        cr->get_style_context()->add_class("rom-crc");
+        m_roms_grid.attach(*n,  0, r, 1, 1);
+        m_roms_grid.attach(*sz, 1, r, 1, 1);
+        m_roms_grid.attach(*cr, 2, r, 1, 1);
+        total += rom.size;
+        ++r;
+    }
+    m_roms_grid.show_all();
+    m_roms_sum.set_text(Glib::ustring::compose(_("%1 files"), g.roms.size()).raw()
+                        + "  \u00b7  " + name + ".zip  \u00b7  " + format_size(total));
+    m_roms_exp.show_all();
+}
+
 void MainWindow::build_dock_section(Gtk::Expander& exp, Gtk::Label& sum,
                                     const std::string& title, Gtk::Widget& body) {
     auto* head = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
