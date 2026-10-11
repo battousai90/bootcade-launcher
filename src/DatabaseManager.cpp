@@ -1111,6 +1111,29 @@ bool DatabaseManager::updateGameStatus(const std::string& game_name, const std::
     return rc == SQLITE_DONE;
 }
 
+Game DatabaseManager::getGameAnySystem(const std::string& name, const std::string& emulator) {
+    std::vector<std::string> systems;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(m_db,
+                "SELECT DISTINCT system FROM games WHERE name = ? AND emulator = ? ORDER BY system DESC;",
+                -1, &st, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(st, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(st, 2, emulator.c_str(), -1, SQLITE_TRANSIENT);
+            while (sqlite3_step(st) == SQLITE_ROW) systems.push_back(safe_column_text(st, 0));
+        }
+        sqlite3_finalize(st);
+    }
+    Game fallback;
+    for (const auto& sys : systems) {
+        Game g = getGame(name, sys, emulator);
+        if (!g.roms.empty()) return g;
+        if (fallback.name.empty()) fallback = g;
+    }
+    return fallback;
+}
+
 bool DatabaseManager::updateGameStatusWithSource(const std::string& game_name, const std::string& status, const std::string& system, const std::string& source_directory, const std::string& emulator) {
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     // Meme raison qu'au-dessus : deux jeux peuvent porter ce nom et ce
@@ -3783,6 +3806,23 @@ void DatabaseManager::resetMameStatuses() {
     ensure_mame_catalog(m_db);
     sqlite3_exec(m_db, "UPDATE mame_catalog SET status = 'missing';",
                  nullptr, nullptr, nullptr);
+}
+
+/* Le scan des ROMs juge les sets d'apres les DAT et range son verdict dans
+ * `games` ; la liste, elle, lit mame_catalog. Sans ce report, un scan qui
+ * trouve 44 759 sets laissait la liste entiere a « Missing ». Un set est
+ * disponible si l'un de ses DAT le dit, a corriger sinon s'il est incorrect. */
+void DatabaseManager::syncMameCatalogFromGames() {
+    if (!m_db) return;
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    ensure_mame_catalog(m_db);
+    sqlite3_exec(m_db,
+        "UPDATE mame_catalog SET status = COALESCE(("
+        "  SELECT CASE WHEN SUM(g.status = 'available') > 0 THEN 'available' "
+        "              WHEN SUM(g.status = 'incorrect') > 0 THEN 'incorrect' "
+        "              ELSE 'missing' END "
+        "  FROM games g WHERE g.emulator = 'mame' AND g.name = mame_catalog.name), 'missing');",
+        nullptr, nullptr, nullptr);
 }
 
 /* Les genres de catver.ini, poses sur un catalogue deja construit.

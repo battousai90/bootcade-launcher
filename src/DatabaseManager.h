@@ -47,6 +47,9 @@ public:
     std::vector<Game> getGamesBySystem(const std::string& system);
     std::vector<Game> getGamesByStatus(const std::string& status);
     Game getGame(const std::string& game_name);
+    // Le jeu d'un emulateur sous n'importe quel systeme : MAME range ses sets sous le nom
+    // de leur DAT ("ROMs (split)"), alors que sa liste dit "Arcade".
+    Game getGameAnySystem(const std::string& name, const std::string& emulator);
     // Favori, lancements et temps de jeu d'un set, quel que soit l'emulateur :
     // ceux de MAME ne vivent que dans player_stats, pas dans `games`.
     Game getPlayerStats(const std::string& game_name, const std::string& system,
@@ -230,6 +233,7 @@ public:
     // `mame -verifyroms` n'ecrit aucune ligne pour ce qu'il ne trouve pas, si
     // bien que les manquants ne se deduisent que par difference.
     void resetMameStatuses();
+    void syncMameCatalogFromGames();
     bool setMameStatuses(const std::vector<std::pair<std::string, std::string>>& verdicts);
 
     /* Le genre des machines MAME, qui ne vient PAS de MAME.

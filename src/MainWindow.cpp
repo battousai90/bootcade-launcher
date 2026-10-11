@@ -403,7 +403,12 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
      * reelle est reprise des preferences juste apres, quand elles existent.
      */
     set_default_size(1760, 1000);
-    set_border_width(8);
+    // Marge de 8 px a gauche, a droite et en bas, mais PAS en haut : sous la
+    // barre de titre elle laissait une bande vide au-dessus de tout le contenu.
+    set_border_width(0);
+    m_main_box.set_margin_start(8);
+    m_main_box.set_margin_end(8);
+    m_main_box.set_margin_bottom(8);
     try { set_icon(Gdk::Pixbuf::create_from_file(AppContext::get_asset_path("logo.svg"), 64, 64)); } catch (...) {}
 
     // === Modern theme ===
@@ -1035,6 +1040,9 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_preview_image.set_valign(Gtk::ALIGN_START);
     m_detail_image_wrap.pack_start(m_title_image, Gtk::PACK_SHRINK);
     m_detail_image_wrap.set_hexpand(false);
+    m_title_image.set_halign(Gtk::ALIGN_CENTER);
+    m_title_image.set_valign(Gtk::ALIGN_START);
+    m_preview_image.set_halign(Gtk::ALIGN_FILL);
     m_details_box.pack_start(m_detail_image_wrap, Gtk::PACK_SHRINK);
 
     // Group B : big title + full metadata block.
@@ -1054,7 +1062,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
 
     // Deux colonnes : intitule en retrait, valeur en avant. C'est ce qui fait
     // qu'on trouve une information d'un coup d'oeil au lieu de lire une liste.
-    m_specs_grid.set_row_spacing(5);
+    m_specs_grid.set_row_spacing(0);
     m_specs_grid.set_column_spacing(18);
     m_specs_grid.set_hexpand(true);
 
@@ -1595,7 +1603,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // === Layout: sidebar | (chips, views, detail dock) ===
     m_chips_box.set_margin_start(12);
     m_chips_box.set_margin_end(12);
-    m_chips_box.set_margin_top(8);
+    m_chips_box.set_margin_top(0);
     m_chips_box.get_style_context()->add_class("chips-bar");
     m_right_box.pack_start(m_chips_box, Gtk::PACK_SHRINK);
     // A resizable split between the game views and the detail dock. The view
@@ -2360,11 +2368,11 @@ void MainWindow::show_game_details(const Gtk::TreeModel::Row& row) {
     };
     // 360 de large : la banniere occupe la colonne du volet, comme le
     // mockup, au lieu d'une vignette perdue au milieu.
-    load_art(m_title_image,   m_settings_panel.get_titles_path(m_last_selected_emulator),   420, 150);
+    load_art(m_title_image,   m_settings_panel.get_titles_path(m_last_selected_emulator),   360, 120);
     // 200 x 150 et non 320 x 240 : la capture accompagne desormais la fiche
     // technique au lieu de trôner en tete, et a l'ancienne taille elle
     // ecrasait le tableau qu'elle est censee illustrer.
-    load_art(m_preview_image, m_settings_panel.get_previews_path(m_last_selected_emulator), 420, 250);
+    load_art(m_preview_image, m_settings_panel.get_previews_path(m_last_selected_emulator), 360, 360);
 
     std::string manufacturer = Glib::ustring(row[m_columns.m_col_manufacturer]).raw();
     std::string year         = Glib::ustring(row[m_columns.m_col_year]).raw();
@@ -7260,6 +7268,10 @@ void MainWindow::on_scan_dialog_complete() {
 
     m_scan_bg_poll_timer.disconnect();
 
+    // La liste MAME lit mame_catalog : on y reporte le verdict du scan.
+    if (m_scan_dialog && m_scan_dialog->emulator() == "mame" && !m_scan_dialog->was_cancelled())
+        m_database->syncMameCatalogFromGames();
+
     m_cached_games = load_all_catalogs();
     m_search_blobs.clear();   // the haystacks describe the old vector
     // Et m_filtered_games pointait dedans : le laisser en place, c'est garder
@@ -8270,6 +8282,7 @@ void MainWindow::rebuild_filter_chips() {
     }
 
     m_chips_box.show_all();
+    m_chips_box.set_margin_top(m_chips_box.get_children().empty() ? 0 : 8);
     m_chips_box.set_visible(!m_chips_box.get_children().empty());
 }
 
@@ -9087,7 +9100,9 @@ void MainWindow::update_records_tab() {
 void MainWindow::show_rom_files(const std::string& name, const std::string& system,
                                 const std::string& emulator) {
     SettingsUi::destroy_children(m_roms_grid);
-    const Game g = m_database->getGame(name, system, emulator.empty() ? "fbneo" : emulator);
+    const std::string emu = emulator.empty() ? "fbneo" : emulator;
+    Game g = m_database->getGame(name, system, emu);
+    if (g.roms.empty()) g = m_database->getGameAnySystem(name, emu);
     if (g.roms.empty()) {
         m_roms_card.hide();
         m_roms_status.hide();

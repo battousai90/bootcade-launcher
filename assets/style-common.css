@@ -256,7 +256,7 @@ treeview header button:hover {
 paned > separator, paned separator { background-color: @border; }
 .detail-dock {
   background-color: @surface;
-  border-top: 1px solid @border;
+  border-top: none;
 }
 
 /* ═══ Progression et barres de defilement ═════════════════════════════════ */
@@ -1549,3 +1549,19 @@ expander > title { min-height: 0; padding: 2px 0; }
 .dock-meta { margin-bottom: 4px; }
 .pill { padding-top: 3px; padding-bottom: 3px; }
 .dock-tabs button { padding-top: 5px; padding-bottom: 5px; }
+
+/* Plus d'air mort : l'ecran titre colle au bord du volet, le nom colle a
+   l'image, l'apercu colle au titre de la fiche. */
+.dock-art { margin-bottom: 0; }
+.dock-title { margin-top: -6px; }
+.detail-dock scrolledwindow undershoot, .detail-dock scrolledwindow overshoot { background: none; }
+.dock-section { margin-top: 0; }
+.spec-card { padding-top: 8px; padding-bottom: 8px; }
+
+/* Entre-lignes serres dans le volet : fiche, titres de section, onglets. */
+.spec-key, .spec-val { padding-top: 0; padding-bottom: 0; margin-top: -1px; margin-bottom: -1px; }
+.spec-card { padding-top: 5px; padding-bottom: 5px; }
+.dock-section { margin-top: -4px; margin-bottom: 0; }
+.dock-tabs button { padding-top: 3px; padding-bottom: 3px; }
+.dock-title { margin-bottom: -2px; }
+.dock-meta { margin-bottom: 0; }
