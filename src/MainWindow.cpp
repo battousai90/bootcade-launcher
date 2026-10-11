@@ -1030,6 +1030,9 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // puis l'ecran titre. Plus de cadre vide en haut du volet.
     m_preview_image.set_valign(Gtk::ALIGN_START);
     m_detail_image_wrap.set_orientation(Gtk::ORIENTATION_VERTICAL);
+    // L'ecran titre reste en haut, comme avant les onglets ; le preview vient
+    // dessous, en grand.
+    m_detail_image_wrap.pack_start(m_title_image, Gtk::PACK_SHRINK);
     m_detail_image_wrap.pack_start(m_preview_image, Gtk::PACK_SHRINK);
     m_detail_image_wrap.set_hexpand(false);
 
@@ -1134,10 +1137,6 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_page_info.pack_start(m_label_info, Gtk::PACK_SHRINK);
     m_page_info.pack_start(*heading(_("Game information")), Gtk::PACK_SHRINK);
     m_page_info.pack_start(m_specs_grid, Gtk::PACK_SHRINK);
-    // L'ecran titre ferme la page : le preview illustre, la fiche renseigne,
-    // l'ecran titre n'est qu'un complement.
-    m_title_image.set_halign(Gtk::ALIGN_CENTER);
-    m_page_info.pack_start(m_title_image, Gtk::PACK_SHRINK);
     // Records : classement puis succes.
     make_empty(m_records_empty, _("No online ranking or achievements for this game."));
     m_page_records.pack_start(m_hiscore_box, Gtk::PACK_SHRINK);
@@ -7543,9 +7542,14 @@ void MainWindow::populate_filter_tree() {
     // running total because the supported list can land after the tree is
     // first built, and the node has to show a truthful number either way.
     {
-        int ranked_count = 0;
+        // Un jeu compte UNE fois : un jeu Neo Geo existe en double (systemes
+        // Arcade et Neo Geo) et comptait pour deux, alors que le service de
+        // scores et sa page d'administration parlent de jeux, pas de lignes.
+        std::unordered_set<std::string> ranked_games;
         for (const auto& game : m_cached_games)
-            if (emulator_in_scope(game) && game_ranks_online(game.emulator, game.system, game.name)) ranked_count++;
+            if (emulator_in_scope(game) && game_ranks_online(game.emulator, game.system, game.name))
+                ranked_games.insert(game.emulator + '\x1f' + game.name);
+        const int ranked_count = (int)ranked_games.size();
         if (ranked_count > 0) {
             auto hi = m_model_filters->append();
             (*hi)[m_filter_columns.m_col_icon] = get_filter_icon("Highscore");
@@ -7557,9 +7561,12 @@ void MainWindow::populate_filter_tree() {
     }
     // Les jeux d'arcade qui ont des succes RetroAchievements.
     {
-        int with_ach = 0;
+        // Meme regle : un jeu compte une fois, pas une fois par systeme.
+        std::unordered_set<std::string> ach_games;
         for (const auto& game : m_cached_games)
-            if (emulator_in_scope(game) && RetroAchievements::achievement_count(game.emulator, game.system, game.name)) with_ach++;
+            if (emulator_in_scope(game) && RetroAchievements::achievement_count(game.emulator, game.system, game.name))
+                ach_games.insert(game.emulator + '\x1f' + game.name);
+        const int with_ach = (int)ach_games.size();
         if (with_ach > 0) {
             auto ra = m_model_filters->append();
             (*ra)[m_filter_columns.m_col_icon] = get_filter_icon("Achievements");
