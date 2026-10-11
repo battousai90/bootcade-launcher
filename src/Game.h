@@ -232,3 +232,20 @@ private:
         return it != description.end();
     }
 };
+
+/* Le disque d'un clone, chez FinalBurn Neo.
+ *
+ * L'emulateur lit le CHD d'un clone dans le dossier du clone, puis dans celui
+ * de son PARENT (BurnHDDOpen, src/burn/burn_hdd.cpp) ; sa verification au
+ * lancement ne regarde meme que chez le parent (src/burner/sdl/bzip.cpp). Un
+ * seul fichier sert donc toute la famille (kinst13, kinst14... lisent le
+ * CHD de kinst), alors que le DAT declare le disque dans chaque clone, sans
+ * merge=. Le DAT n'est pas modifie : c'est ROM Manager qui lit comme
+ * l'emulateur. Vrai si `g` est un clone FinalBurn Neo dont `parent` declare
+ * le meme disque (meme nom, meme empreinte). */
+inline bool disk_is_parents(const Game& g, const Disk& d, const Game* parent) {
+    if (!parent || g.emulator == "mame" || g.cloneof.empty() || !d.merge.empty()) return false;
+    for (const Disk& p : parent->disks)
+        if (p.name == d.name && !p.sha1.empty() && p.sha1 == d.sha1) return true;
+    return false;
+}

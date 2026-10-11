@@ -1,5 +1,6 @@
 // src/RomLibraryTab.cpp
 #include "RomLibraryTab.h"
+#include "FileCopy.h"
 
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
@@ -1299,7 +1300,7 @@ void RomLibraryTab::worker_fix() {
         std::error_code mec;
         fs::rename(src, dest, mec);
         if (!mec) return true;
-        fs::copy_file(src, dest, mec);
+        copy_file_robust(src, dest, false, mec);
         if (mec) return false;
         fs::remove(src, mec);
         return true;
@@ -1404,7 +1405,7 @@ void RomLibraryTab::worker_fix() {
         step(src.filename().string());
         std::error_code cec;
         if (fs::exists(dest, cec)) { m_fix.sent.push_back(dest.string()); push_log("[FIX] " + src.filename().string() + " already in the import folder"); continue; }
-        fs::copy_file(src, dest, cec);
+        copy_file_robust(src, dest, false, cec);
         if (cec) { m_fix.failed++; push_log("[FIX] could not copy " + src.string() + ": " + cec.message()); continue; }
         m_fix.copied++;
         m_fix.sent.push_back(dest.string());

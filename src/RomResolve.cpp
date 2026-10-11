@@ -245,9 +245,15 @@ DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& root
         // parent's own : in a split collection it lives in the parent's
         // folder, under the parent's name for it, as its ROMs would.
         std::vector<std::pair<std::string, std::string>> homes{{game.name, d.name}};
-        if (!d.merge.empty())
+        if (!d.merge.empty()) {
             for (const std::string& up : {game.cloneof, game.romof})
                 if (!up.empty()) homes.emplace_back(up, d.merge);
+        } else if (game.emulator != "mame" && !game.cloneof.empty()) {
+            // FinalBurn Neo also reads a clone's disk from its parent's folder :
+            // see disk_is_parents (Game.h). The parent's declaration is not at
+            // hand here, but the emulator needs only the same name in that folder.
+            homes.emplace_back(game.cloneof, d.name);
+        }
         const std::string folder = expected_folder(game);
         for (const auto& root : roots) {
             if (root.empty()) continue;

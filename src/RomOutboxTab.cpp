@@ -1,5 +1,6 @@
 // src/RomOutboxTab.cpp
 #include "RomOutboxTab.h"
+#include "FileCopy.h"
 
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
@@ -70,7 +71,7 @@ bool move_file(const fs::path& src, const fs::path& dest, std::string& error) {
     fs::rename(src, dest, ec);
     if (!ec) return true;
     std::error_code rec = ec;
-    fs::copy_file(src, dest, fs::copy_options::overwrite_existing, ec);
+    copy_file_robust(src, dest, true, ec);
     if (ec) { error = "copy failed: " + ec.message() + " (rename had failed: " + rec.message() + ")"; return false; }
     fs::remove(src, ec);
     return true;
