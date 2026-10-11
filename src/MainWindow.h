@@ -987,33 +987,31 @@ private:
      * 0 partie » n'apprend rien et occupe autant de place qu'une vraie
      * information.
      */
-    Gtk::Box    m_specs_row{Gtk::ORIENTATION_HORIZONTAL, 12};  // fiche | capture
-    /* Deux sections repliables.
+    /* Le volet de details, en quatre onglets.
      *
-     * Sur une fenetre basse, la fiche technique et l'activite repoussaient le
-     * classement et le bouton Play hors de vue : il fallait faire defiler
-     * pour jouer. Repliees, elles se reduisent a leur en-tete, qui porte
-     * alors un resume, « 1 partie, 15 min » ou « Arcade, 1996, Capcom », de
-     * sorte que replier ne fasse pas disparaitre TOUTE l'information.
-     *
-     * Un Gtk::Expander se reduit exactement a la hauteur de son en-tete, ce
-     * qui est la demande : aucune zone vide conservee.
-     */
-    Gtk::Expander m_activity_exp;
-    Gtk::Expander m_specs_exp;
-    Gtk::Label    m_activity_sum;
-    Gtk::Label    m_specs_sum;
-    // « ROM files » : les fichiers que le DAT attend pour le set, replies.
-    Gtk::Expander       m_roms_exp;
-    Gtk::Label          m_roms_sum;
+     * Une seule colonne empilait tout : la fiche, le classement, les succes,
+     * l'activite et les ROMs se disputaient la hauteur, et il fallait faire
+     * defiler pour trouver ce qu'on cherchait. Chaque theme a maintenant sa
+     * page, avec son titre toujours visible au-dessus :
+     *   Game info : l'image du jeu en grand, la description, la fiche ;
+     *   Records   : classement en ligne et succes RetroAchievements ;
+     *   Activity  : ce que le joueur a fait de ce jeu ;
+     *   ROMs      : l'etat des fichiers et ce que le DAT en attend.
+     * L'onglet choisi est retenu d'une session a l'autre. */
+    Gtk::StackSwitcher m_dock_tabs;
+    Gtk::Stack         m_dock_stack;
+    Gtk::Box           m_page_info{Gtk::ORIENTATION_VERTICAL, 12};
+    Gtk::Box           m_page_records{Gtk::ORIENTATION_VERTICAL, 0};
+    Gtk::Box           m_page_activity{Gtk::ORIENTATION_VERTICAL, 10};
+    Gtk::Box           m_page_roms{Gtk::ORIENTATION_VERTICAL, 10};
+    Gtk::Label         m_records_empty, m_activity_empty, m_roms_empty, m_roms_status;
+    void update_records_tab();   // « rien a montrer » quand ni classement ni succes
+    // « ROM files » : les fichiers que le DAT attend pour le set.
     Gtk::Box            m_roms_card{Gtk::ORIENTATION_VERTICAL, 0};
     Gtk::ScrolledWindow m_roms_scroll;
     Gtk::Grid           m_roms_grid;
     void show_rom_files(const std::string& name, const std::string& system,
                         const std::string& emulator);
-    bool          m_dock_prefs_known = false;   // l'utilisateur a-t-il deja choisi ?
-    void          build_dock_section(Gtk::Expander& exp, Gtk::Label& sum,
-                                     const std::string& title, Gtk::Widget& body);
 
     Gtk::Label  m_specs_title;   // « Game information », en regard de « Your activity »
     Gtk::Box    m_activity_box{Gtk::ORIENTATION_VERTICAL, 4};

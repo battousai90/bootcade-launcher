@@ -1524,3 +1524,22 @@ expander > title { min-height: 0; padding: 2px 0; }
 .emu-card.selected {
   border-color: @accent;
 }
+
+/* ═══ Onglets du volet de details ═════════════════════════════════════════
+   Quatre pages (Game info, Records, Activity, ROMs) : un onglet actif se
+   reconnait a son soulignement d'accent, sans cadre ni fond. */
+.dock-tabs button {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 2px solid alpha(@border, 0.6);
+  padding: 7px 4px;
+  color: @text_muted;
+  font-weight: 600;
+  box-shadow: none;
+}
+.dock-tabs button:hover { color: @text; }
+.dock-tabs button:checked {
+  color: @text;
+  border-bottom-color: @accent;
+}
