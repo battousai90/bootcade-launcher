@@ -124,6 +124,17 @@ private:
     void on_random_game_clicked();
     // Selectionne une ligne du modele et la montre dans la vue courante.
     void reveal_model_row(const Gtk::TreeModel::iterator& it);
+    // Highlights a model row in the visible list or grid and scrolls to it.
+    // The views are built a batch at a time from the top, and building every
+    // row down to a far one is quadratic (GtkListBox re-measures them all) :
+    // the list is rebuilt around the row instead, and gets the rows above it
+    // back as the player scrolls up (prepend_mlist_batch).
+    void reveal_in_view(const Gtk::TreeModel::Path& path);
+    void reveal_scroll_to(Gtk::Widget& child, Gtk::Widget& container, Gtk::ScrolledWindow& scrolled);
+    void rebuild_mlist_at(int first);
+    void prepend_mlist_batch();
+    sigc::connection      m_reveal_scroll;
+    bool                  m_reveal_scrolling = false;
     void on_rescan_roms();
     void on_verify_roms();
     void on_find_duplicate_roms();
@@ -573,6 +584,7 @@ private:
     // Non-empty when what is on screen came from the cache: the date it was
     // fetched, shown to the player so old figures are never passed off as live.
     std::string m_hiscore_top_stale;
+    std::pair<std::string, std::string> m_hiscore_top_game;   // (system, game) m_hiscore_top belongs to
     void fetch_hiscore_top_async(const std::string& system, const std::string& game);
     void on_hiscore_top_ready();
     // Peint le classement depuis le cache local, sans réseau. C'est ce qui
@@ -818,7 +830,10 @@ private:
     // would freeze the UI, so only what is (nearly) on screen ever exists.
     static constexpr int kViewBatch = 120;           // rows built per batch : a screenful and a half
     int  m_grid_built  = 0;                          // cards already built
-    int  m_mlist_built = 0;                          // list rows already built
+    int  m_mlist_first = 0;                          // model index of the first list row built (0 unless the list was rebuilt around a row)
+    int  m_mlist_built = 0;                          // model index one past the last list row built
+    double m_mlist_shift = 0;                        // px to scroll down once rows prepended above have been laid out
+    double m_mlist_upper_before = 0;
     bool m_batch_lock  = false;                      // re-entrancy guard while filling
     bool m_suppress_view_toggle = false;
     void set_view_mode(bool grid);

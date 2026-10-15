@@ -525,14 +525,19 @@ void RomOutboxTab::refresh() {
         std::sort(zips.begin(), zips.end());
         const std::string folder = sysdir.filename().string();
         const std::string destination = destination_for(folder, p);
+        // Once per folder : emulator_of_folder re-reads every DAT's statistics
+        // from the database, and doing it per archive froze the window for
+        // minutes on an outbox of a thousand sets.
+        const std::string folder_emulator = emulator_of_folder(folder);
+        const std::string folder_system   = system_of_folder(folder);
         for (const auto& z : zips) {
             Item item;
             item.path = z.string();
             item.system_folder = folder;
             item.game = z.stem().string();
-            item.system = system_of_folder(folder);
+            item.system = folder_system;
             item.dat_header = folder;
-            item.emulator = emulator_of_folder(folder);
+            item.emulator = folder_emulator;
             item.bytes = fs::file_size(z, ec);
             item.destination = destination;
             item.dest_exists = !destination.empty() && fs::exists(fs::path(destination) / z.filename(), ec);
@@ -561,9 +566,9 @@ void RomOutboxTab::refresh() {
             item.path = d.string();
             item.system_folder = folder;
             item.game = d.parent_path().filename().string();
-            item.system = system_of_folder(folder);
+            item.system = folder_system;
             item.dat_header = folder;
-            item.emulator = emulator_of_folder(folder);
+            item.emulator = folder_emulator;
             item.bytes = fs::file_size(d, ec);
             item.destination = destination;
             item.dest_exists = !destination.empty() && fs::exists(fs::path(destination) / item.game / d.filename(), ec);
