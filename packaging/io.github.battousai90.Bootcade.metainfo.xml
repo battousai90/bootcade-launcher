@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="1.8.2" date="2026-10-15">
+      <description>
+        <p>Bump version to 1.8.2 and enhance report handling logic</p>
+      </description>
+    </release>
     <release version="1.8.1" date="2026-10-14">
       <description>
         <p>Open the Outbox faster, select the random game in the list, and keep the Records tab up to date</p>
