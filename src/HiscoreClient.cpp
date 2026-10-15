@@ -614,6 +614,7 @@ ReportReply send_report(const ReportForm& form) {
     r.answered    = true;
     r.http_status = status;
     r.ok          = status == 201 || status == 200;
+    if (r.ok) set_reports_watch(true);   // un signalement actif : on guette la reponse
     try {
         auto j = nlohmann::json::parse(body);
         r.code   = j.value("code", std::string());
@@ -858,6 +859,51 @@ void set_reports_seen_at(const std::string& iso) {
     auto j = read_json_file(cache_file());
     j["reports_seen_at"] = iso;
     write_json_file(cache_file(), j);
+}
+
+bool reports_to_check() {
+    if (cache_file().empty()) return false;
+    const auto j = read_json_file(cache_file());
+    return !j.contains("reports_watch") || j["reports_watch"].get<bool>();
+}
+
+void set_reports_watch(bool active) {
+    if (cache_file().empty()) return;
+    auto j = read_json_file(cache_file());
+    j["reports_watch"] = active;
+    write_json_file(cache_file(), j);
+}
+
+bool reports_active(const std::vector<PlayerReport>& reports) {
+    for (const auto& r : reports)
+        if (r.status != "closed") return true;
+    return false;
+}
+
+bool mark_report_read(long long id) {
+    std::string base;
+    { std::lock_guard<std::mutex> lock(g_mutex); base = g_base_url; }
+    const std::string token = BootcadeAuth::access_token();
+    if (base.empty() || token.empty()) return false;
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+    std::string body;
+    struct curl_slist* headers = curl_slist_append(nullptr, ("Authorization: Bearer " + token).c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, (base + "/api/me/reports/" + std::to_string(id) + "/read").c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_string);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
+    const CURLcode res = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+    curl_slist_free_all(headers);
+    return res == CURLE_OK && status == 200;
 }
 
 void cache_supported(const std::set<std::string>& supported) {

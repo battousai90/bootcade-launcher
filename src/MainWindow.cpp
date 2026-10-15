@@ -6159,9 +6159,11 @@ void MainWindow::refresh_hiscore_data_async(bool announce) {
          * C'est ce qui montre au joueur qu'on l'a lu. Seules les reponses
          * arrivees depuis la derniere fois qu'il les a vues sont annoncees ;
          * la fenetre « Mes signalements » les marque lues. */
-        if (!BootcadeAuth::access_token().empty()) {
+        if (!BootcadeAuth::access_token().empty() && HiscoreClient::reports_to_check()) {
             const auto reports = HiscoreClient::fetch_my_reports();
             if (reports.ok) {
+                // Plus aucun signalement actif : on cesse d'interroger.
+                HiscoreClient::set_reports_watch(HiscoreClient::reports_active(reports.value));
                 const std::string seen = HiscoreClient::reports_seen_at();
                 std::vector<const HiscoreClient::PlayerReport*> fresh;
                 for (const auto& rp : reports.value)

@@ -263,6 +263,23 @@ void MyReportsDialog::on_loaded() {
     std::string latest;
     for (const auto& r : m_result.value) latest = std::max(latest, r.replied_at);
     HiscoreClient::set_reports_seen_at(latest);
+
+    /* Reponse lue : le serveur ferme le signalement, et le launcher cesse
+     * d'interroger des qu'il ne reste plus rien d'ouvert. */
+    std::vector<long long> to_close;
+    bool still_open = false;
+    for (const auto& r : m_result.value) {
+        if (r.status == "answered" || r.status == "published") to_close.push_back(r.id);
+        else if (r.status == "open") still_open = true;
+    }
+    if (!to_close.empty() || !still_open) {
+        m_worker = std::thread([to_close, still_open] {
+            bool all = true;
+            for (long long id : to_close)
+                if (!HiscoreClient::mark_report_read(id)) { all = false; break; }
+            if (all) HiscoreClient::set_reports_watch(still_open);
+        });
+    }
 }
 
 void MyReportsDialog::fill(const std::vector<HiscoreClient::PlayerReport>& reports) {
@@ -277,7 +294,12 @@ void MyReportsDialog::fill(const std::vector<HiscoreClient::PlayerReport>& repor
         Glib::ustring state;
         if (r.status == "published")     { state = _("Score published");       tone = "success"; }
         else if (r.status == "answered") { state = _("Answered");              tone = "info"; }
-        else if (r.status == "closed")   { state = _("Closed");                tone = "muted"; }
+        else if (r.status == "closed") {
+            // Ferme parce que le joueur a lu la reponse : on garde ce qu'elle disait.
+            if (r.has_published)      { state = _("Score published"); tone = "success"; }
+            else if (!r.reply.empty()) { state = _("Answered");        tone = "info"; }
+            else                       { state = _("Closed");          tone = "muted"; }
+        }
         else                             { state = _("Waiting for our answer"); tone = "warning"; }
 
         const std::string title = m_title_of(r.system, r.game);
