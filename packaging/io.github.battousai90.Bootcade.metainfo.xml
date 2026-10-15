@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="1.8.1" date="2026-10-14">
+      <description>
+        <p>Open the Outbox faster, select the random game in the list, and keep the Records tab up to date</p>
+      </description>
+    </release>
     <release version="1.8.0" date="2026-10-11">
       <description>
         <p>Add RetroAchievements, a four-tab details panel and a smoother ROM Manager</p>
