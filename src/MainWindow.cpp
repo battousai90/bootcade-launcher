@@ -3399,6 +3399,8 @@ void MainWindow::on_play_clicked() {
     if (const ControllerConfig* launch_profile = controller_profile_for(fbneo_rom_name)) {
         if (own_profile) ControllerManager::write_game_config(*launch_profile, fbneo_rom_name);
         ControllerManager::apply_analog_bindings(fbneo_rom_name, *launch_profile);
+        // En dernier : les numeros de manettes d'aujourd'hui (voir la fonction).
+        ControllerManager::use_current_devices(fbneo_rom_name, *launch_profile);
     }
 
     // Snapshot of the score table BEFORE play. Without it the server cannot
@@ -3486,6 +3488,9 @@ void MainWindow::on_play_clicked() {
                     m_ach_dispatcher.emit();
                 }
             }
+            // D'abord les numeros de manettes d'origine : tout ce qui suit
+            // repare un fichier ecrit avec les numeros enregistres.
+            ControllerManager::put_back_saved_devices(fbneo_rom_name);
             // FBNeo has just written config/games/<rom>.ini on exit : this is
             // the only moment a complete file exists to repair.
             ControllerManager::fix_player2_input_conflicts(fbneo_rom_name);

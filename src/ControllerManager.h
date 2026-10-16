@@ -79,6 +79,24 @@ public:
     // second pad maps to a different device id and is left untouched.
     static void fix_player2_input_conflicts(const std::string& fbneo_rom_name);
 
+    /* Les manettes d'un jeu, aux numeros d'AUJOURD'HUI.
+     *
+     * Un .ini note chaque manette par sa POSITION dans la liste de l'ordinateur
+     * (joystick 0, 1...). Quand une manette est debranchee, ou que l'ordre
+     * change, ces numeros ne designent plus la bonne : le joueur 1 pointe sur
+     * un pad qui n'existe plus et plus rien ne repond.
+     *
+     * Avant le lancement, les numeros du profil sont traduits d'apres le NOM
+     * des manettes branchees ; une manette absente est envoyee sur un numero
+     * qui n'existe pas, jamais sur celle d'un autre joueur. Quand tout est
+     * deja en place, aucun fichier n'est touche. Le fichier d'origine est
+     * garde a cote (<rom>.ini.bcslots) et remis apres la sortie du jeu, ce
+     * qui rend la traduction sans memoire : un autre ordre au prochain
+     * lancement donne la bonne traduction a ce moment-la. */
+    static void use_current_devices(const std::string& fbneo_rom_name,
+                                    const ControllerConfig& cfg);
+    static void put_back_saved_devices(const std::string& fbneo_rom_name);
+
     // Bind the analog inputs of config/games/<rom>.ini to the pad.
     //
     // Needed because a whole family of games has no digital directions at all.

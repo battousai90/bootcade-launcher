@@ -5,7 +5,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <glob.h>
+#include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <sstream>
 #include <iomanip>
 #include <iostream>
@@ -608,6 +610,186 @@ void ControllerManager::fix_player2_input_conflicts(const std::string& fbneo_rom
               << " player-2 input(s) that duplicated player 1\n";
 }
 
+
+// ── Manettes branchees aujourd'hui ───────────────────────────────────────
+
+namespace {
+
+std::string trim_spaces(const std::string& s) {
+    const size_t b = s.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return {};
+    return s.substr(b, s.find_last_not_of(" \t\r\n") - b + 1);
+}
+
+// Numero enregistre -> numero actuel. Vide quand rien ne change. Une manette
+// absente recoit un numero (15, 14...) qu'aucune manette ne porte.
+std::map<int, int> device_remap(const ControllerConfig& cfg,
+                                const std::vector<JoystickInfo>& present)
+{
+    std::map<int, int> m;
+    std::vector<bool> taken(present.size(), false);
+    bool differs = false;
+    int dead = 0xF;
+    for (const auto& player : cfg.players) {
+        if (player.device_path.empty()) continue;
+        const int saved = (int)((joystick_base_for(player.device_path) >> 8) & 0xF);
+        if (m.count(saved)) continue;
+
+        int cur = -1;
+        const std::string name = trim_spaces(player.device_name);
+        if (name.empty()) {
+            // Profil ancien, sans nom : on ne sait que la position.
+            if (saved < (int)present.size() && !taken[saved]) cur = saved;
+        } else {
+            // Deux pads du meme nom : celui qui n'a pas bouge est prefere.
+            if (saved < (int)present.size() && !taken[saved]
+                && trim_spaces(present[saved].name) == name) cur = saved;
+            for (int i = 0; cur < 0 && i < (int)present.size(); ++i)
+                if (!taken[i] && trim_spaces(present[i].name) == name) cur = i;
+        }
+        if (cur >= 0) taken[cur] = true;
+        else          cur = dead--;
+        m[saved] = cur;
+        if (cur != saved) differs = true;
+    }
+    if (!differs) m.clear();
+    return m;
+}
+
+// Les codes manette du .ini : « switch 0x41xx » (le chiffre apres 4 est le
+// numero de manette) et « joyaxis N a » / « joyslider N a ».
+std::string remap_devices_in(const std::string& text, const std::map<int, int>& m)
+{
+    std::istringstream in(text);
+    std::string out, line;
+    auto number_at = [](const std::string& l, size_t from, size_t& end, bool hex) {
+        size_t i = from;
+        if (hex && l.compare(i, 2, "0x") == 0) i += 2;
+        end = i;
+        while (end < l.size() && std::isxdigit((unsigned char)l[end])) ++end;
+        return end > i ? (unsigned)std::stoul(l.substr(i, end - i), nullptr, hex ? 16 : 10) : 0u;
+    };
+    while (std::getline(in, line)) {
+        std::string res;
+        size_t pos = 0;
+        while (pos < line.size()) {
+            size_t sw = line.find("switch", pos);
+            size_t ja = line.find("joyaxis", pos);
+            size_t js = line.find("joyslider", pos);
+            size_t at = std::min({sw, ja, js});
+            if (at == std::string::npos) { res += line.substr(pos); break; }
+            const bool is_switch = at == sw;
+            const size_t kw = is_switch ? 6 : (at == ja ? 7 : 9);
+            size_t v = line.find_first_not_of(" \t", at + kw);
+            res += line.substr(pos, (v == std::string::npos ? line.size() : v) - pos);
+            if (v == std::string::npos) { pos = line.size(); break; }
+            size_t end = v;
+            const unsigned val = number_at(line, v, end, is_switch);
+            if (end == v) { pos = v; continue; }
+            if (is_switch) {
+                if ((val & 0xF000u) == 0x4000u) {
+                    auto it = m.find((int)((val >> 8) & 0xF));
+                    if (it != m.end()) {
+                        char buf[16];
+                        std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | ((unsigned)it->second << 8));
+                        res += buf; pos = end; continue;
+                    }
+                }
+            } else {
+                auto it = m.find((int)val);
+                if (it != m.end()) { res += std::to_string(it->second); pos = end; continue; }
+            }
+            res += line.substr(v, end - v);
+            pos = end;
+        }
+        out += res + "\n";
+    }
+    return out;
+}
+
+bool read_all(const std::string& path, std::string& out) {
+    std::ifstream f(path);
+    if (!f) return false;
+    std::ostringstream ss; ss << f.rdbuf(); out = ss.str();
+    return true;
+}
+
+const char* const kSlotsMark = "// bootcade-device-map";
+
+// Remet un fichier tel qu'il etait avant la traduction. Sans fichier d'origine
+// a cote, rien a faire.
+void put_back_file(const std::string& path)
+{
+    const std::string side = path + ".bcslots";
+    std::string kept;
+    if (!read_all(side, kept)) return;
+
+    // Premiere ligne : « // bootcade-device-map 1>0 0>15 ».
+    const size_t nl = kept.find('\n');
+    const std::string head = kept.substr(0, nl);
+    std::map<int, int> inverse;
+    std::istringstream hs(head.substr(std::string(kSlotsMark).size()));
+    for (std::string pair; hs >> pair; ) {
+        int a = 0, b = 0;
+        if (std::sscanf(pair.c_str(), "%d>%d", &a, &b) == 2) inverse[b] = a;
+    }
+    std::string now;
+    std::error_code ec;
+    if (read_all(path, now) && !inverse.empty()) {
+        std::ofstream fo(path);
+        if (fo) fo << remap_devices_in(now, inverse);
+    }
+    std::filesystem::remove(side, ec);
+}
+
+void use_file(const std::string& path, const std::map<int, int>& m)
+{
+    std::string text;
+    if (!read_all(path, text)) return;
+    std::ofstream side(path + ".bcslots");
+    if (!side) return;
+    side << kSlotsMark;
+    for (const auto& kv : m) side << ' ' << kv.first << '>' << kv.second;
+    side << '\n' << text;
+    side.close();
+    std::ofstream fo(path);
+    if (fo) fo << remap_devices_in(text, m);
+}
+
+} // namespace
+
+void ControllerManager::put_back_saved_devices(const std::string& fbneo_rom_name)
+{
+    if (fbneo_rom_name.empty()) return;
+    const std::string dir = get_fbneo_config_dir();
+    put_back_file(dir + "/games/" + fbneo_rom_name + ".ini");
+    put_back_file(dir + "/p1defaults.ini");
+    put_back_file(dir + "/p2defaults.ini");
+}
+
+void ControllerManager::use_current_devices(const std::string& fbneo_rom_name,
+                                            const ControllerConfig& cfg)
+{
+    if (fbneo_rom_name.empty()) return;
+    // Une session precedente finie sans remise en place (arret brutal).
+    put_back_saved_devices(fbneo_rom_name);
+
+    const auto m = device_remap(cfg, list_devices());
+    if (m.empty()) return;
+
+    const std::string dir = get_fbneo_config_dir();
+    const std::string ini = dir + "/games/" + fbneo_rom_name + ".ini";
+    if (std::filesystem::exists(ini)) {
+        use_file(ini, m);
+    } else {
+        // Premier lancement : FBNeo cree le .ini depuis les reglages par joueur.
+        use_file(dir + "/p1defaults.ini", m);
+        use_file(dir + "/p2defaults.ini", m);
+    }
+    std::cout << "[ControllerManager] " << fbneo_rom_name << ": pads renumbered";
+    for (const auto& kv : m) std::cout << ' ' << kv.first << ">" << kv.second;
+    std::cout << std::endl;
+}
 
 // ── Analog inputs ─────────────────────────────────────────────────────────
 
