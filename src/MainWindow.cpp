@@ -3435,6 +3435,12 @@ void MainWindow::on_play_clicked() {
     // other after would compare two unrelated tables.
     const std::string score_path = fbneo_score_state_path(game_system, rom_name, fbneo_rom_name);
     std::string hi_before = read_file_bytes(score_path);
+    // The SRAM snapshot too, taken now whatever the file chosen above : the
+    // list of games read from their SRAM is the server's to change at any
+    // time, and the choice is re-checked once the session is over. The player
+    // must never have to restart the launcher for a score to count.
+    const std::string sram_path = fbneo_saveram_path(fbneo_rom_name);
+    const std::string sram_before = read_file_bytes(sram_path);
     // Read here, on the GTK thread, and carried into the watcher: the panel
     // must not be touched from there. Empty means "do not send".
     // Le nom vient du COMPTE, plus d'un champ de reglages : c'est le seul du
@@ -3468,10 +3474,23 @@ void MainWindow::on_play_clicked() {
         std::optional<ControllerConfig> profile;
         if (const ControllerConfig* p = controller_profile_for(fbneo_rom_name))
             profile = *p;
-        std::thread([this, pid, rom_name, game_system, fbneo_rom_name, previews_dir, titles_dir, launch_time, score_path, hi_before, hiscore_player, hiscore_country,
+        std::thread([this, pid, rom_name, game_system, fbneo_rom_name, previews_dir, titles_dir, launch_time, score_path, hi_before, sram_path, sram_before, hiscore_player, hiscore_country,
                      hiscore_enabled, keep_history, share_playtime, profile = std::move(profile), own_profile,
                      alive = m_alive_token]() {
             watch_playtime(pid, m_database, rom_name, game_system, "fbneo", keep_history);
+            /* Which file holds this game's table is the server's call, and it
+             * can have changed since the launcher started (a definition fixed
+             * while the window stayed open). The list is read again now, in
+             * this thread and before anything is locked : if the game turns out
+             * to be read from its SRAM, that file's snapshot, taken at launch,
+             * is the one compared. Offline, the previous choice stands. */
+            std::string state_path = score_path;
+            std::string state_before = hi_before;
+            if (HiscoreClient::fetch_supported().ok &&
+                HiscoreClient::is_saveram(game_system, rom_name) && state_path != sram_path) {
+                state_path = sram_path;
+                state_before = sram_before;
+            }
             // La fenêtre a pu être fermée pendant la partie. Le verrou reste
             // pris pendant l'envoi : ~MainWindow attend ici plutot que de
             // detruire l'objet sous les pieds de l'envoi (quelques secondes
@@ -3479,7 +3498,7 @@ void MainWindow::on_play_clicked() {
             std::lock_guard<std::mutex> live(alive->mutex);
             if (!alive->alive) return;
             // FBNeo writes the .hi on exit, so this must come after the wait.
-            submit_session_score(game_system, rom_name, fbneo_rom_name, score_path, hi_before, hiscore_player, hiscore_country, hiscore_enabled, share_playtime, launch_time);
+            submit_session_score(game_system, rom_name, fbneo_rom_name, state_path, state_before, hiscore_player, hiscore_country, hiscore_enabled, share_playtime, launch_time);
             // Les succes debloques pendant la partie : la liste gardee en memoire
             // date d'avant. On la relit maintenant, sans attendre un redemarrage.
             if (RetroAchievements::signed_in()
@@ -5079,8 +5098,49 @@ void MainWindow::rebuild_mlist() {
     clear_art_queue();
     SettingsUi::destroy_children(m_mlist);
     m_mlist_refs.clear();
+    m_mlist_first = 0;
     m_mlist_built = 0;
+    m_mlist_shift = 0;
     append_mlist_batch();
+}
+
+// The list, built from `first` instead of from the top.
+void MainWindow::rebuild_mlist_at(int first) {
+    clear_art_queue();
+    SettingsUi::destroy_children(m_mlist);
+    m_mlist_refs.clear();
+    m_mlist_first = first;
+    m_mlist_built = first;
+    m_mlist_shift = 0;
+    append_mlist_batch();
+}
+
+// The rows above the first one built, when the list was rebuilt around a row.
+// Rows added above push everything down : the scroll position follows once
+// the new height is laid out (see maybe_extend_mlist).
+void MainWindow::prepend_mlist_batch() {
+    if (m_batch_lock || m_reveal_scrolling || m_mlist_first <= 0) return;
+    m_batch_lock = true;
+    const int start = std::max(0, m_mlist_first - kViewBatch);
+    const int count = m_mlist_first - start;
+    int row_h = 0;
+    if (auto* r0 = m_mlist.get_row_at_index(0)) row_h = r0->get_allocated_height();
+    auto children = m_model_games->children();
+    auto it = children.begin();
+    std::advance(it, start);
+    std::vector<Gtk::TreeRowReference> refs;
+    for (int i = 0; i < count; ++i, ++it) {
+        m_mlist.insert(*make_list_row(*it), i);
+        refs.emplace_back(m_model_games, m_model_games->get_path(it));
+    }
+    m_mlist_refs.insert(m_mlist_refs.begin(), refs.begin(), refs.end());
+    m_mlist_first = start;
+    if (auto adj = m_scrolled_mlist.get_vadjustment()) {
+        m_mlist_upper_before = adj->get_upper();
+        m_mlist_shift += static_cast<double>(count) * row_h;
+    }
+    m_mlist.show_all_children();
+    m_batch_lock = false;
 }
 
 void MainWindow::append_mlist_batch() {
@@ -5105,6 +5165,17 @@ void MainWindow::append_mlist_batch() {
 void MainWindow::maybe_extend_mlist() {
     auto adj = m_scrolled_mlist.get_vadjustment();
     if (!adj) return;
+    // Rows were added above : keep the player on the same row once they are laid out.
+    if (m_mlist_shift > 0 && adj->get_upper() > m_mlist_upper_before) {
+        const double shift = m_mlist_shift;
+        m_mlist_shift = 0;
+        adj->set_value(adj->get_value() + shift);
+        return;
+    }
+    if (m_mlist_first > 0 && m_mlist_shift == 0 && adj->get_value() < adj->get_page_size() * 1.5) {
+        prepend_mlist_batch();
+        return;
+    }
     if (adj->get_value() < adj->get_upper() - adj->get_page_size() * 1.5) return;
     append_mlist_batch();
 }
@@ -5531,14 +5602,58 @@ void MainWindow::reveal_model_row(const Gtk::TreeModel::iterator& it) {
     show_game_details(*it);
     const auto path = m_model_games->get_path(it);
     m_treeview_games.scroll_to_row(path, 0.5f);
-    for (size_t i = 0; i < m_mlist_refs.size(); ++i) {
-        if (!m_mlist_refs[i] || m_mlist_refs[i].get_path() != path) continue;
-        if (auto* r = m_mlist.get_row_at_index(static_cast<int>(i))) {
-            m_mlist.select_row(*r);
-            r->grab_focus();
+    reveal_in_view(path);
+}
+
+void MainWindow::reveal_in_view(const Gtk::TreeModel::Path& path) {
+    if (path.empty()) return;
+    const int index = static_cast<int>(path[0]);
+    const bool grid = m_view_stack.get_visible_child_name() == "grid";
+
+    if (grid) {
+        // The grid is still built from the top : a card not built yet is not highlighted.
+        if (index >= m_grid_built || index >= static_cast<int>(m_grid_refs.size())) return;
+        if (auto* c = m_flowbox.get_child_at_index(index)) {
+            m_flowbox.select_child(*c);
+            reveal_scroll_to(*c, m_flowbox, m_scrolled_grid);
         }
-        break;
+        return;
     }
+
+    if (index < m_mlist_first || index >= m_mlist_built)
+        rebuild_mlist_at(std::max(0, index - kViewBatch / 4));
+    const int rel = index - m_mlist_first;
+    if (rel < 0 || rel >= static_cast<int>(m_mlist_refs.size())) return;
+    if (auto* r = m_mlist.get_row_at_index(rel)) {
+        m_mlist.select_row(*r);
+        r->grab_focus();
+        reveal_scroll_to(*r, m_mlist_wrap, m_scrolled_mlist);
+    }
+}
+
+// Centres `child` in `scrolled`. The rows were built a moment ago and have no
+// allocation until a layout pass, which on a big batch takes a while : the
+// scroll retries until the scrolled area is tall enough to reach the child.
+// Rows are not prepended meanwhile (m_reveal_scrolling), or the heights move
+// under the measure.
+void MainWindow::reveal_scroll_to(Gtk::Widget& child, Gtk::Widget& container, Gtk::ScrolledWindow& scrolled) {
+    m_reveal_scroll.disconnect();
+    m_reveal_scrolling = true;
+    int tries = 0;
+    m_reveal_scroll = Glib::signal_timeout().connect([this, &child, &container, &scrolled, tries]() mutable {
+        auto adj = scrolled.get_vadjustment();
+        int x = 0, y = 0;
+        const bool placed = adj && child.get_mapped() && child.translate_coordinates(container, 0, 0, x, y)
+                            && child.get_allocated_height() > 1 && adj->get_upper() >= y + child.get_allocated_height();
+        if (!placed && ++tries < 60) return true;
+        if (placed) {
+            m_mlist_shift = 0;
+            const double target = y - (adj->get_page_size() - child.get_allocated_height()) / 2.0;
+            adj->set_value(std::max(adj->get_lower(), std::min(target, adj->get_upper() - adj->get_page_size())));
+        }
+        m_reveal_scrolling = false;
+        return false;
+    }, 50);
 }
 
 void MainWindow::on_all_systems() {
@@ -6066,9 +6181,11 @@ void MainWindow::refresh_hiscore_data_async(bool announce) {
          * C'est ce qui montre au joueur qu'on l'a lu. Seules les reponses
          * arrivees depuis la derniere fois qu'il les a vues sont annoncees ;
          * la fenetre « Mes signalements » les marque lues. */
-        if (!BootcadeAuth::access_token().empty()) {
+        if (!BootcadeAuth::access_token().empty() && HiscoreClient::reports_to_check()) {
             const auto reports = HiscoreClient::fetch_my_reports();
             if (reports.ok) {
+                // Plus aucun signalement actif : on cesse d'interroger.
+                HiscoreClient::set_reports_watch(HiscoreClient::reports_active(reports.value));
                 const std::string seen = HiscoreClient::reports_seen_at();
                 std::vector<const HiscoreClient::PlayerReport*> fresh;
                 for (const auto& rp : reports.value)
@@ -6206,6 +6323,7 @@ void MainWindow::fetch_hiscore_top_async(const std::string& system, const std::s
         if (!cached.empty()) {
             std::lock_guard<std::mutex> lock(m_hiscore_top_mutex);
             m_hiscore_top = std::move(cached);
+            m_hiscore_top_game = {system, game};
             m_hiscore_top_stale = when;
             m_hiscore_seq_done = seq;
         }
@@ -6233,6 +6351,7 @@ void MainWindow::fetch_hiscore_top_async(const std::string& system, const std::s
             // overwrite the one they are looking at now.
             if (seq != m_hiscore_seq) return;
             m_hiscore_top = std::move(rows.value);
+            m_hiscore_top_game = {system, game};
             m_hiscore_top_stale.clear();
             m_hiscore_seq_done = seq;
         }
@@ -6398,13 +6517,29 @@ void MainWindow::render_board(const std::vector<HiscoreClient::Entry>& rows,
 void MainWindow::on_hiscore_top_ready() {
     std::vector<HiscoreClient::Entry> rows;
     std::string stale;
+    std::pair<std::string, std::string> game;
     {
         std::lock_guard<std::mutex> lock(m_hiscore_top_mutex);
         if (m_hiscore_seq_done != m_hiscore_seq) return;
         rows = m_hiscore_top;
         stale = m_hiscore_top_stale;
+        game = m_hiscore_top_game;
     }
-    render_board(rows, stale);
+    if (!stale.empty()) { render_board(rows, stale); return; }   // the cache, painted while the reply is awaited
+
+    /* The reply is in the cache now. Redraw the whole details panel of the
+     * game it belongs to, not just the table : a game whose leaderboard was
+     * still empty has its Records block hidden, and only a full redraw
+     * shows it. A reply for a game the player has since left is not painted
+     * over the one on screen : the cache has it for when they come back. */
+    auto sel = m_treeview_games.get_selection();
+    if (!sel) return;
+    auto it = sel->get_selected();
+    if (!it) return;
+    const Gtk::TreeModel::Row row = *it;
+    if (Glib::ustring(row[m_columns.m_col_system]).raw() != game.first ||
+        Glib::ustring(row[m_columns.m_col_name]).raw() != game.second) return;
+    show_game_details(row);
 }
 
 void MainWindow::sort_games(std::vector<const Game*>& games) {
@@ -6583,6 +6718,16 @@ void MainWindow::submit_session_score(const std::string& system,
     if (hi_after.empty() || hi_after == hi_before) {   // no score table, or nothing new in it
         send_playtime_only();
         if (unsaved && ranked) announce_unsaved();
+        /* Never a silent end on a ranked game. The score file did not change :
+         * the player missed the table, or the game did not write what they
+         * earned. From the launcher the two look alike, and saying nothing
+         * made the second one read as "the leaderboard does not work". */
+        else if (ranked) {
+            std::cerr << "[HISCORE] " << system << "/" << game << " : score file unchanged" << std::endl;
+            std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
+            m_hiscore_results.push_back({_("No new score was saved by the game this time."), false});
+            m_hiscore_result_dispatcher.emit();
+        }
         return;
     }
 
@@ -6716,7 +6861,10 @@ void MainWindow::submit_session_score(const std::string& system,
             }
             std::lock_guard<std::mutex> lock(m_hiscore_result_mutex);
             m_hiscore_results.push_back(std::move(notice));
-            if (r.accepted) m_hiscore_refresh_target = {system, game};
+            // Whatever the verdict : the player has just played this game, so its
+            // board is fetched again. A score that missed the top 5 still leaves
+            // the Records tab with a board to show, where it had none.
+            m_hiscore_refresh_target = {system, game};
             m_hiscore_result_dispatcher.emit();
             return;
         }
@@ -6794,7 +6942,7 @@ void MainWindow::submit_session_score(const std::string& system,
         m_hiscore_results.push_back(message);
         // Seul un score publié change le classement : une soumission mise en
         // attente ou refusée laisse le tableau tel quel.
-        if (r.accepted) m_hiscore_refresh_target = {system, game};
+        m_hiscore_refresh_target = {system, game};   // see above : every verdict refreshes the board
     }
     m_hiscore_result_dispatcher.emit();
 }

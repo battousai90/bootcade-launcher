@@ -180,6 +180,17 @@ Fetched<std::vector<PlayerReport>> fetch_my_reports();
 std::string reports_seen_at();
 void        set_reports_seen_at(const std::string& iso);
 
+// Faut-il interroger le serveur sur les signalements ? Seulement tant que le
+// joueur en a un d'actif (ouvert, ou repondu mais pas encore lu). Sans
+// signalement actif, le launcher n'appelle rien. Inconnu (premier lancement,
+// cache perdu) : on interroge une fois, ce qui fixe la reponse.
+bool reports_to_check();
+void set_reports_watch(bool active);
+// Vrai quand au moins un signalement n'est pas ferme.
+bool reports_active(const std::vector<PlayerReport>& reports);
+// Le joueur a lu la reponse : le serveur ferme le signalement.
+bool mark_report_read(long long id);
+
 // ── Offline store ─────────────────────────────────────────────────────────
 // Kept in the launcher's own config directory rather than in games.db: that
 // database is rebuilt from the DAT files whenever the library is rescanned,

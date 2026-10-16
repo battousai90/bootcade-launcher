@@ -34,6 +34,41 @@ std::set<std::string> g_saveram;
 std::map<std::string, std::string> g_metrics;
 std::mutex g_saveram_mutex;
 
+/* Un jeu Neo Geo est dans le DAT « Arcade » ET dans le DAT « Neo Geo » : deux
+ * lignes pour la meme ROM et le meme fichier de scores. Le service n'a qu'un
+ * classement, sous « Arcade » : le lanceur parle donc toujours « Arcade » pour
+ * ces jeux, quelle que soit la ligne lancee. La liste est celle que le service
+ * annonce (les deux lignes y figurent), relue du cache au demarrage. */
+std::set<std::string> g_neogeo_dups;
+bool g_dups_loaded = false;
+std::mutex g_alias_mutex;
+
+void note_supported(const std::set<std::string>& supported) {
+    std::set<std::string> arcade, neogeo;
+    for (const auto& k : supported) {
+        const auto cut = k.find('\n');
+        if (cut == std::string::npos) continue;
+        const std::string system = k.substr(0, cut), game = k.substr(cut + 1);
+        if (system == "Arcade") arcade.insert(game);
+        else if (system == "Neo Geo") neogeo.insert(game);
+    }
+    std::lock_guard<std::mutex> lock(g_alias_mutex);
+    g_neogeo_dups.clear();
+    for (const auto& g : neogeo) if (arcade.count(g)) g_neogeo_dups.insert(g);
+    g_dups_loaded = true;
+}
+
+std::string canon(const std::string& system, const std::string& game) {
+    if (system != "Neo Geo") return system;
+    {
+        std::lock_guard<std::mutex> lock(g_alias_mutex);
+        if (g_dups_loaded) return g_neogeo_dups.count(game) ? "Arcade" : system;
+    }
+    note_supported(cached_supported());   // premier appel : la liste mise en cache
+    std::lock_guard<std::mutex> lock(g_alias_mutex);
+    return g_neogeo_dups.count(game) ? "Arcade" : system;
+}
+
 // Le magasin hors ligne est défini plus bas, avec le reste du cache.
 nlohmann::json read_json_file(const std::string& path);
 void write_json_file(const std::string& path, const nlohmann::json& j);
@@ -182,6 +217,7 @@ Fetched<std::set<std::string>> fetch_supported() {
                 g_metrics[key(system, game)] = metric;
         }
     }
+    note_supported(out);
     {   // Persisté avec la liste, sinon un démarrage hors ligne relirait des
         // jeux supportés sans savoir quel fichier leur correspond.
         std::lock_guard<std::mutex> lock(g_saveram_mutex);
@@ -297,7 +333,7 @@ std::string metric_of(const std::string& system, const std::string& game) {
                 if (it.value().is_string())
                     g_metrics[it.key()] = it.value().get<std::string>();
     }
-    auto found = g_metrics.find(key(system, game));
+    auto found = g_metrics.find(key(canon(system, game), game));
     return found == g_metrics.end() ? std::string("score") : found->second;
 }
 
@@ -309,7 +345,7 @@ bool is_saveram(const std::string& system, const std::string& game) {
             for (const auto& v : j["saveram"])
                 if (v.is_string()) g_saveram.insert(v.get<std::string>());
     }
-    return g_saveram.count(key(system, game)) > 0;
+    return g_saveram.count(key(canon(system, game), game)) > 0;
 }
 
 namespace {
@@ -361,7 +397,7 @@ Fetched<std::vector<Entry>> fetch_top(const std::string& system,
 
     CURL* esc = curl_easy_init();
     if (!esc) { res.error = "curl indisponible"; return res; }
-    std::string path = "/api/scores/" + escape_segment(esc, system) + "/" +
+    std::string path = "/api/scores/" + escape_segment(esc, canon(system, game)) + "/" +
                        escape_segment(esc, game) + "/top?limit=" +
                        std::to_string(limit);
     curl_easy_cleanup(esc);
@@ -410,7 +446,7 @@ SubmitResult submit(const std::string& system,
         curl_mime_filename(part, name);
         curl_mime_data(part, bytes.data(), bytes.size());
     };
-    add_field("system", system);
+    add_field("system", canon(system, game));
     add_field("game",   game);
     add_field("player", player);
     if (!country.empty()) add_field("country", country);
@@ -578,6 +614,7 @@ ReportReply send_report(const ReportForm& form) {
     r.answered    = true;
     r.http_status = status;
     r.ok          = status == 201 || status == 200;
+    if (r.ok) set_reports_watch(true);   // un signalement actif : on guette la reponse
     try {
         auto j = nlohmann::json::parse(body);
         r.code   = j.value("code", std::string());
@@ -824,6 +861,51 @@ void set_reports_seen_at(const std::string& iso) {
     write_json_file(cache_file(), j);
 }
 
+bool reports_to_check() {
+    if (cache_file().empty()) return false;
+    const auto j = read_json_file(cache_file());
+    return !j.contains("reports_watch") || j["reports_watch"].get<bool>();
+}
+
+void set_reports_watch(bool active) {
+    if (cache_file().empty()) return;
+    auto j = read_json_file(cache_file());
+    j["reports_watch"] = active;
+    write_json_file(cache_file(), j);
+}
+
+bool reports_active(const std::vector<PlayerReport>& reports) {
+    for (const auto& r : reports)
+        if (r.status != "closed") return true;
+    return false;
+}
+
+bool mark_report_read(long long id) {
+    std::string base;
+    { std::lock_guard<std::mutex> lock(g_mutex); base = g_base_url; }
+    const std::string token = BootcadeAuth::access_token();
+    if (base.empty() || token.empty()) return false;
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+    std::string body;
+    struct curl_slist* headers = curl_slist_append(nullptr, ("Authorization: Bearer " + token).c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, (base + "/api/me/reports/" + std::to_string(id) + "/read").c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_string);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
+    const CURLcode res = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+    curl_slist_free_all(headers);
+    return res == CURLE_OK && status == 200;
+}
+
 void cache_supported(const std::set<std::string>& supported) {
     if (cache_file().empty()) return;
     auto j = read_json_file(cache_file());
@@ -855,7 +937,7 @@ void cache_top(const std::string& system, const std::string& game,
         list.push_back({{"player", e.player}, {"country", e.country},
                         {"score", e.score}, {"since", e.since}});
     entry["rows"] = list;
-    j["tops"][key(system, game)] = entry;
+    j["tops"][key(canon(system, game), game)] = entry;
     write_json_file(cache_file(), j);
 }
 
@@ -969,7 +1051,7 @@ std::vector<Entry> cached_top(const std::string& system, const std::string& game
     if (cache_file().empty()) return out;
     auto j = read_json_file(cache_file());
     if (!j.contains("tops")) return out;
-    const std::string k = key(system, game);
+    const std::string k = key(canon(system, game), game);
     if (!j["tops"].contains(k)) return out;
     const auto& entry = j["tops"][k];
     if (fetched_at) *fetched_at = entry.value("at", "");
