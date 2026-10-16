@@ -1073,6 +1073,46 @@ void refresh_fold(const Fold& f) {
  * (1080p, ou 4K affichee a 200 %) : 1400 x 900 y tient avec la barre des
  * taches et la barre de titre. La borne a 90 % de la zone de travail ne sert
  * qu'aux ecrans plus petits. */
+void fit_to_content(Gtk::Window& win, Gtk::Window* anchor,
+                    std::function<void(int, int)> adapt) {
+    win.get_style_context()->add_class("work-window");
+    auto done = std::make_shared<bool>(false);
+    win.signal_show().connect([&win, anchor, done, adapt] {
+        if (*done) return;
+        *done = true;
+        Gtk::Requisition minimum, natural;
+        win.get_preferred_size(minimum, natural);
+        int w = std::max(minimum.width, natural.width);
+        int h = std::max(minimum.height, natural.height);
+
+        Glib::RefPtr<Gdk::Monitor> monitor;
+        if (auto display = Gdk::Display::get_default()) {
+            if (anchor && anchor->get_window())
+                monitor = display->get_monitor_at_window(anchor->get_window());
+            if (!monitor) monitor = display->get_primary_monitor();
+            if (!monitor && display->get_n_monitors() > 0) monitor = display->get_monitor(0);
+        }
+        if (monitor) {
+            Gdk::Rectangle work;
+            monitor->get_workarea(work);
+            const int avail_w = work.get_width()  * 95 / 100;
+            const int avail_h = work.get_height() * 95 / 100;
+            // Plus large que l'ecran : la fenetre se resserre, puis on mesure
+            // de nouveau. Sans quoi le minimum du contenu depasse l'ecran et
+            // le bord droit est rogne.
+            if (adapt && ((avail_w > 0 && w > avail_w) || (avail_h > 0 && h > avail_h))) {
+                adapt(std::max(0, w - avail_w), std::max(0, h - avail_h));
+                win.get_preferred_size(minimum, natural);
+                w = std::max(minimum.width, natural.width);
+                h = std::max(minimum.height, natural.height);
+            }
+            if (avail_w > 0) w = std::min(w, avail_w);
+            if (avail_h > 0) h = std::min(h, avail_h);
+        }
+        win.set_default_size(w, h);
+    });
+}
+
 void size_work_window(Gtk::Window& win, Gtk::Window* anchor) {
     int w = kWorkWindowWidth, h = kWorkWindowHeight;
     auto display = Gdk::Display::get_default();

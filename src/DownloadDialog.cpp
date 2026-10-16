@@ -3,6 +3,7 @@
 #include "DownloadDialog.h"
 #include "Platform.h"
 #include "FbneoUpdateCheck.h"
+#include "FbneoPaths.h"
 #include "DefaultFolders.h"
 #include "i18n.h"
 #include "SettingsUi.h"
@@ -243,6 +244,9 @@ void DownloadDialog::download_worker() {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    // Une page d'erreur (404) n'est pas une archive : on la refuse au lieu de
+    // l'ecrire dans le zip puis d'echouer a l'extraction.
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "bootcade/1.0");
     curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress_callback);
     curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this);
@@ -263,7 +267,13 @@ void DownloadDialog::download_worker() {
         curl_easy_cleanup(curl);
         fs::remove(m_temp_file);
         m_shared_data.success.store(false);
-        { std::lock_guard<std::mutex> lk(m_shared_data.text_mutex); m_shared_data.final_message = _("Download failed: ") + std::string(curl_easy_strerror(res)); }
+        // 404 : la release « latest » est recreee a chaque synchro, et le zip de
+        // chaque systeme y arrive l'un apres l'autre. Rien n'a ete touche : la
+        // version deja installee reste en place.
+        const std::string reason = res == CURLE_HTTP_RETURNED_ERROR
+            ? _("This FBNeo build is not published yet. It appears a few minutes after each update : try again shortly. Your current version has not been changed.")
+            : _("Download failed: ") + std::string(curl_easy_strerror(res));
+        { std::lock_guard<std::mutex> lk(m_shared_data.text_mutex); m_shared_data.final_message = reason; }
         m_complete_dispatcher.emit();
         return;
     }

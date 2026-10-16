@@ -119,6 +119,18 @@ bool open_uri(const std::string& uri, Gtk::Window* parent = nullptr);
 inline constexpr int kWorkWindowWidth  = 1400;
 inline constexpr int kWorkWindowHeight = 900;
 void size_work_window(Gtk::Window& win, Gtk::Window* anchor = nullptr);
+
+// Une fenetre qui prend la taille de son contenu : a l'ouverture, celle que
+// le contenu demande, ni plus ni moins, bornee a 95 % de l'ecran. Pour les
+// fenetres dont le contenu ne doit ni etre rogne ni defiler : leurs zones
+// defilantes doivent propager leur taille naturelle (set_propagate_natural_*).
+//
+// `adapt`, s'il est donne, est appele quand le contenu est plus grand que
+// l'ecran, avec le nombre de pixels qui manquent en largeur et en hauteur :
+// c'est a la fenetre de se resserrer (illustrations plus petites, champs plus
+// etroits, sections repliees) plutot que de laisser rogner ou defiler.
+void fit_to_content(Gtk::Window& win, Gtk::Window* anchor = nullptr,
+                    std::function<void(int missing_width, int missing_height)> adapt = nullptr);
 // Tant que `win` est affichee, `main` porte la classe « behind-work » : la
 // feuille de style l'assombrit quand elle n'est pas la fenetre active.
 void dim_behind(Gtk::Window& win, Gtk::Window& main);

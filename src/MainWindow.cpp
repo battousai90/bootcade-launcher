@@ -3338,11 +3338,6 @@ void MainWindow::on_play_clicked() {
         }
     }
     update_fbneo_config(launch_dirs);
-#ifdef _WIN32
-    // Le FBNeo Windows n'ecrit les scores (.hi) que si on le lui demande ; le
-    // build SDL du fork le fait de lui-meme.
-    FbneoPaths::set_ini_value("EnableHiscores", "1");
-#endif
     
     
     // Set the correct system in FBNeo config before launching
@@ -3365,13 +3360,6 @@ void MainWindow::on_play_clicked() {
     // === Build launch args ===
     std::vector<std::string> launch_args;
     launch_args.push_back(fbneo_executable);
-#ifdef _WIN32
-    // Le FBNeo Windows attend le nom du jeu d'abord, puis « -w » pour une
-    // fenetre : il demarre en plein ecran sans option. Les options SDL
-    // (-fullscreen, filtres, arguments libres) ne lui sont pas transmises.
-    launch_args.push_back(fbneo_rom_name);
-    if (!m_launch_fullscreen) launch_args.push_back("-w");
-#else
     // No "-joy": that flag makes FBNeo map the pad onto EVERY player, so a
     // single controller ends up driving both P1 and P2 coin/start : one press
     // inserts two credits and starts a two-player game. Verified by running
@@ -3399,7 +3387,6 @@ void MainWindow::on_play_clicked() {
         while (words >> one) launch_args.push_back(one);
     }
     launch_args.push_back(fbneo_rom_name);
-#endif
 
     std::cout << "Launching " << game_system << " game:";
     for (const auto& a : launch_args) std::cout << " " << a;
@@ -5378,11 +5365,7 @@ void MainWindow::on_fbneo_menu() {
     // Launch FBNeo with menu
     std::string fbneo_executable = m_settings_panel.get_fbneo_executable();
     std::cout << "Opening FBNeo menu: " << fbneo_executable << std::endl;
-#ifdef _WIN32
-    spawn_process({fbneo_executable});   // son propre ecran de choix, sans argument
-#else
     spawn_process({fbneo_executable, "-menu"});
-#endif
 }
 
 void MainWindow::on_video_settings() {
@@ -5882,7 +5865,9 @@ void MainWindow::on_about_launcher() {
 void MainWindow::check_fbneo_update_async() {
     std::thread([this]() {
         auto r = FbneoUpdateCheck::fetch_latest();
-        if (r.ok) {
+        // Le zip de CE systeme manque encore dans la release (Windows : il
+        // arrive apres celui de Linux) : rien a proposer pour l'instant.
+        if (r.ok && FbneoUpdateCheck::has_platform_asset(r)) {
             m_fbneo_update_sha = r.sha;
             m_fbneo_update_tag = r.tag;
             m_fbneo_update_published_at = r.published_at;
@@ -8539,6 +8524,50 @@ void MainWindow::pin_base_theme() {
      * droite, et rien d'autre, sur tous les bureaux. */
     if (settings->property_gtk_decoration_layout().get_value() != ":minimize,maximize,close")
         settings->property_gtk_decoration_layout() = ":minimize,maximize,close";
+
+#ifdef _WIN32
+    /* La taille du texte. GTK reprend celle du systeme : « Segoe UI 9 », soit
+     * 12 px a 96 dpi, contre 14,7 px (11 pt) sur un bureau Linux : toute
+     * l'interface, dont les tailles sont des multiples de cette police,
+     * parait un quart plus petite. On fixe donc une taille en pixels, celle
+     * du bureau Linux, multipliee par l'echelle d'affichage de Windows (125 %,
+     * 150 %...) que GTK n'applique pas au texte, et divisee par le facteur
+     * d'echelle entier que GTK applique deja aux fenetres.
+     *
+     * BOOTCADE_UI_SCALE (ou « ui_scale » dans config.json) ajuste le tout :
+     * 1.2 pour 20 % de plus, 0.9 pour 10 % de moins. */
+    static const Glib::ustring win_font = [] {
+        HDC dc = GetDC(nullptr);
+        const int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
+        if (dc) ReleaseDC(nullptr, dc);
+        const double system_scale = dpi > 96 ? dpi / 96.0 : 1.0;
+
+        double gtk_scale = 1.0;
+        if (auto display = Gdk::Display::get_default())
+            if (auto monitor = display->get_primary_monitor())
+                gtk_scale = std::max(1, monitor->get_scale_factor());
+
+        double user = 1.0;
+        try {
+            if (const char* env = std::getenv("BOOTCADE_UI_SCALE"); env && *env) {
+                user = std::stod(env);
+            } else {
+                std::ifstream in(AppContext::get_config_path());
+                nlohmann::json j;
+                if (in && (in >> j) && j.contains("ui_scale") && j["ui_scale"].is_number())
+                    user = j["ui_scale"].get<double>();
+            }
+        } catch (...) {}
+        user = std::min(2.5, std::max(0.5, user));
+
+        const double px = 14.67 * system_scale / gtk_scale * user;
+        std::cout << "[UI] dpi=" << dpi << " gtk_scale=" << gtk_scale << " user=" << user
+                  << " -> font " << px << " px" << std::endl;
+        return Glib::ustring::compose("Segoe UI, sans %1px", (int)std::lround(px));
+    }();
+    if (settings->property_gtk_font_name().get_value() != win_font)
+        settings->property_gtk_font_name() = win_font;
+#endif
 }
 
 // Does the desktop ask for dark surfaces ? GNOME publishes it as

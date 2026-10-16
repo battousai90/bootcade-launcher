@@ -175,21 +175,16 @@ bool GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executab
     content_area->pack_start(*main_box, Gtk::PACK_EXPAND_WIDGET);
     progress_dialog.show_all();
     
-#ifdef _WIN32
-    // Le FBNeo Windows n'a pas de -dat : « -listinfoall <dossier> » ecrit les
-    // memes fichiers, en silence, dans un dossier qui doit deja exister.
+    // Le dossier doit exister : FinalBurn Neo n'ecrit rien dans un dossier
+    // absent, sans le dire (constate sous Windows).
     {
         std::error_code mk;
         std::filesystem::create_directories(dat_output_dir, mk);
     }
-    int result = spawn_and_wait({fbneo_executable, "-listinfoall", dat_output_dir},
-                                progress_dialog, *progress_bar);
-#else
     patch_fbneo_ini_dat_path(dat_output_dir);
 
     // Execute fbneo -dat command (no shell : safe for paths with spaces)
     int result = spawn_and_wait({fbneo_executable, "-dat"}, progress_dialog, *progress_bar);
-#endif
     
     progress_dialog.hide();
     

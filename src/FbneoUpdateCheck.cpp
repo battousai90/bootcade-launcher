@@ -72,27 +72,33 @@ Result fetch_release(const char* url) {
 } // namespace
 
 Result fetch_latest() {
-#ifdef _WIN32
-    return fetch_release("https://api.github.com/repos/finalburnneo/FBNeo/releases/tags/latest");
-#else
     return fetch_release("https://api.github.com/repos/battousai90/FBNeo/releases/tags/latest");
+}
+
+std::string asset_name() {
+#ifdef _WIN32
+    return "windows-sdl2-x86_64.zip";
+#else
+    return "linux-sdl2-x86_64.zip";
 #endif
 }
 
 std::string download_url() {
-#ifdef _WIN32
-    return "https://github.com/finalburnneo/FBNeo/releases/download/latest/windows-x86_64.zip";
-#else
-    return "https://github.com/battousai90/FBNeo/releases/download/latest/linux-sdl2-x86_64.zip";
-#endif
+    return "https://github.com/battousai90/FBNeo/releases/download/latest/" + asset_name();
 }
 
 std::string executable_name() {
 #ifdef _WIN32
-    return "fbneo64.exe";
+    return "fbneo.exe";
 #else
     return "fbneo";
 #endif
+}
+
+bool has_platform_asset(const Result& release) {
+    for (const auto& a : release.assets)
+        if (a.name == asset_name()) return true;
+    return false;
 }
 
 Result fetch_launcher_latest() {

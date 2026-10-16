@@ -633,10 +633,9 @@ static uint32_t joystick_base_for(const std::string& device_path)
 void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
                                             const std::string& fbneo_config_dir)
 {
-    // Sous Windows les memes p1defaults.ini / p2defaults.ini servent : le
-    // fbneo64.ini declare lui aussi szPlayerDefaultIni[]. A VERIFIER avec une
-    // vraie manette : la numerotation DirectInput peut differer de celle de
-    // winmm sur laquelle on se base pour la detection.
+    // Sous Windows aussi : le port SDL2 est le meme. A VERIFIER avec une vraie
+    // manette : SDL numerote les manettes a sa facon, pas toujours comme winmm
+    // sur laquelle repose la detection.
     // Read the installed FBNeo version so we can stamp it in the defaults files.
     const uint32_t burn_ver = read_fbneo_burn_ver(FbneoPaths::ini_path());
 
@@ -746,11 +745,6 @@ bool parse_input_line(const std::string& line,
 
 void ControllerManager::fix_player2_input_conflicts(const std::string& fbneo_rom_name)
 {
-#ifdef _WIN32
-    // Les .ini par jeu du FBNeo Windows n'ont pas le format de celui du SDL :
-    // les manettes de Windows viendront avec leur propre ecriture.
-    return;
-#endif
     if (fbneo_rom_name.empty()) return;
     const std::string path = get_fbneo_config_dir() + "/games/" + fbneo_rom_name + ".ini";
 
@@ -978,11 +972,6 @@ int game_action_of(const std::string& name, int player, int& fires)
 int ControllerManager::write_game_config(const ControllerConfig& cfg,
                                          const std::string& fbneo_rom_name)
 {
-#ifdef _WIN32
-    // Les .ini par jeu du FBNeo Windows n'ont pas le format de celui du SDL :
-    // les manettes de Windows viendront avec leur propre ecriture.
-    (void)cfg; return -1;
-#endif
     if (fbneo_rom_name.empty()) return -1;
     const std::string path = get_fbneo_config_dir() + "/games/" + fbneo_rom_name + ".ini";
     std::ifstream fi(path);
@@ -1070,11 +1059,6 @@ void ControllerManager::set_game_profile(const std::string& config_path,
 
 void ControllerManager::apply_analog_bindings(const std::string& fbneo_rom_name,
                                               const ControllerConfig& cfg) {
-#ifdef _WIN32
-    // Les .ini par jeu du FBNeo Windows n'ont pas le format de celui du SDL :
-    // les manettes de Windows viendront avec leur propre ecriture.
-    (void)cfg; return;
-#endif
     const std::string path = get_fbneo_config_dir() + "/games/" + fbneo_rom_name + ".ini";
 
     std::ifstream fi(path);

@@ -86,13 +86,14 @@ Started start(const std::vector<std::string>& args, const std::vector<std::strin
 
     STARTUPINFOW si{};
     si.cb = sizeof si;
-    DWORD flags = CREATE_UNICODE_ENVIRONMENT;
+    // Le port SDL2 de FinalBurn Neo est un programme console : sans cet
+    // indicateur, une fenetre de terminal s'ouvre derriere le jeu.
+    DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
     if (out_write) {
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdOutput = out_write;
         si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
         si.hStdInput = nullptr;
-        flags |= CREATE_NO_WINDOW;
     }
 
     std::wstring envblock = environment_block(env);

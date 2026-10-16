@@ -39,11 +39,18 @@ namespace {
  */
 std::string capture(const std::string& exe, int timeout_ms) {
 #ifdef _WIN32
-    // -list-video-json est une option du build SDL : le FBNeo Windows la
-    // prendrait pour un nom de jeu et ouvrirait sa fenetre. Il n'a pas de
-    // reglages video SDL a decrire.
-    (void)exe; (void)timeout_ms;
-    return {};
+    // Pas de commande « env » sous Windows : les pilotes factices passent par
+    // l'environnement du processus.
+    std::string out;
+    bool timed_out = false;
+    WinProc::run_streaming({exe, "-list-video-json"},
+                           {"SDL_VIDEODRIVER=dummy", "SDL_AUDIODRIVER=dummy"},
+                           [&out](const char* p, size_t n) {
+                               out.append(p, n);
+                               return out.size() <= (1u << 20);
+                           }, timeout_ms, &timed_out);
+    if (timed_out || out.size() > (1u << 20)) out.clear();
+    return out;
 #else
     const std::vector<std::string> cmd = AppContext::host_command(
         {"env", "SDL_VIDEODRIVER=dummy", "SDL_AUDIODRIVER=dummy", exe, "-list-video-json"});

@@ -74,6 +74,10 @@ jobs:
           }
           copy_deps ./bootcade.exe
 
+          # GLib lance les processus par ces deux programmes, a cote de l'exe :
+          # sans eux, « failed to execute helper program ».
+          cp /mingw64/bin/gspawn-win64-helper.exe /mingw64/bin/gspawn-win64-helper-console.exe .
+
           # Le runtime GTK : schemas GSettings, icones, chargeurs d'images.
           P=/mingw64
           mkdir -p share/glib-2.0 share/icons lib

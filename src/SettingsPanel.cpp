@@ -25,6 +25,7 @@
 #include "EmulatorRegistry.h"
 #include "GenerateDAT.h"
 #include "FbneoUpdateCheck.h"
+#include "FbneoPaths.h"
 #include "HiscoreClient.h"
 #include "HostLibraries.h"
 #include "MameCatalog.h"
@@ -1530,11 +1531,7 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
         // ecrit son mode d'emploi et s'arrete aussitot, sans aucune fenetre.
         Glib::Pid pid = 0;
         try {
-#ifdef _WIN32
-            Glib::spawn_async("", std::vector<std::string>{path},
-#else
             Glib::spawn_async("", AppContext::host_command({path, "-menu"}),
-#endif
                               Glib::SPAWN_SEARCH_PATH | Glib::SPAWN_DO_NOT_REAP_CHILD,
                               Glib::SlotSpawnChildSetup(), &pid);
         } catch (const Glib::Error& e) {
