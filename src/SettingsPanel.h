@@ -133,6 +133,7 @@ public:
 
     // Public method for menu access
     void on_download_fbneo_clicked();
+    void on_fbneo_channel_changed();
 
     // « Download missing artwork » : branche par la fenetre principale, qui
     // connait les jeux et affiche la progression.
@@ -538,6 +539,9 @@ private:
     // telecharge (MameSooner.h). Le canal decide aussi des DAT que le
     // serveur Bootcade sert au groupe MAME.
     Gtk::ComboBoxText m_combo_mame_channel;
+    // Quel FinalBurn Neo : celui de Bootcade ou l'officiel (FbneoChannel.h).
+    Gtk::ComboBoxText m_combo_fbneo_channel;
+    Gtk::Label        m_lbl_fbneo_channel_note;
     Gtk::Box     m_sooner_line{Gtk::ORIENTATION_HORIZONTAL, 10};
     Gtk::Label   m_lbl_sooner;
     Gtk::Button  m_btn_sooner;

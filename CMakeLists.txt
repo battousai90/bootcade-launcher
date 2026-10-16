@@ -166,6 +166,7 @@ add_executable(bootcade
     src/MainWindow.cpp
     src/MameCatalog.cpp
     src/MameSooner.cpp
+    src/FbneoChannel.cpp
     src/EmulatorRegistry.cpp
     src/GameRow.cpp
     src/SettingsPanel.cpp
