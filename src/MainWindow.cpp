@@ -3397,11 +3397,15 @@ void MainWindow::on_play_clicked() {
     // reecrire le .ini depuis, ou un « Reset game settings » l'a efface.
     const bool own_profile = ControllerManager::load_game_profiles(
         AppContext::get_config_path()).count(fbneo_rom_name) > 0;
-    if (const ControllerConfig* launch_profile = controller_profile_for(fbneo_rom_name)) {
-        if (own_profile) ControllerManager::write_game_config(*launch_profile, fbneo_rom_name);
-        ControllerManager::apply_analog_bindings(fbneo_rom_name, *launch_profile);
-        // En dernier : les numeros de manettes d'aujourd'hui (voir la fonction).
-        ControllerManager::use_current_devices(fbneo_rom_name, *launch_profile);
+    if (const ControllerConfig* saved_profile = controller_profile_for(fbneo_rom_name)) {
+        // Les manettes d'AUJOURD'HUI : chaque joueur retrouve la sienne par son
+        // nom, et sans elle le joueur 1 joue au clavier (voir use_current_devices).
+        ControllerConfig launch_profile = *saved_profile;
+        ControllerManager::adopt_plugged_pads(launch_profile, ControllerManager::list_devices());
+        if (own_profile) ControllerManager::write_game_config(launch_profile, fbneo_rom_name);
+        ControllerManager::apply_analog_bindings(fbneo_rom_name, launch_profile);
+        // En dernier, une fois les boutons poses.
+        ControllerManager::use_current_devices(fbneo_rom_name, launch_profile);
     }
 
     // Snapshot of the score table BEFORE play. Without it the server cannot

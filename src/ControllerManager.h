@@ -79,23 +79,29 @@ public:
     // second pad maps to a different device id and is left untouched.
     static void fix_player2_input_conflicts(const std::string& fbneo_rom_name);
 
-    /* Les manettes d'un jeu, aux numeros d'AUJOURD'HUI.
+    /* Les manettes d'un jeu, d'apres ce qui est branche AUJOURD'HUI.
      *
      * Un .ini note chaque manette par sa POSITION dans la liste de l'ordinateur
      * (joystick 0, 1...). Quand une manette est debranchee, ou que l'ordre
      * change, ces numeros ne designent plus la bonne : le joueur 1 pointe sur
      * un pad qui n'existe plus et plus rien ne repond.
      *
-     * Avant le lancement, les numeros du profil sont traduits d'apres le NOM
-     * des manettes branchees ; une manette absente est envoyee sur un numero
-     * qui n'existe pas, jamais sur celle d'un autre joueur. Quand tout est
-     * deja en place, aucun fichier n'est touche. Le fichier d'origine est
-     * garde a cote (<rom>.ini.bcslots) et remis apres la sortie du jeu, ce
-     * qui rend la traduction sans memoire : un autre ordre au prochain
-     * lancement donne la bonne traduction a ce moment-la. */
+     * Avant le lancement, les commandes de chaque joueur prennent le numero de
+     * SA manette, retrouvee par son nom (adopt_plugged_pads). Un joueur 1 sans
+     * manette joue au clavier, avec les touches d'origine de FBNeo ; un
+     * joueur 2 sans manette n'a rien. Quand tout est deja en place, aucun
+     * fichier n'est touche. Le fichier d'origine est garde a cote
+     * (<rom>.ini.bcslots) et remis apres la sortie du jeu : rien ne depend de
+     * ce que le fichier contenait, un autre ordre au prochain lancement donne
+     * la bonne reponse a ce moment-la. */
     static void use_current_devices(const std::string& fbneo_rom_name,
                                     const ControllerConfig& cfg);
     static void put_back_saved_devices(const std::string& fbneo_rom_name);
+
+    // Rapproche un profil des manettes branchees : chaque joueur retrouve SA
+    // manette par son nom, quelle que soit sa position dans la liste. Une
+    // manette absente voit son chemin vide (le nom reste, pour son retour).
+    static void adopt_plugged_pads(ControllerConfig& cfg, const std::vector<JoystickInfo>& present);
 
     // Bind the analog inputs of config/games/<rom>.ini to the pad.
     //

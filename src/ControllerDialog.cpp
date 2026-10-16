@@ -206,6 +206,9 @@ ControllerDialog::ControllerDialog(const std::map<std::string, ControllerConfig>
     m_binding_labels.resize(2 * GAME_ACTION_COUNT, nullptr);
     m_bind_buttons.resize(2 * GAME_ACTION_COUNT, nullptr);
     m_devices = ControllerManager::list_devices();
+    // Chaque joueur retrouve sa manette par son nom, quelle que soit sa
+    // position dans la liste de l'ordinateur.
+    ControllerManager::adopt_plugged_pads(m_config, m_devices);
 
     // Layout: profile bar on top, notebook below
     get_style_context()->add_class("cc-window");
@@ -467,6 +470,7 @@ void ControllerDialog::save_active_to_profiles() {
 void ControllerDialog::load_profile(const std::string& name) {
     m_active_profile_name = name;
     m_config = m_profiles.count(name) ? m_profiles[name] : ControllerConfig{};
+    ControllerManager::adopt_plugged_pads(m_config, m_devices);
     refresh_from_config();
     analog_ui_from_config();
 }
@@ -578,6 +582,7 @@ void ControllerDialog::on_delete_profile_clicked() {
     std::string next = m_profiles.begin()->first;
     m_active_profile_name = next;
     m_config = m_profiles[next];
+    ControllerManager::adopt_plugged_pads(m_config, m_devices);
 
     populate_profile_combo();
     m_profile_switching = true;
@@ -606,14 +611,10 @@ void ControllerDialog::build_player_tab(int p) {
     for (const auto& d : m_devices)
         combo->append(d.path, d.name);
 
+    // Une manette debranchee n'a pas d'entree dans la liste : on ne montre que
+    // ce qui est branche. Son nom reste dans le profil, et elle reprend sa
+    // place d'elle-meme quand on la rebranche.
     const std::string& cur = m_config.players[p].device_path;
-    bool present = false;
-    for (const auto& d : m_devices) if (d.path == cur) { present = true; break; }
-    if (!cur.empty() && !present) {
-        const std::string& nm = m_config.players[p].device_name;
-        combo->append(cur, (nm.empty() ? cur : nm) +
-                           "  " + std::string(_("(not plugged in)")));
-    }
     if (!cur.empty()) combo->set_active_id(cur);
     else              combo->set_active(0);
 
@@ -629,7 +630,8 @@ void ControllerDialog::build_player_tab(int p) {
     refresh_btn->get_style_context()->add_class("flat");
     refresh_btn->signal_clicked().connect([this, p]() {
         m_devices = ControllerManager::list_devices();
-        std::string cur_id = m_device_combos[p]->get_active_id();
+        ControllerManager::adopt_plugged_pads(m_config, m_devices);
+        std::string cur_id = m_config.players[p].device_path;
         m_device_combos[p]->remove_all();
         m_device_combos[p]->append("", _("None "));
         for (const auto& d : m_devices)

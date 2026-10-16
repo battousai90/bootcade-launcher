@@ -960,100 +960,12 @@ std::string trim_spaces(const std::string& s) {
     return s.substr(b, s.find_last_not_of(" \t\r\n") - b + 1);
 }
 
-// Numero enregistre -> numero actuel. Vide quand rien ne change. Une manette
-// absente recoit un numero (15, 14...) qu'aucune manette ne porte.
-std::map<int, int> device_remap(const ControllerConfig& cfg,
-                                const std::vector<JoystickInfo>& present)
-{
-    std::map<int, int> m;
-    std::vector<bool> taken(present.size(), false);
-    bool differs = false;
-    int dead = 0xF;
-    for (const auto& player : cfg.players) {
-        if (player.device_path.empty()) continue;
-        const int saved = (int)((joystick_base_for(player.device_path) >> 8) & 0xF);
-        if (m.count(saved)) continue;
-
-        int cur = -1;
-        const std::string name = trim_spaces(player.device_name);
-        if (name.empty()) {
-            // Profil ancien, sans nom : on ne sait que la position.
-            if (saved < (int)present.size() && !taken[saved]) cur = saved;
-        } else {
-            // Deux pads du meme nom : celui qui n'a pas bouge est prefere.
-            if (saved < (int)present.size() && !taken[saved]
-                && trim_spaces(present[saved].name) == name) cur = saved;
-            for (int i = 0; cur < 0 && i < (int)present.size(); ++i)
-                if (!taken[i] && trim_spaces(present[i].name) == name) cur = i;
-        }
-        if (cur >= 0) taken[cur] = true;
-        else          cur = dead--;
-        m[saved] = cur;
-        if (cur != saved) differs = true;
-    }
-    if (!differs) m.clear();
-    return m;
-}
-
-// Les codes manette du .ini : « switch 0x41xx » (le chiffre apres 4 est le
-// numero de manette) et « joyaxis N a » / « joyslider N a ».
-std::string remap_devices_in(const std::string& text, const std::map<int, int>& m)
-{
-    std::istringstream in(text);
-    std::string out, line;
-    auto number_at = [](const std::string& l, size_t from, size_t& end, bool hex) {
-        size_t i = from;
-        if (hex && l.compare(i, 2, "0x") == 0) i += 2;
-        end = i;
-        while (end < l.size() && std::isxdigit((unsigned char)l[end])) ++end;
-        return end > i ? (unsigned)std::stoul(l.substr(i, end - i), nullptr, hex ? 16 : 10) : 0u;
-    };
-    while (std::getline(in, line)) {
-        std::string res;
-        size_t pos = 0;
-        while (pos < line.size()) {
-            size_t sw = line.find("switch", pos);
-            size_t ja = line.find("joyaxis", pos);
-            size_t js = line.find("joyslider", pos);
-            size_t at = std::min({sw, ja, js});
-            if (at == std::string::npos) { res += line.substr(pos); break; }
-            const bool is_switch = at == sw;
-            const size_t kw = is_switch ? 6 : (at == ja ? 7 : 9);
-            size_t v = line.find_first_not_of(" \t", at + kw);
-            res += line.substr(pos, (v == std::string::npos ? line.size() : v) - pos);
-            if (v == std::string::npos) { pos = line.size(); break; }
-            size_t end = v;
-            const unsigned val = number_at(line, v, end, is_switch);
-            if (end == v) { pos = v; continue; }
-            if (is_switch) {
-                if ((val & 0xF000u) == 0x4000u) {
-                    auto it = m.find((int)((val >> 8) & 0xF));
-                    if (it != m.end()) {
-                        char buf[16];
-                        std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | ((unsigned)it->second << 8));
-                        res += buf; pos = end; continue;
-                    }
-                }
-            } else {
-                auto it = m.find((int)val);
-                if (it != m.end()) { res += std::to_string(it->second); pos = end; continue; }
-            }
-            res += line.substr(v, end - v);
-            pos = end;
-        }
-        out += res + "\n";
-    }
-    return out;
-}
-
 bool read_all(const std::string& path, std::string& out) {
     std::ifstream f(path);
     if (!f) return false;
     std::ostringstream ss; ss << f.rdbuf(); out = ss.str();
     return true;
 }
-
-const char* const kSlotsMark = "// bootcade-device-map";
 
 // Les touches d'origine de FBNeo pour le joueur 1 (le joueur 2 n'en a pas :
 // ses defauts sont des boutons de manette). Codes DirectInput de FBNeo.
@@ -1089,129 +1001,179 @@ std::string switch_line_name(const std::string& l)
     return l.substr(q1 + 1, q2 - q1 - 1);
 }
 
-// Les commandes du joueur 1 (premier de la liste) remises aux touches du clavier.
-std::string player_to_keyboard(const std::string& text, int player)
+// « switch 0x4186 » : la valeur de la ligne, ou false si ce n'est pas un code.
+bool switch_value(const std::string& l, size_t& value_at, size_t& value_end, uint32_t& value)
+{
+    const size_t q2 = l.find('"', l.find('"') + 1);
+    const size_t kind = l.find_first_not_of(" \t", q2 + 1);
+    if (kind == std::string::npos || l.compare(kind, 6, "switch") != 0) return false;
+    value_at = l.find_first_not_of(" \t", kind + 6);
+    if (value_at == std::string::npos) return false;
+    value_end = l.find_first_of(" \t\r\n", value_at);
+    if (value_end == std::string::npos) value_end = l.size();
+    try { value = (uint32_t)std::stoul(l.substr(value_at, value_end - value_at), nullptr, 0); }
+    catch (...) { return false; }
+    return true;
+}
+
+// Les commandes de chaque joueur, d'apres la manette qu'il a MAINTENANT.
+// target[p] : numero de manette actuel (>= 0), -1 (absente), -2 (pas de manette
+// reglee pour ce joueur : on n'y touche pas).
+std::string retarget_players(const std::string& text, const int target[2])
 {
     std::istringstream in(text);
     std::string out, line;
-    int fires = 0;
+    int fires[2] = {0, 0};
     while (std::getline(in, line)) {
         const std::string name = switch_line_name(line);
-        const int action = name.empty() ? -1 : game_action_of(name, player, fires);
-        uint32_t code = 0;
-        if (action >= 0 && keyboard_code_for(player, action, code)) {
-            char buf[32];
-            std::snprintf(buf, sizeof(buf), "switch 0x%02X", code);
-            const size_t q2 = line.find('"', line.find('"') + 1);
-            const size_t kind = line.find_first_not_of(" \t", q2 + 1);
-            line = line.substr(0, kind) + buf;
+        if (!name.empty()) {
+            for (int p = 0; p < 2; ++p) {
+                const int action = game_action_of(name, p, fires[p]);
+                if (action < 0 || target[p] == -2) continue;
+                size_t at = 0, end = 0; uint32_t val = 0;
+                const bool has_code = switch_value(line, at, end, val);
+                const bool is_pad = has_code && (val & 0xF000u) == 0x4000u;
+                char buf[32];
+                if (target[p] >= 0) {
+                    if (!is_pad) break;                      // une touche choisie a la main : on la laisse
+                    std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | ((unsigned)target[p] << 8));
+                    line = line.substr(0, at) + buf + line.substr(end);
+                } else {
+                    uint32_t code = 0;
+                    if (keyboard_code_for(p, action, code)) {          // joueur 1 : le clavier
+                        const size_t q2 = line.find('"', line.find('"') + 1);
+                        const size_t kind = line.find_first_not_of(" \t", q2 + 1);
+                        std::snprintf(buf, sizeof(buf), "switch 0x%02X", code);
+                        line = line.substr(0, kind) + buf;
+                    } else if (is_pad) {                               // joueur 2 : rien
+                        std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | (0xFu << 8));
+                        line = line.substr(0, at) + buf + line.substr(end);
+                    }
+                }
+                break;                                       // la ligne appartient a ce joueur
+            }
         }
         out += line + "\n";
     }
     return out;
 }
 
-// Les lignes du joueur `player` reprises du fichier d'origine, par leur nom.
-std::string player_from_original(const std::string& current, const std::string& original, int player)
+// Les lignes des deux joueurs reprises du fichier d'origine, par leur nom.
+std::string players_from_original(const std::string& current, const std::string& original)
 {
     std::map<std::string, std::string> kept;
     {
         std::istringstream in(original);
         std::string line;
-        int fires = 0;
+        int fires[2] = {0, 0};
         while (std::getline(in, line)) {
             const std::string name = switch_line_name(line);
-            if (!name.empty() && game_action_of(name, player, fires) >= 0) kept[name] = line;
+            if (name.empty()) continue;
+            for (int p = 0; p < 2; ++p)
+                if (game_action_of(name, p, fires[p]) >= 0) { kept[name] = line; break; }
         }
     }
     std::istringstream in(current);
     std::string out, line;
-    int fires = 0;
+    int fires[2] = {0, 0};
     while (std::getline(in, line)) {
         const std::string name = switch_line_name(line);
-        if (!name.empty() && game_action_of(name, player, fires) >= 0) {
-            auto it = kept.find(name);
-            if (it != kept.end()) line = it->second;
+        if (!name.empty())
+            for (int p = 0; p < 2; ++p)
+                if (game_action_of(name, p, fires[p]) >= 0) {
+                    auto it = kept.find(name);
+                    if (it != kept.end()) line = it->second;
+                    break;
+                }
+        out += line + "\n";
+    }
+    return out;
+}
+
+// Les reglages par joueur (p1defaults.ini, p2defaults.ini) : tout le fichier
+// est a ce joueur, et c'est le numero de manette seul qui change.
+std::string retarget_defaults(const std::string& text, int target)
+{
+    std::istringstream in(text);
+    std::string out, line;
+    while (std::getline(in, line)) {
+        size_t at = 0, end = 0; uint32_t val = 0;
+        if (!switch_line_name(line).empty() && switch_value(line, at, end, val)
+            && (val & 0xF000u) == 0x4000u) {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | ((unsigned)(target < 0 ? 0xF : target) << 8));
+            line = line.substr(0, at) + buf + line.substr(end);
         }
         out += line + "\n";
     }
     return out;
 }
 
-// En-tete de la copie d'origine : « // bootcade-device-map 1>0 0>15 kb0 ».
-struct Slots {
-    std::map<int, int> map;
-    std::set<int> keyboard;     // joueurs repasses au clavier
-    bool moved = false;         // fichier mis de cote, rien a sa place
-};
+const char* const kMark = "// bootcade-device-map";
 
-Slots parse_slots(const std::string& head)
-{
-    Slots s;
-    std::istringstream hs(head.substr(std::string(kSlotsMark).size()));
-    for (std::string tok; hs >> tok; ) {
-        int a = 0, b = 0;
-        if (std::sscanf(tok.c_str(), "%d>%d", &a, &b) == 2) s.map[a] = b;
-        else if (tok.size() == 3 && tok.compare(0, 2, "kb") == 0) s.keyboard.insert(tok[2] - '0');
-        else if (tok == "moved") s.moved = true;
-    }
-    return s;
-}
-
-// Remet un fichier tel qu'il etait avant la traduction. Sans copie d'origine
-// a cote, rien a faire. Ce que le jeu a ecrit entre-temps (reglages DIP...)
-// est conserve : seules les lignes de manettes reprennent leur forme d'origine.
+// Remet un fichier tel qu'il etait avant le lancement. Les reglages que le jeu
+// a ecrits entre-temps (DIP...) sont gardes : seules les commandes des deux
+// joueurs reprennent leur forme d'origine.
 void put_back_file(const std::string& path)
 {
     const std::string side = path + ".bcslots";
     std::string kept;
     if (!read_all(side, kept)) return;
     const size_t nl = kept.find('\n');
-    const Slots sl = parse_slots(kept.substr(0, nl));
+    const std::string head = kept.substr(0, nl);
     const std::string original = nl == std::string::npos ? std::string() : kept.substr(nl + 1);
 
     std::error_code ec;
-    if (sl.moved) {
-        if (!std::filesystem::exists(path)) { std::ofstream fo(path); if (fo) fo << original; }
+    if (head.find("defaults") != std::string::npos) {
+        std::ofstream fo(path);                       // ces fichiers ne sont lus qu'au debut
+        if (fo) fo << original;
     } else {
         std::string now;
         if (read_all(path, now)) {
-            std::map<int, int> inverse;
-            for (const auto& kv : sl.map) inverse[kv.second] = kv.first;
-            std::string text = remap_devices_in(now, inverse);
-            for (int pl : sl.keyboard) text = player_from_original(text, original, pl);
             std::ofstream fo(path);
-            if (fo) fo << text;
+            if (fo) fo << players_from_original(now, original);
         }
     }
     std::filesystem::remove(side, ec);
 }
 
-void use_file(const std::string& path, const std::map<int, int>& m,
-              const std::set<int>& keyboard, bool move_away)
+void keep_original(const std::string& path, const char* kind, const std::string& text)
 {
-    std::string text;
-    if (!read_all(path, text)) return;
     std::ofstream side(path + ".bcslots");
-    if (!side) return;
-    side << kSlotsMark;
-    for (const auto& kv : m) side << ' ' << kv.first << '>' << kv.second;
-    for (int pl : keyboard) side << " kb" << pl;
-    if (move_away) side << " moved";
-    side << '\n' << text;
-    side.close();
-    if (move_away) {
-        std::error_code ec;
-        std::filesystem::remove(path, ec);
-        return;
-    }
-    std::string out = remap_devices_in(text, m);
-    for (int pl : keyboard) out = player_to_keyboard(out, pl);
-    std::ofstream fo(path);
-    if (fo) fo << out;
+    if (side) side << kMark << ' ' << kind << '\n' << text;
 }
 
 } // namespace
+
+void ControllerManager::adopt_plugged_pads(ControllerConfig& cfg, const std::vector<JoystickInfo>& present)
+{
+    std::vector<bool> taken(present.size(), false);
+    for (auto& player : cfg.players) {
+        const std::string name = trim_spaces(player.device_name);
+        if (name.empty() && player.device_path.empty()) continue;    // clavier
+
+        int found = -1;
+        // Sans nom (profil ancien) : seul le chemin dit de quelle manette il s'agit.
+        if (name.empty()) {
+            for (size_t i = 0; i < present.size(); ++i)
+                if (!taken[i] && present[i].path == player.device_path) { found = (int)i; break; }
+        } else {
+            // Deux manettes du meme nom : celle qui n'a pas bouge est preferee.
+            for (size_t i = 0; found < 0 && i < present.size(); ++i)
+                if (!taken[i] && present[i].path == player.device_path
+                    && trim_spaces(present[i].name) == name) found = (int)i;
+            for (size_t i = 0; found < 0 && i < present.size(); ++i)
+                if (!taken[i] && trim_spaces(present[i].name) == name) found = (int)i;
+        }
+        if (found >= 0) {
+            taken[found] = true;
+            player.device_path = present[found].path;
+            player.device_name = present[found].name;
+        } else {
+            player.device_path.clear();                              // absente : le nom reste, pour son retour
+        }
+    }
+}
 
 void ControllerManager::put_back_saved_devices(const std::string& fbneo_rom_name)
 {
@@ -1229,32 +1191,55 @@ void ControllerManager::use_current_devices(const std::string& fbneo_rom_name,
     // Une session precedente finie sans remise en place (arret brutal).
     put_back_saved_devices(fbneo_rom_name);
 
-    const auto m = device_remap(cfg, list_devices());
-    if (m.empty()) return;
-
-    // Un joueur dont la manette manque retrouve le clavier : les touches
-    // d'origine de FBNeo, que le profil avait remplacees par la manette.
-    std::set<int> keyboard;
-    for (int p = 0; p < 1 && p < (int)cfg.players.size(); ++p) {   // seul le joueur 1 a des touches
-        if (cfg.players[p].device_path.empty()) continue;
-        auto it = m.find((int)((joystick_base_for(cfg.players[p].device_path) >> 8) & 0xF));
-        if (it != m.end() && it->second >= 8) keyboard.insert(p);
+    // `cfg` est deja rapproche des manettes branchees (adopt_plugged_pads) :
+    // un joueur avec un chemin a sa manette, un joueur avec un nom seul l'a
+    // debranchee, un joueur sans rien joue au clavier ou n'a rien regle.
+    int target[2] = {-2, -2};
+    for (int p = 0; p < 2 && p < (int)cfg.players.size(); ++p) {
+        const auto& pl = cfg.players[p];
+        if (!pl.device_path.empty())            target[p] = (int)((joystick_base_for(pl.device_path) >> 8) & 0xF);
+        else if (!pl.device_name.empty())       target[p] = -1;
     }
+    if (target[0] == -2 && target[1] == -2) return;
 
     const std::string dir = get_fbneo_config_dir();
     const std::string ini = dir + "/games/" + fbneo_rom_name + ".ini";
-    if (std::filesystem::exists(ini)) {
-        use_file(ini, m, keyboard, false);
+    std::string text;
+    bool changed = false;
+    if (read_all(ini, text)) {
+        const std::string out = retarget_players(text, target);
+        if (out != text) {
+            keep_original(ini, "game", text);
+            std::ofstream fo(ini);
+            if (fo) fo << out;
+            changed = true;
+        }
     } else {
-        // Premier lancement : FBNeo cree le .ini depuis les reglages par
-        // joueur. Un joueur sans manette n'en a pas : FBNeo reprend alors ses
-        // touches du clavier.
-        use_file(dir + "/p1defaults.ini", m, {}, keyboard.count(0) > 0);
-        use_file(dir + "/p2defaults.ini", m, {}, false);
+        // Premier lancement : FBNeo cree le .ini depuis les reglages par joueur.
+        for (int p = 0; p < 2; ++p) {
+            if (target[p] == -2) continue;
+            const std::string path = dir + "/p" + std::to_string(p + 1) + "defaults.ini";
+            if (!read_all(path, text)) continue;
+            if (target[p] == -1 && p == 0) {
+                // Sans manette, FBNeo reprend ses touches du clavier.
+                keep_original(path, "defaults", text);
+                std::error_code ec;
+                std::filesystem::remove(path, ec);
+                changed = true;
+                continue;
+            }
+            const std::string out = retarget_defaults(text, target[p]);
+            if (out != text) {
+                keep_original(path, "defaults", text);
+                std::ofstream fo(path);
+                if (fo) fo << out;
+                changed = true;
+            }
+        }
     }
-    std::cout << "[ControllerManager] " << fbneo_rom_name << ": pads renumbered";
-    for (const auto& kv : m) std::cout << ' ' << kv.first << ">" << kv.second;
-    for (int pl : keyboard) std::cout << " P" << pl + 1 << "=keyboard";
-    std::cout << std::endl;
+    if (changed)
+        std::cout << "[ControllerManager] " << fbneo_rom_name << ": pads set for this game "
+                  << "P1=" << (target[0] >= 0 ? "js" + std::to_string(target[0]) : target[0] == -1 ? "keyboard" : "untouched")
+                  << " P2=" << (target[1] >= 0 ? "js" + std::to_string(target[1]) : target[1] == -1 ? "none" : "untouched")
+                  << std::endl;
 }
-
