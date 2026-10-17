@@ -1,6 +1,7 @@
 // src/FbneoUpdateCheck.cpp
 #include "FbneoUpdateCheck.h"
 #include "Platform.h"
+#include "FbneoChannel.h"
 
 #include "CurlInit.h"
 #include <nlohmann/json.hpp>
@@ -72,7 +73,8 @@ Result fetch_release(const char* url) {
 } // namespace
 
 Result fetch_latest() {
-    return fetch_release("https://api.github.com/repos/battousai90/FBNeo/releases/tags/latest");
+    // La version choisie dans Reglages > Emulateur : Bootcade ou officielle.
+    return fetch_release(FbneoChannel::releases_url().c_str());
 }
 
 std::string asset_name() {

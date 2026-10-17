@@ -24,6 +24,8 @@
 #include "DownloadDialog.h"
 #include "EmulatorRegistry.h"
 #include "GenerateDAT.h"
+#include "DatSource.h"
+#include "FbneoChannel.h"
 #include "FbneoUpdateCheck.h"
 #include "FbneoPaths.h"
 #include "HiscoreClient.h"
@@ -1459,6 +1461,40 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     // ── L'executable ─────────────────────────────────────────────────────
     auto exe = ui::card("bc-folder.svg", _("Executable"),
                         _("Select the FinalBurn Neo executable used to launch games."));
+    /* Quel FinalBurn Neo : celui de Bootcade, ou l'officiel.
+     *
+     * Chacun a son dossier, son executable et ses DAT : passer de l'un a
+     * l'autre ne supprime rien. L'officiel est la release « latest » de
+     * finalburnneo/FBNeo ; celui de Bootcade en est la version suivie chaque
+     * jour, avec en plus ce que le lanceur utilise (scores, balises des DAT). */
+    {
+        auto* chan_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+        auto* chan_label = ui::title_label(_("Version"));
+        chan_label->set_valign(Gtk::ALIGN_CENTER);
+        m_combo_fbneo_channel.append(FbneoChannel::kBootcade,
+                                     _("Bootcade — the version Bootcade tracks every day"));
+        m_combo_fbneo_channel.append(FbneoChannel::kOfficial,
+                                     _("Official — the latest build of finalburnneo/FBNeo"));
+        m_combo_fbneo_channel.set_active_id(FbneoChannel::current());
+        m_combo_fbneo_channel.set_tooltip_text(
+            _("The official build has its own folder and its own DAT files, so its game list is "
+              "its own. Online scores and the genre, series and player tags of the DAT files "
+              "come with the Bootcade version."));
+        m_combo_fbneo_channel.signal_changed().connect(
+            sigc::mem_fun(*this, &SettingsPanel::on_fbneo_channel_changed));
+        chan_line->pack_start(*chan_label, Gtk::PACK_SHRINK);
+        chan_line->pack_start(m_combo_fbneo_channel, Gtk::PACK_EXPAND_WIDGET);
+#ifndef _WIN32
+        // Sous Windows il n'y a que la version Bootcade (FbneoChannel::current).
+        exe.body->pack_start(*chan_line, Gtk::PACK_SHRINK);
+#endif
+        m_lbl_fbneo_channel_note.set_xalign(0.0f);
+        m_lbl_fbneo_channel_note.set_line_wrap(true);
+        m_lbl_fbneo_channel_note.get_style_context()->add_class("set-sub");
+        m_lbl_fbneo_channel_note.set_no_show_all(true);
+        exe.body->pack_start(m_lbl_fbneo_channel_note, Gtk::PACK_SHRINK);
+    }
+
     auto* exe_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
     m_entry_fbneo.set_hexpand(true);
     exe_line->pack_start(m_entry_fbneo, Gtk::PACK_EXPAND_WIDGET);
@@ -3037,7 +3073,7 @@ void SettingsPanel::check_emulator_update_async() {
             nlohmann::json j;
             std::ifstream fi(AppContext::get_config_path());
             if (fi) { try { fi >> j; } catch (...) {} }
-            known = j.value("fbneo_release_sha", std::string());
+            known = j.value(FbneoChannel::sha_key(), std::string());
         }
         {
             std::lock_guard<std::mutex> lock(m_emu_mutex);
@@ -3234,7 +3270,7 @@ void SettingsPanel::refresh_emulator_state() {
     // « Build » : l'empreinte du commit que le lanceur a telecharge. C'est la
     // seule identite de version que cette distribution de FBNeo expose ; en
     // inventer un numero serait plus lisible et faux.
-    std::string sha = j.value("fbneo_release_sha", std::string());
+    std::string sha = j.value(FbneoChannel::sha_key(), std::string());
     m_lbl_emu_version.set_text(sha.empty() ? std::string(_("Unknown"))
                                            : sha.substr(0, 7));
     const std::string installed = file_date(exe);
@@ -4273,6 +4309,13 @@ bool SettingsPanel::load_from_file(const std::string& filename) {
         file >> j;
 
         if (j.contains("dat_path")) set_dat_path(j["dat_path"]);
+        // Avec le FBNeo officiel, le dossier de DAT est celui de SON groupe :
+        // jamais celui du fork, ou la generation ecraserait ses DAT.
+        if (FbneoChannel::official()) {
+            const auto groups = DatSource::load_groups();
+            if (const auto* g = DatSource::group_for(groups, "fbneo"))
+                if (!g->folder.empty()) set_dat_path(g->folder);
+        }
         if (j.contains("rom_manager") && j["rom_manager"].is_object()) {
             const auto& rm = j["rom_manager"];
             if (rm.contains("outbox_path") && rm["outbox_path"].is_string())         set_outbox_path(rm["outbox_path"]);
@@ -4648,19 +4691,43 @@ void SettingsPanel::refresh_roms_list() {
     }
 }
 
+/* Le joueur change de FinalBurn Neo. L'executable de l'autre version reprend
+ * sa place, le dossier de DAT aussi, et ce qui est deja installe ne bouge pas. */
+void SettingsPanel::on_fbneo_channel_changed() {
+    const std::string chosen = m_combo_fbneo_channel.get_active_id() == FbneoChannel::kOfficial
+        ? FbneoChannel::kOfficial : FbneoChannel::kBootcade;
+    if (chosen == FbneoChannel::current()) return;
+
+    const auto now = FbneoChannel::switch_to(chosen, m_entry_fbneo.get_text());
+    m_entry_fbneo.set_text(now.executable);
+    if (!now.dat_folder.empty()) m_entry_dat.set_text(now.dat_folder);
+    save_to_file(AppContext::get_config_path());
+
+    // Dire ce qu'il reste a faire, sans rien faire a sa place.
+    Glib::ustring note;
+    if (now.executable.empty())
+        note = chosen == FbneoChannel::kOfficial
+            ? _("The official FinalBurn Neo is not installed yet: use Download, then generate its DAT files.")
+            : _("The Bootcade version is not installed yet: use Download.");
+    else if (chosen == FbneoChannel::kOfficial)
+        note = _("Generate the DAT files of this version, then update the game list.");
+    m_lbl_fbneo_channel_note.set_text(note);
+    m_lbl_fbneo_channel_note.set_visible(!note.empty());
+    refresh_emulator_state();
+}
+
 void SettingsPanel::on_download_fbneo_clicked() {
     auto parent_window = dynamic_cast<Gtk::Window*>(get_toplevel());
     if (!parent_window) return;
 
-    const std::string folder =
-        DownloadDialog::choose_fbneo_folder(*parent_window, m_entry_fbneo.get_text(), true);
+    const std::string folder = DownloadDialog::choose_fbneo_folder(
+        *parent_window, m_entry_fbneo.get_text(), true, FbneoChannel::install_subfolder());
     if (folder.empty()) return;
+    // L'adresse suit la version choisie : voir FbneoChannel::download_url pour
+    // la raison d'etre du fork.
     auto download_dialog = std::make_unique<DownloadDialog>(
         *parent_window,
-        // finalburnneo/FBNeo stopped maintaining the SDL/Linux build (missing DAT
-        // export calls for several systems, upstream declined the fix) : this fork
-        // tracks their master daily and carries just that fix. See website FAQ.
-        FbneoUpdateCheck::download_url(),
+        FbneoChannel::download_url(),
         folder
     );
 
@@ -4678,7 +4745,7 @@ void SettingsPanel::on_download_fbneo_clicked() {
         nlohmann::json j;
         const std::string path = AppContext::get_config_path();
         { std::ifstream fi(path); if (fi) { try { fi >> j; } catch (...) { j = nlohmann::json{}; } } }
-        j["fbneo_release_sha"] = r.sha;
+        j[FbneoChannel::sha_key()] = r.sha;
         std::ofstream fo(path);
         if (fo) fo << j.dump(4);
     }

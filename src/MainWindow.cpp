@@ -21,6 +21,7 @@
 #include "HostLibraries.h"
 #include "GameListSetup.h"
 #include "GenerateDAT.h"
+#include "FbneoChannel.h"
 #include "FbneoUpdateCheck.h"
 #include "FbneoPaths.h"
 #include "ScreenshotAssignDialog.h"
@@ -3409,9 +3410,15 @@ void MainWindow::on_play_clicked() {
     // reecrire le .ini depuis, ou un « Reset game settings » l'a efface.
     const bool own_profile = ControllerManager::load_game_profiles(
         AppContext::get_config_path()).count(fbneo_rom_name) > 0;
-    if (const ControllerConfig* launch_profile = controller_profile_for(fbneo_rom_name)) {
-        if (own_profile) ControllerManager::write_game_config(*launch_profile, fbneo_rom_name);
-        ControllerManager::apply_analog_bindings(fbneo_rom_name, *launch_profile);
+    if (const ControllerConfig* saved_profile = controller_profile_for(fbneo_rom_name)) {
+        // Les manettes d'AUJOURD'HUI : chaque joueur retrouve la sienne par son
+        // nom, et sans elle le joueur 1 joue au clavier (voir use_current_devices).
+        ControllerConfig launch_profile = *saved_profile;
+        ControllerManager::adopt_plugged_pads(launch_profile, ControllerManager::list_devices());
+        if (own_profile) ControllerManager::write_game_config(launch_profile, fbneo_rom_name);
+        ControllerManager::apply_analog_bindings(fbneo_rom_name, launch_profile);
+        // En dernier, une fois les boutons poses.
+        ControllerManager::use_current_devices(fbneo_rom_name, launch_profile);
     }
 
     // Snapshot of the score table BEFORE play. Without it the server cannot
@@ -3499,6 +3506,9 @@ void MainWindow::on_play_clicked() {
                     m_ach_dispatcher.emit();
                 }
             }
+            // D'abord les numeros de manettes d'origine : tout ce qui suit
+            // repare un fichier ecrit avec les numeros enregistres.
+            ControllerManager::put_back_saved_devices(fbneo_rom_name);
             // FBNeo has just written config/games/<rom>.ini on exit : this is
             // the only moment a complete file exists to repair.
             ControllerManager::fix_player2_input_conflicts(fbneo_rom_name);
@@ -7143,7 +7153,7 @@ void MainWindow::on_fbneo_update_check_result() {
 
     nlohmann::json j;
     { std::ifstream fi(AppContext::get_config_path()); if (fi) { try { fi >> j; } catch (...) {} } }
-    std::string known_sha = j.value("fbneo_release_sha", "");
+    std::string known_sha = j.value(FbneoChannel::sha_key(), "");
 
     if (!known_sha.empty()) {
         // We have a launcher-recorded baseline (a download done through this
@@ -7189,13 +7199,13 @@ void MainWindow::on_download_latest_fbneo() {
     // Une mise a jour remplace FinalBurn Neo la ou il est deja ; le dossier
     // ne se demande que s'il n'y en a pas encore.
     const std::string folder = DownloadDialog::choose_fbneo_folder(
-        *this, m_settings_panel.get_fbneo_executable(), false);
+        *this, m_settings_panel.get_fbneo_executable(), false, FbneoChannel::install_subfolder());
     if (folder.empty()) return;
     auto download_dialog = std::make_unique<DownloadDialog>(
         *this,
         // See SettingsPanel::on_download_fbneo_clicked for why this points at our
         // own fork instead of finalburnneo/FBNeo directly.
-        FbneoUpdateCheck::download_url(),
+        FbneoChannel::download_url(),
         folder
     );
 
@@ -7214,7 +7224,7 @@ void MainWindow::on_download_latest_fbneo() {
         nlohmann::json j;
         const std::string path = AppContext::get_config_path();
         { std::ifstream fi(path); if (fi) { try { fi >> j; } catch (...) { j = nlohmann::json{}; } } }
-        j["fbneo_release_sha"] = sha;
+        j[FbneoChannel::sha_key()] = sha;
         std::ofstream fo(path);
         if (fo) fo << j.dump(4);
     };
@@ -9162,7 +9172,7 @@ void MainWindow::refresh_emu_state() {
             nlohmann::json j;
             std::ifstream fi(AppContext::get_config_path());
             if (fi) { try { fi >> j; } catch (...) {} }
-            const std::string sha = j.value("fbneo_release_sha", std::string());
+            const std::string sha = j.value(FbneoChannel::sha_key(), std::string());
             if (!sha.empty()) version = sha.substr(0, 7);
         }
     }

@@ -37,7 +37,7 @@ int progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_
 }
 
 std::string DownloadDialog::choose_fbneo_folder(Gtk::Window& parent, const std::string& current_exe,
-                                                bool ask) {
+                                                bool ask, const std::string& default_sub) {
     const char* home_env = std::getenv("HOME");
     const fs::path home = home_env ? fs::path(home_env) : fs::current_path();
 
@@ -48,7 +48,7 @@ std::string DownloadDialog::choose_fbneo_folder(Gtk::Window& parent, const std::
     // Les versions precedentes l'installaient a la racine du dossier
     // personnel : on n'y reinstalle pas, on propose un vrai dossier.
     if (folder.empty() || fs::equivalent(folder, home, ec))
-        folder = DefaultFolders::sub("Emulators/FBNeo");
+        folder = DefaultFolders::sub(default_sub);
     else if (!ask)
         return folder.string();
 
