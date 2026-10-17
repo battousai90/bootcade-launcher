@@ -5,7 +5,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <glob.h>
+#include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <sstream>
 #include <iomanip>
 #include <iostream>
@@ -14,6 +16,7 @@
 #include <cctype>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -945,4 +948,313 @@ void ControllerManager::apply_analog_bindings(const std::string& fbneo_rom_name,
     std::ofstream fo(path, std::ios::trunc);
     if (!fo) return;
     for (const auto& line : lines) fo << line << "\n";
+}
+
+// ── Manettes branchees aujourd'hui ───────────────────────────────────────
+
+namespace {
+
+std::string trim_spaces(const std::string& s) {
+    const size_t b = s.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return {};
+    return s.substr(b, s.find_last_not_of(" \t\r\n") - b + 1);
+}
+
+bool read_all(const std::string& path, std::string& out) {
+    std::ifstream f(path);
+    if (!f) return false;
+    std::ostringstream ss; ss << f.rdbuf(); out = ss.str();
+    return true;
+}
+
+// Les touches d'origine de FBNeo pour le joueur 1 (le joueur 2 n'en a pas :
+// ses defauts sont des boutons de manette). Codes DirectInput de FBNeo.
+bool keyboard_code_for(int player, int action, uint32_t& code)
+{
+    if (player != 0) return false;
+    static const uint32_t fire[9] = {0x2C, 0x2D, 0x2E, 0x1E, 0x1F, 0x20, 0x10, 0x11, 0x12};  // Z X C A S D Q W E
+    switch (static_cast<GameAction>(action)) {
+        case GameAction::UP:    code = 0xC8; return true;
+        case GameAction::DOWN:  code = 0xD0; return true;
+        case GameAction::LEFT:  code = 0xCB; return true;
+        case GameAction::RIGHT: code = 0xCD; return true;
+        case GameAction::START: code = 0x02; return true;   // 1
+        case GameAction::COIN:  code = 0x06; return true;   // 5
+        default: break;
+    }
+    const int n = button_number(static_cast<GameAction>(action));
+    if (n >= 1 && n <= 9) { code = fire[n - 1]; return true; }
+    return false;
+}
+
+// Le nom d'une ligne « input "<nom>" switch|undefined ... », ou "" sinon.
+std::string switch_line_name(const std::string& l)
+{
+    const size_t p0 = l.find_first_not_of(" \t");
+    if (p0 == std::string::npos || l.compare(p0, 5, "input") != 0) return {};
+    const size_t q1 = l.find('"');
+    const size_t q2 = q1 == std::string::npos ? q1 : l.find('"', q1 + 1);
+    if (q2 == std::string::npos) return {};
+    const size_t kind = l.find_first_not_of(" \t", q2 + 1);
+    if (kind == std::string::npos
+        || (l.compare(kind, 6, "switch") != 0 && l.compare(kind, 9, "undefined") != 0)) return {};
+    return l.substr(q1 + 1, q2 - q1 - 1);
+}
+
+// « switch 0x4186 » : la valeur de la ligne, ou false si ce n'est pas un code.
+bool switch_value(const std::string& l, size_t& value_at, size_t& value_end, uint32_t& value)
+{
+    const size_t q2 = l.find('"', l.find('"') + 1);
+    const size_t kind = l.find_first_not_of(" \t", q2 + 1);
+    if (kind == std::string::npos || l.compare(kind, 6, "switch") != 0) return false;
+    value_at = l.find_first_not_of(" \t", kind + 6);
+    if (value_at == std::string::npos) return false;
+    value_end = l.find_first_of(" \t\r\n", value_at);
+    if (value_end == std::string::npos) value_end = l.size();
+    try { value = (uint32_t)std::stoul(l.substr(value_at, value_end - value_at), nullptr, 0); }
+    catch (...) { return false; }
+    return true;
+}
+
+// Les commandes de chaque joueur, d'apres la manette qu'il a MAINTENANT.
+// target[p] : numero de manette actuel (>= 0), -1 (absente), -2 (pas de manette
+// reglee pour ce joueur : on n'y touche pas). Une manette presente recoit les
+// boutons de SON profil : deux manettes n'ont pas les memes numeros de boutons.
+std::string retarget_players(const std::string& text, const int target[2],
+                             const ControllerConfig& cfg)
+{
+    std::istringstream in(text);
+    std::string out, line;
+    int fires[2] = {0, 0};
+    while (std::getline(in, line)) {
+        const std::string name = switch_line_name(line);
+        if (!name.empty()) {
+            for (int p = 0; p < 2; ++p) {
+                const int action = game_action_of(name, p, fires[p]);
+                if (action < 0 || target[p] == -2) continue;
+                size_t at = 0, end = 0; uint32_t val = 0;
+                const bool has_code = switch_value(line, at, end, val);
+                const bool is_pad = has_code && (val & 0xF000u) == 0x4000u;
+                char buf[32];
+                if (target[p] >= 0) {
+                    const uint32_t base = 0x4000u | ((uint32_t)target[p] << 8);
+                    uint32_t sw = 0;
+                    const auto& binds = cfg.players[p].bindings;
+                    auto it = binds.find(static_cast<GameAction>(action));
+                    if (it != binds.end() && it->second.valid
+                        && switch_code_for(it->second, action, base, sw)) {
+                        // Le bouton que le profil donne a cette action, sur cette manette.
+                        const size_t q2 = line.find('"', line.find('"') + 1);
+                        const size_t kind = line.find_first_not_of(" \t", q2 + 1);
+                        std::snprintf(buf, sizeof(buf), "switch 0x%X", sw);
+                        line = line.substr(0, kind) + buf;
+                    } else if (is_pad) {
+                        // Rien dans le profil : le meme bouton, sur la bonne manette.
+                        std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | ((unsigned)target[p] << 8));
+                        line = line.substr(0, at) + buf + line.substr(end);
+                    }
+                } else {
+                    uint32_t code = 0;
+                    if (keyboard_code_for(p, action, code)) {          // joueur 1 : le clavier
+                        const size_t q2 = line.find('"', line.find('"') + 1);
+                        const size_t kind = line.find_first_not_of(" \t", q2 + 1);
+                        std::snprintf(buf, sizeof(buf), "switch 0x%02X", code);
+                        line = line.substr(0, kind) + buf;
+                    } else if (is_pad) {                               // joueur 2 : rien
+                        std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | (0xFu << 8));
+                        line = line.substr(0, at) + buf + line.substr(end);
+                    }
+                }
+                break;                                       // la ligne appartient a ce joueur
+            }
+        }
+        out += line + "\n";
+    }
+    return out;
+}
+
+// Les lignes des deux joueurs reprises du fichier d'origine, par leur nom.
+std::string players_from_original(const std::string& current, const std::string& original)
+{
+    std::map<std::string, std::string> kept;
+    {
+        std::istringstream in(original);
+        std::string line;
+        int fires[2] = {0, 0};
+        while (std::getline(in, line)) {
+            const std::string name = switch_line_name(line);
+            if (name.empty()) continue;
+            for (int p = 0; p < 2; ++p)
+                if (game_action_of(name, p, fires[p]) >= 0) { kept[name] = line; break; }
+        }
+    }
+    std::istringstream in(current);
+    std::string out, line;
+    int fires[2] = {0, 0};
+    while (std::getline(in, line)) {
+        const std::string name = switch_line_name(line);
+        if (!name.empty())
+            for (int p = 0; p < 2; ++p)
+                if (game_action_of(name, p, fires[p]) >= 0) {
+                    auto it = kept.find(name);
+                    if (it != kept.end()) line = it->second;
+                    break;
+                }
+        out += line + "\n";
+    }
+    return out;
+}
+
+// Les reglages par joueur (p1defaults.ini, p2defaults.ini) : tout le fichier
+// est a ce joueur, et c'est le numero de manette seul qui change.
+std::string retarget_defaults(const std::string& text, int target)
+{
+    std::istringstream in(text);
+    std::string out, line;
+    while (std::getline(in, line)) {
+        size_t at = 0, end = 0; uint32_t val = 0;
+        if (!switch_line_name(line).empty() && switch_value(line, at, end, val)
+            && (val & 0xF000u) == 0x4000u) {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | ((unsigned)(target < 0 ? 0xF : target) << 8));
+            line = line.substr(0, at) + buf + line.substr(end);
+        }
+        out += line + "\n";
+    }
+    return out;
+}
+
+const char* const kMark = "// bootcade-device-map";
+
+// Remet un fichier tel qu'il etait avant le lancement. Les reglages que le jeu
+// a ecrits entre-temps (DIP...) sont gardes : seules les commandes des deux
+// joueurs reprennent leur forme d'origine.
+void put_back_file(const std::string& path)
+{
+    const std::string side = path + ".bcslots";
+    std::string kept;
+    if (!read_all(side, kept)) return;
+    const size_t nl = kept.find('\n');
+    const std::string head = kept.substr(0, nl);
+    const std::string original = nl == std::string::npos ? std::string() : kept.substr(nl + 1);
+
+    std::error_code ec;
+    if (head.find("defaults") != std::string::npos) {
+        std::ofstream fo(path);                       // ces fichiers ne sont lus qu'au debut
+        if (fo) fo << original;
+    } else {
+        std::string now;
+        if (read_all(path, now)) {
+            std::ofstream fo(path);
+            if (fo) fo << players_from_original(now, original);
+        }
+    }
+    std::filesystem::remove(side, ec);
+}
+
+void keep_original(const std::string& path, const char* kind, const std::string& text)
+{
+    std::ofstream side(path + ".bcslots");
+    if (side) side << kMark << ' ' << kind << '\n' << text;
+}
+
+} // namespace
+
+void ControllerManager::adopt_plugged_pads(ControllerConfig& cfg, const std::vector<JoystickInfo>& present)
+{
+    std::vector<bool> taken(present.size(), false);
+    for (auto& player : cfg.players) {
+        const std::string name = trim_spaces(player.device_name);
+        if (name.empty() && player.device_path.empty()) continue;    // clavier
+
+        int found = -1;
+        // Sans nom (profil ancien) : seul le chemin dit de quelle manette il s'agit.
+        if (name.empty()) {
+            for (size_t i = 0; i < present.size(); ++i)
+                if (!taken[i] && present[i].path == player.device_path) { found = (int)i; break; }
+        } else {
+            // Deux manettes du meme nom : celle qui n'a pas bouge est preferee.
+            for (size_t i = 0; found < 0 && i < present.size(); ++i)
+                if (!taken[i] && present[i].path == player.device_path
+                    && trim_spaces(present[i].name) == name) found = (int)i;
+            for (size_t i = 0; found < 0 && i < present.size(); ++i)
+                if (!taken[i] && trim_spaces(present[i].name) == name) found = (int)i;
+        }
+        if (found >= 0) {
+            taken[found] = true;
+            player.device_path = present[found].path;
+            player.device_name = present[found].name;
+        } else {
+            player.device_path.clear();                              // absente : le nom reste, pour son retour
+        }
+    }
+}
+
+void ControllerManager::put_back_saved_devices(const std::string& fbneo_rom_name)
+{
+    if (fbneo_rom_name.empty()) return;
+    const std::string dir = get_fbneo_config_dir();
+    put_back_file(dir + "/games/" + fbneo_rom_name + ".ini");
+    put_back_file(dir + "/p1defaults.ini");
+    put_back_file(dir + "/p2defaults.ini");
+}
+
+void ControllerManager::use_current_devices(const std::string& fbneo_rom_name,
+                                            const ControllerConfig& cfg)
+{
+    if (fbneo_rom_name.empty()) return;
+    // Une session precedente finie sans remise en place (arret brutal).
+    put_back_saved_devices(fbneo_rom_name);
+
+    // `cfg` est deja rapproche des manettes branchees (adopt_plugged_pads) :
+    // un joueur avec un chemin a sa manette, un joueur avec un nom seul l'a
+    // debranchee, un joueur sans rien joue au clavier ou n'a rien regle.
+    int target[2] = {-2, -2};
+    for (int p = 0; p < 2 && p < (int)cfg.players.size(); ++p) {
+        const auto& pl = cfg.players[p];
+        if (!pl.device_path.empty())            target[p] = (int)((joystick_base_for(pl.device_path) >> 8) & 0xF);
+        else if (!pl.device_name.empty())       target[p] = -1;
+    }
+    if (target[0] == -2 && target[1] == -2) return;
+
+    const std::string dir = get_fbneo_config_dir();
+    const std::string ini = dir + "/games/" + fbneo_rom_name + ".ini";
+    std::string text;
+    bool changed = false;
+    if (read_all(ini, text)) {
+        const std::string out = retarget_players(text, target, cfg);
+        if (out != text) {
+            keep_original(ini, "game", text);
+            std::ofstream fo(ini);
+            if (fo) fo << out;
+            changed = true;
+        }
+    } else {
+        // Premier lancement : FBNeo cree le .ini depuis les reglages par joueur.
+        for (int p = 0; p < 2; ++p) {
+            if (target[p] == -2) continue;
+            const std::string path = dir + "/p" + std::to_string(p + 1) + "defaults.ini";
+            if (!read_all(path, text)) continue;
+            if (target[p] == -1 && p == 0) {
+                // Sans manette, FBNeo reprend ses touches du clavier.
+                keep_original(path, "defaults", text);
+                std::error_code ec;
+                std::filesystem::remove(path, ec);
+                changed = true;
+                continue;
+            }
+            const std::string out = retarget_defaults(text, target[p]);
+            if (out != text) {
+                keep_original(path, "defaults", text);
+                std::ofstream fo(path);
+                if (fo) fo << out;
+                changed = true;
+            }
+        }
+    }
+    if (changed)
+        std::cout << "[ControllerManager] " << fbneo_rom_name << ": pads set for this game "
+                  << "P1=" << (target[0] >= 0 ? "js" + std::to_string(target[0]) : target[0] == -1 ? "keyboard" : "untouched")
+                  << " P2=" << (target[1] >= 0 ? "js" + std::to_string(target[1]) : target[1] == -1 ? "none" : "untouched")
+                  << std::endl;
 }
