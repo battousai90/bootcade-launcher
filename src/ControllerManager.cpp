@@ -1018,8 +1018,10 @@ bool switch_value(const std::string& l, size_t& value_at, size_t& value_end, uin
 
 // Les commandes de chaque joueur, d'apres la manette qu'il a MAINTENANT.
 // target[p] : numero de manette actuel (>= 0), -1 (absente), -2 (pas de manette
-// reglee pour ce joueur : on n'y touche pas).
-std::string retarget_players(const std::string& text, const int target[2])
+// reglee pour ce joueur : on n'y touche pas). Une manette presente recoit les
+// boutons de SON profil : deux manettes n'ont pas les memes numeros de boutons.
+std::string retarget_players(const std::string& text, const int target[2],
+                             const ControllerConfig& cfg)
 {
     std::istringstream in(text);
     std::string out, line;
@@ -1035,9 +1037,22 @@ std::string retarget_players(const std::string& text, const int target[2])
                 const bool is_pad = has_code && (val & 0xF000u) == 0x4000u;
                 char buf[32];
                 if (target[p] >= 0) {
-                    if (!is_pad) break;                      // une touche choisie a la main : on la laisse
-                    std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | ((unsigned)target[p] << 8));
-                    line = line.substr(0, at) + buf + line.substr(end);
+                    const uint32_t base = 0x4000u | ((uint32_t)target[p] << 8);
+                    uint32_t sw = 0;
+                    const auto& binds = cfg.players[p].bindings;
+                    auto it = binds.find(static_cast<GameAction>(action));
+                    if (it != binds.end() && it->second.valid
+                        && switch_code_for(it->second, action, base, sw)) {
+                        // Le bouton que le profil donne a cette action, sur cette manette.
+                        const size_t q2 = line.find('"', line.find('"') + 1);
+                        const size_t kind = line.find_first_not_of(" \t", q2 + 1);
+                        std::snprintf(buf, sizeof(buf), "switch 0x%X", sw);
+                        line = line.substr(0, kind) + buf;
+                    } else if (is_pad) {
+                        // Rien dans le profil : le meme bouton, sur la bonne manette.
+                        std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | ((unsigned)target[p] << 8));
+                        line = line.substr(0, at) + buf + line.substr(end);
+                    }
                 } else {
                     uint32_t code = 0;
                     if (keyboard_code_for(p, action, code)) {          // joueur 1 : le clavier
@@ -1207,7 +1222,7 @@ void ControllerManager::use_current_devices(const std::string& fbneo_rom_name,
     std::string text;
     bool changed = false;
     if (read_all(ini, text)) {
-        const std::string out = retarget_players(text, target);
+        const std::string out = retarget_players(text, target, cfg);
         if (out != text) {
             keep_original(ini, "game", text);
             std::ofstream fo(ini);
