@@ -245,6 +245,8 @@ std::vector<Group> load_groups() {
             grp.active      = flag(g, "active", true);
             grp.last_check  = str(g, "last_check");
             grp.last_update = str(g, "last_update");
+            grp.variant     = str(g, "variant");
+            grp.version     = str(g, "version");
             if (g.contains("all_files") || g.contains("files")) {
                 grp.all_files = flag(g, "all_files", true);
                 grp.files     = list(g, "files");
@@ -346,6 +348,8 @@ bool save_groups(const std::vector<Group>& groups) {
         o["dat_rules"] = std::move(rules);
         o["last_check"] = g.last_check;
         o["last_update"] = g.last_update;
+        o["variant"] = g.variant;
+        o["version"] = g.version;
         arr.push_back(std::move(o));
     }
     j["rom_manager"]["dat_groups"] = std::move(arr);

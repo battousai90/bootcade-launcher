@@ -293,10 +293,13 @@ DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& root
 // ── CacheIndex ──────────────────────────────────────────────────────────────
 
 bool under_any_root(const std::string& path, const std::vector<std::string>& roots) {
+    // Sous Windows le separateur est « \ » : le cache du scan l'ecrit ainsi
+    // (Z:\...\FBNeo\jeu.zip), et n'accepter que « / » ne reconnaissait aucun fichier.
+    auto is_sep = [](char c) { return c == '/' || c == '\\'; };
     for (std::string root : roots) {
-        while (root.size() > 1 && root.back() == '/') root.pop_back();
+        while (root.size() > 1 && is_sep(root.back())) root.pop_back();
         if (root.empty()) continue;
-        if (path.size() > root.size() && path.compare(0, root.size(), root) == 0 && path[root.size()] == '/')
+        if (path.size() > root.size() && path.compare(0, root.size(), root) == 0 && is_sep(path[root.size()]))
             return true;
     }
     return false;

@@ -184,7 +184,18 @@ bool GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executab
     patch_fbneo_ini_dat_path(dat_output_dir);
 
     // Execute fbneo -dat command (no shell : safe for paths with spaces)
-    int result = spawn_and_wait({fbneo_executable, "-dat"}, progress_dialog, *progress_bar);
+    int result = 0;
+    if (FbneoPaths::is_win32_build(fbneo_executable)) {
+        // Le FBNeo officiel de Windows n'a pas de -dat : « -listinfoall
+        // <dossier> » ecrit les memes fichiers, en silence, dans un dossier qui
+        // doit deja exister.
+        std::error_code mk;
+        std::filesystem::create_directories(dat_output_dir, mk);
+        result = spawn_and_wait({fbneo_executable, "-listinfoall", dat_output_dir},
+                                progress_dialog, *progress_bar);
+    } else {
+        result = spawn_and_wait({fbneo_executable, "-dat"}, progress_dialog, *progress_bar);
+    }
     
     progress_dialog.hide();
     

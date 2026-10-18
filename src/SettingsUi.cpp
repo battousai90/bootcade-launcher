@@ -673,9 +673,12 @@ Gtk::TreeViewColumn* Table::add_check_column(const Gtk::TreeModelColumn<bool>& c
         col->set_widget(*m_header_check);
         col->set_clickable(true);
         col->signal_clicked().connect([this, on_header] {
-            // Toutes cochees : on decoche. Sinon (aucune, ou une partie) : on coche.
-            const bool all = m_header_check->get_active() && !m_header_check->get_inconsistent();
-            on_header(!all);
+            // Au moins une cochee : on decoche tout. Aucune : on coche tout.
+            // « Toutes cochees » ne suffisait pas : quand certaines lignes ne
+            // peuvent pas l'etre, la case restait a moitie et recochait tout a
+            // chaque clic, sans jamais pouvoir decocher.
+            const bool any = m_header_check->get_active() || m_header_check->get_inconsistent();
+            on_header(!any);
             refresh_header_check();
         });
     }
@@ -1110,6 +1113,47 @@ void fit_to_content(Gtk::Window& win, Gtk::Window* anchor,
             if (avail_h > 0) h = std::min(h, avail_h);
         }
         win.set_default_size(w, h);
+    });
+}
+
+void fit_work_window(Gtk::Window& win, Gtk::Window* anchor) {
+    size_work_window(win, anchor);
+    auto done = std::make_shared<bool>(false);
+    win.signal_show().connect([&win, anchor, done] {
+        if (*done) return;
+        *done = true;
+        int w = 0, h = 0;
+        win.get_default_size(w, h);
+        Gtk::Requisition minimum, natural;
+        win.get_preferred_size(minimum, natural);
+        w = std::max({w, minimum.width, natural.width});
+        h = std::max({h, minimum.height});
+        Glib::RefPtr<Gdk::Monitor> monitor;
+        if (auto display = Gdk::Display::get_default()) {
+            if (anchor && anchor->get_window())
+                monitor = display->get_monitor_at_window(anchor->get_window());
+            if (!monitor) monitor = display->get_primary_monitor();
+            if (!monitor && display->get_n_monitors() > 0) monitor = display->get_monitor(0);
+        }
+        if (monitor) {
+            Gdk::Rectangle work;
+            monitor->get_workarea(work);
+            if (work.get_width() > 0)  w = std::min(w, work.get_width()  * 95 / 100);
+            if (work.get_height() > 0) h = std::min(h, work.get_height() * 95 / 100);
+        }
+        // Jamais plus grande que la fenetre principale, et posee au milieu
+        // d'elle. Une marge : la bordure et l'ombre de la fenetre s'ajoutent.
+        int ax = 0, ay = 0, aw = 0, ah = 0;
+        const bool on_anchor = anchor && anchor->get_visible();
+        if (on_anchor) {
+            anchor->get_size(aw, ah);
+            anchor->get_position(ax, ay);
+            if (aw > 40) w = std::min(w, aw - 24);
+            if (ah > 40) h = std::min(h, ah - 24);
+        }
+        win.set_default_size(w, h);
+        win.resize(w, h);
+        if (on_anchor && aw > 0 && ah > 0) win.move(ax + (aw - w) / 2, ay + (ah - h) / 2);
     });
 }
 

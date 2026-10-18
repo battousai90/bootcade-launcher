@@ -24,6 +24,15 @@ std::string hiscores_dir();    // <racine>/support/hiscores
 std::string screenshots_dir(); // <racine>/screenshots
 std::string dat_lists_dir();   // ou FinalBurn Neo ecrit ses DAT par defaut
 
+// Vrai pour le FBNeo officiel de Windows (fbneo64.exe, fbneo32.exe) : un autre
+// programme que le port SDL2, avec ses propres options (« -w » pour une
+// fenetre, « -listinfoall » pour les DAT) et son ini dans config/. Toujours
+// faux sous Linux.
+bool is_win32_build(const std::string& exe);
+
+// Pose « cle valeur » dans l'ini principal (cree le fichier au besoin).
+bool set_ini_value(const std::string& key, const std::string& value);
+
 // Un dossier de ROMs, tel que FinalBurn Neo le veut dans son ini : avec un
 // separateur final.
 std::string with_trailing_separator(std::string path);

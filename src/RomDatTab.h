@@ -60,7 +60,10 @@ public:
     sigc::signal<void, std::string>& signal_folder_changed() { return m_sig_folder; }
     // FBNeo should write its DATs into the folder : the owner runs GenerateDAT
     // (it owns the window and the dialogs), then the tab is refreshed.
-    sigc::signal<void, std::string>& signal_generate_requested() { return m_sig_generate; }
+    // Generer les DAT de FinalBurn Neo : le dossier, et l'executable de la version du groupe.
+    sigc::signal<void, std::string, std::string>& signal_generate_requested() { return m_sig_generate; }
+    // Apres une generation : la version de l'emulateur est notee sur le groupe.
+    void note_generated();
     // Groups were added, renamed, removed, enabled or their selection
     // changed : the Library combo follows.
     sigc::signal<void>& signal_groups_changed() { return m_sig_groups; }
@@ -207,11 +210,19 @@ private:
     Gtk::Label          m_status;
 
     SettingsUi::Table*  m_table = nullptr;
-    Gtk::Box            m_info_column{Gtk::ORIENTATION_VERTICAL, SettingsUi::kCardSpacing};
+    Gtk::Box            m_info_column{Gtk::ORIENTATION_HORIZONTAL, SettingsUi::kCardSpacing};
     // Les quatre cartes de la colonne se replient comme celles des Settings
     // (SettingsUi::fold) ; leur etat se retrouve d'une ouverture a l'autre
     // (cle « rom_dat_sections » de config.json).
     std::map<std::string, SettingsUi::Fold> m_folds;
+    // Les fiches sous le tableau : un onglet chacune, toute la largeur.
+    Gtk::Stack          m_info_stack;
+    Gtk::Box            m_info_tabs{Gtk::ORIENTATION_HORIZONTAL, 6};
+    std::vector<std::pair<std::string, Gtk::ToggleButton*>> m_info_btns;
+    bool                m_info_switching = false;
+    void                add_info_page(const SettingsUi::Card& card, const std::string& id,
+                                      const std::string& icon, const Glib::ustring& title);
+    void                show_info_page(const std::string& id);
     Gtk::Widget* fold_card(const SettingsUi::Card& card, const std::string& key,
                            std::function<std::string()> describe);
     void         refresh_folds();
@@ -287,6 +298,6 @@ private:
     // emulators reload both.
     std::string         m_reload_emulator;
     sigc::signal<void, std::string> m_sig_folder;
-    sigc::signal<void, std::string> m_sig_generate;
+    sigc::signal<void, std::string, std::string> m_sig_generate;
     sigc::signal<void>              m_sig_groups;
 };

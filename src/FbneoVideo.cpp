@@ -1,5 +1,6 @@
 // src/FbneoVideo.cpp
 #include "FbneoVideo.h"
+#include "FbneoPaths.h"
 
 #include "Platform.h"
 #include "ProcessWin.h"
@@ -175,6 +176,9 @@ Capabilities parse(const std::string& text) {
 }
 
 Capabilities probe(const std::string& exe) {
+    // Le FBNeo officiel de Windows ne connait pas -list-video-json : lance
+    // avec, il ouvrirait sa propre fenetre. Il n'a pas ces reglages.
+    if (FbneoPaths::is_win32_build(exe)) return Capabilities{};
     static std::mutex m;
     static std::map<std::pair<std::string, long long>, Capabilities> cache;
     if (exe.empty() || ::access(exe.c_str(), X_OK) != 0) return {};

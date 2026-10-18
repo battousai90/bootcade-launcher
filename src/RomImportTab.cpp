@@ -907,6 +907,7 @@ void RomImportTab::on_context_menu(const Gtk::TreeModel::Path& path, Gtk::TreeVi
         std::vector<std::string> missing;
         for (const auto& m : s.missing) missing.push_back(m.name);
         add(_("Copy game name"),         [copy, s] { copy(s.game_name, _("the game name")); });
+        add(_("Copy full game name"),    [copy, s] { copy(s.description, _("the full game name")); }, !s.description.empty());
         add(_("Copy file name"),         [copy, file] { copy(file, _("the file name")); });
         add(_("Copy missing filenames"), [copy, missing] { copy(join(missing, "\n"), _("the missing filenames")); }, !missing.empty());
         add(_("Copy destination path"),  [copy, s] { copy(s.dest_path, _("the destination path")); });

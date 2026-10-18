@@ -7,8 +7,7 @@
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
 #include "RomCleanup.h"
-#include "RomDownload.h"
-#include "BootcadeAuth.h"
+#include "EmulatorVariants.h"
 #include "RomManifest.h"
 #include "i18n.h"
 
@@ -122,13 +121,6 @@ std::string import_source_of(const RomAudit::GameEntry& g) {
     }
     return fallback;
 }
-// Missing or wrong, and not rebuildable from the library : Fix does that
-// without spending the quota. Never a CHD, never an ignored set.
-bool downloadable(const RomAudit::Report& rep, const RomAudit::GameEntry& g) {
-    return rep.emulator == "fbneo" && !g.is_chd && !g.ignored && g.archive_is_own
-        && !g.repairable && !g.dat_header.empty()
-        && (g.status == "missing" || g.status == "incorrect");
-}
 bool can_send_to_import(const RomAudit::GameEntry& g) {
     return !import_source_of(g).empty();
 }
@@ -235,10 +227,15 @@ void RomLibraryTab::build_header() {
         if (m_groups_loading) return;
         persist_group_choice();
         update_last_audit_label();
+        update_group_emulator();
     });
     group_line->pack_start(m_dat_group, Gtk::PACK_SHRINK);
-    reload_groups();
     body->pack_start(*group_line, Gtk::PACK_SHRINK);
+    // L'emulateur et la version que decrit le groupe choisi.
+    m_group_emulator.set_xalign(0.0f);
+    m_group_emulator.get_style_context()->add_class("set-sub");
+    body->pack_start(m_group_emulator, Gtk::PACK_SHRINK);
+    reload_groups();
     scan.body->pack_start(*body, Gtk::PACK_SHRINK);
     scan.frame->set_size_request(360, -1);
     m_top.pack_start(*scan.frame, Gtk::PACK_SHRINK);
@@ -401,13 +398,6 @@ void RomLibraryTab::build_footer() {
     m_footer.pack_start(m_progress, Gtk::PACK_SHRINK);
     m_footer.pack_start(*m_btn_cancel, Gtk::PACK_SHRINK);
 
-    m_btn_select_all  = ui::button(_("Select all"));
-    m_btn_select_none = ui::button(_("Select none"));
-    m_btn_select_all->signal_clicked().connect([this] { set_all_checked(true); });
-    m_btn_select_none->signal_clicked().connect([this] { set_all_checked(false); });
-    m_footer.pack_start(*m_btn_select_all,  Gtk::PACK_SHRINK);
-    m_footer.pack_start(*m_btn_select_none, Gtk::PACK_SHRINK);
-
     // The actions, bottom right, in the order they are used : scan, audit,
     // fix. Audit is the one to press first, so it carries the accent ; Fix
     // takes it over once there is something to fix.
@@ -422,13 +412,6 @@ void RomLibraryTab::build_footer() {
                                   "to be rebuilt, unrepairable sets, orphans and extra files are moved to quarantine. "
                                   "Acts on the ticked rows shown : everything it can act on is ticked after an audit."));
     m_btn_fix->signal_clicked().connect([this] { on_fix_clicked(); });
-    m_btn_download = ui::button(_("Download from Bootcade"), "bc-download.svg");
-    m_btn_download->set_tooltip_text(_("Download the missing or wrong FinalBurn Neo sets from the Bootcade server, with "
-                                       "your account and its daily quota. They go to Import, which checks and files them. "
-                                       "Acts on the ticked rows shown : everything it can act on is ticked after an audit."));
-    m_btn_download->set_no_show_all(true);
-    m_btn_download->signal_clicked().connect([this] { on_download_clicked(); });
-    m_footer.pack_end(*m_btn_download, Gtk::PACK_SHRINK);
     m_footer.pack_end(*m_btn_fix, Gtk::PACK_SHRINK);
     m_footer.pack_end(*m_btn_audit, Gtk::PACK_SHRINK);
     m_footer.pack_end(*m_btn_scan, Gtk::PACK_SHRINK);
@@ -496,6 +479,16 @@ void RomLibraryTab::reload_groups() {
     // combo shows is what the scan and the audit must use.
     if (m_dat_group.get_active_id().raw() != chosen) persist_group_choice();
     update_last_audit_label();
+    update_group_emulator();
+}
+
+void RomLibraryTab::update_group_emulator() {
+    const auto* g = current_group();
+    if (!g) { m_group_emulator.set_text(""); return; }
+    std::string version = EmulatorVariants::version(g->emulator, g->variant);
+    if (version.empty()) version = g->version;
+    m_group_emulator.set_text(EmulatorVariants::short_name(g->emulator, g->variant)
+                              + (version.empty() ? std::string() : "  ·  " + version));
 }
 
 void RomLibraryTab::on_audit_clicked() {
@@ -520,27 +513,9 @@ void RomLibraryTab::worker_audit() {
     RomAudit::Report rep = RomAudit::audit(m_db, m_job_paths.roms_paths, /*problems_only=*/false, cb,
                                            m_job_dat_sources, m_job_emulator);
 
-    // Which of the sets it would offer the Bootcade server actually holds :
-    // one HEAD each, free of quota. Only for a short list : a library that
-    // lacks thousands of sets is asked at download time, set by set.
-    std::map<std::string, bool> not_on_server;
-    if (rep.emulator == "fbneo" && BootcadeAuth::signed_in() && !rep.cancelled) {
-        std::vector<const RomAudit::GameEntry*> asked;
-        for (const auto& g : rep.games) if (downloadable(rep, g)) asked.push_back(&g);
-        if (!asked.empty() && asked.size() <= 200) {
-            RomDownload::ServerView server;
-            for (size_t i = 0; i < asked.size() && !m_cancelled; ++i) {
-                if (cb.progress) cb.progress(100.0 * (double)i / (double)asked.size(), _("Asking the Bootcade server…"));
-                const auto offer = server.check(asked[i]->dat_header, asked[i]->name);
-                if (offer == RomDownload::Offer::Absent || offer == RomDownload::Offer::Outdated)
-                    not_on_server[asked[i]->dat_header + "/" + asked[i]->name] = offer == RomDownload::Offer::Outdated;
-            }
-        }
-    }
     {
         std::lock_guard<std::mutex> lk(m_shared_mutex);
         m_audit = std::move(rep);
-        m_not_on_server = std::move(not_on_server);
     }
     m_finished_dispatcher();
 }
@@ -583,8 +558,6 @@ void RomLibraryTab::populate() {
         else if (g.misnamed_archive) bits.push_back(_("right content under another file name"));
         else if (g.repairable) bits.push_back(_("repairable from the library"));
         else if (!g.archive_found && (g.has_disks ? g.zip_status : g.status) != "available") bits.push_back(_("no archive found"));
-        if (auto s = m_not_on_server.find(g.dat_header + "/" + g.name); s != m_not_on_server.end())
-            bits.push_back(s->second ? _("outdated on the Bootcade server") : _("not available on the Bootcade server"));
         int inherited = 0;
         for (const auto& r : g.roms) if (!r.inherited_from.empty()) ++inherited;
         if (inherited) bits.push_back(Glib::ustring::compose(_("%1 from parent/BIOS"), inherited).raw());
@@ -612,7 +585,7 @@ void RomLibraryTab::populate() {
         row[m_cols.ignored]    = g.ignored;
         row[m_cols.has_extras] = has_extras;
         row[m_cols.actionable] = can_quarantine || has_extras || can_send_to_import(g);
-        row[m_cols.checkable]  = row[m_cols.actionable] || can_download(g);
+        row[m_cols.checkable]  = (bool)row[m_cols.actionable];
         row[m_cols.include]    = ticked_by_default(row);
 
         std::string blob = lower(g.name + ' ' + g.description + ' ' + expected + ' ' + yours + ' ' + g.cloneof + ' ' + g.system);
@@ -926,8 +899,7 @@ bool RomLibraryTab::ticked_by_default(const Gtk::TreeModel::Row& row) const {
     return !((int)row[m_cols.kind] == KIND_ORPHAN && m_audit.emulator != "fbneo");
 }
 
-// The rows Fix acts on : a ticked set that can only be downloaded is
-// Download's, not Fix's.
+// The rows Fix acts on. Downloading missing sets is the Downloads tab's.
 std::vector<Gtk::TreeModel::Row> RomLibraryTab::fix_candidates() const {
     std::vector<Gtk::TreeModel::Row> rows;
     for (const auto& row : checked_rows()) if (row[m_cols.actionable]) rows.push_back(row);
@@ -940,125 +912,6 @@ void RomLibraryTab::update_action_buttons() {
     m_btn_fix->set_label(n ? Glib::ustring::compose(_("Fix selected (%1)"), n)
                            : Glib::ustring(_("Fix")));
     m_btn_fix->set_sensitive(!m_busy && n > 0);
-
-    // FinalBurn Neo only : MAME has no online feature yet.
-    const int d = (int)download_candidates().size();
-    const bool fbneo = m_audit_ever_run && m_audit.emulator == "fbneo";
-    m_btn_download->set_visible(fbneo);
-    m_btn_download->set_label(d ? Glib::ustring::compose(_("Download from Bootcade (%1)"), d)
-                                : Glib::ustring(_("Download from Bootcade")));
-    m_btn_download->set_sensitive(!m_busy && d > 0);
-}
-
-bool RomLibraryTab::can_download(const RomAudit::GameEntry& g) const {
-    return downloadable(m_audit, g) && !m_not_on_server.count(g.dat_header + "/" + g.name);
-}
-
-std::vector<Gtk::TreeModel::Row> RomLibraryTab::download_candidates() const {
-    std::vector<Gtk::TreeModel::Row> out;
-    auto keep = [&](const Gtk::TreeModel::Row& row) {
-        if ((int)row[m_cols.kind] == KIND_SET && can_download(m_audit.games[(unsigned int)row[m_cols.index]]))
-            out.push_back(row);
-    };
-    for (const auto& row : checked_rows()) keep(row);
-    return out;
-}
-
-void RomLibraryTab::on_download_clicked(std::vector<Gtk::TreeModel::Row> rows) {
-    if (m_busy) return;
-    if (rows.empty()) rows = download_candidates();
-    m_dl = DownloadJob{};
-    for (const auto& row : rows) {
-        const auto& g = m_audit.games[(unsigned int)row[m_cols.index]];
-        if (can_download(g)) m_dl.items.push_back({g.dat_header, g.name});
-    }
-    if (m_dl.items.empty()) { flash(_("Nothing to download : no missing or wrong FinalBurn Neo set is shown.")); return; }
-
-    auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-    // Signed out : say so at once, rather than ask to confirm what cannot happen.
-    if (BootcadeAuth::username().empty()) {
-        if (top) ui::notice(*top, _("Download from Bootcade"), RomDownload::explain("not_signed_in"));
-        return;
-    }
-    Paths p = m_paths();
-    std::error_code ec;
-    if (p.inbox.empty()) { if (top) ui::notice(*top, _("No import folder"), _("Set an import folder (Import tab) first.")); return; }
-    fs::create_directories(p.inbox, ec);
-    if (ec || !fs::is_directory(p.inbox, ec)) { if (top) ui::notice(*top, _("Import folder"), _("Could not create the import folder.")); return; }
-    if (top) {
-        const Glib::ustring text = Glib::ustring::compose(
-            _("%1 set(s) will be downloaded from the Bootcade server into the import folder, which checks them and "
-              "files them into your library.\n\nYour account's daily quota applies : downloads stop when it is used up, "
-              "and the rest can be downloaded later."), (int)m_dl.items.size());
-        ConfirmationDialog confirm(*top, _("Download from Bootcade?"), text, "bc-download.svg");
-        if (!confirm.show_and_confirm()) return;
-    }
-    m_job_paths = p;
-    m_cancelled = false;
-    m_job = Job::Download;
-    set_busy(true);
-    m_status.set_text(_("Checking your account…"));
-    m_worker = std::thread(&RomLibraryTab::worker_download, this);
-}
-
-void RomLibraryTab::worker_download() {
-    // Whatever the way out (refusal, quota, cancel), the page is told once.
-    [this] {
-    // The quota first : a refusal is explained once, before anything moves.
-    RomDownload::Quota q = RomDownload::fetch_quota();
-    if (!q.answered) { m_dl.stopped = std::string(_("The Bootcade server did not answer : ")) + q.error; return; }
-    if (!q.can_download) { m_dl.stopped = RomDownload::explain(q.reason); return; }
-    push_log(Glib::ustring::compose(_("Bootcade account : %1 download(s) left today."), q.remaining).raw());
-
-    int left = q.remaining;
-    const int n = (int)m_dl.items.size();
-    RomDownload::ServerView server;
-    for (int i = 0; i < n && !m_cancelled; ++i) {
-        const auto& item = m_dl.items[i];
-        if (left <= 0) {
-            m_dl.stopped = Glib::ustring::compose(_("Daily quota used up : %1 set(s) left to download later."), n - i).raw();
-            break;
-        }
-        // The version the DAT asks for, or nothing : an older copy would
-        // spend the quota on a set Import then turns down.
-        const auto offer = server.check(item.dat_header, item.name);
-        if (offer == RomDownload::Offer::Absent || offer == RomDownload::Offer::Outdated) {
-            const std::string why = offer == RomDownload::Offer::Outdated ? _("outdated on the Bootcade server")
-                                                                           : _("not available on the Bootcade server");
-            m_dl.failed.push_back(item.name + " : " + why);
-            push_log(item.name + " : " + why);
-            continue;
-        }
-        const std::string label = Glib::ustring::compose(_("Downloading %1 (%2/%3)…"), item.name, i + 1, n).raw();
-        push_progress((double)i / n, label);
-        auto res = RomDownload::download(item.dat_header, item.name, m_job_paths.inbox, m_cancelled,
-                                         [&](double f) { push_progress((i + f) / n, label); });
-        if (res.ok) {
-            m_dl.got.push_back(res.path);
-            --left;
-            push_log(Glib::ustring::compose(_("Downloaded %1."), item.name).raw());
-            continue;
-        }
-        if (m_cancelled) break;
-        m_dl.failed.push_back(item.name + " : " + res.reason);
-        push_log(item.name + " : " + res.reason);
-        // Une panne du serveur touche toutes les ROMs : continuer userait le
-        // quota sur chacune sans rien recevoir.
-        if (res.server_fault) {
-            m_dl.stopped = _("The Bootcade server could not send the files : downloads were stopped. Please try again later.");
-            break;
-        }
-        // Refused : ask the account why. Quota used up or access lost stops
-        // everything ; anything else is this set's problem only.
-        if (res.http_status == 401 || res.http_status == 403) {
-            RomDownload::Quota again = RomDownload::fetch_quota();
-            if (!again.can_download) { m_dl.stopped = RomDownload::explain(again.reason); break; }
-            left = again.remaining;
-        }
-    }
-    push_progress(1.0, "");
-    }();
-    m_finished_dispatcher();
 }
 
 void RomLibraryTab::copy_to_clipboard(const Glib::ustring& text, const Glib::ustring& what) {
@@ -1134,7 +987,7 @@ void RomLibraryTab::toggle_ignore(const Gtk::TreeModel::Row& row) {
     row[m_cols.ignored] = now_ignored;
     row[m_cols.status]  = now_ignored ? Glib::ustring(_("Ignored")) : Glib::ustring(_(status_label_of(status_key_of(g))));
     row[m_cols.actionable] = can_quarantine_whole(g) || has_extra_files(g) || can_send_to_import(g);
-    row[m_cols.checkable]  = row[m_cols.actionable] || can_download(g);
+    row[m_cols.checkable]  = (bool)row[m_cols.actionable];
     row[m_cols.include]    = ticked_by_default(row);
     Glib::ustring details = row[m_cols.details];
     const Glib::ustring tag = Glib::ustring(_("ignored")) + ", ";
@@ -1167,6 +1020,13 @@ void RomLibraryTab::on_context_menu(const Gtk::TreeModel::Path& path, Gtk::TreeV
     const Glib::ustring parent   = row[m_cols.parent];
 
     add(_("Copy game name"),         [this, name]     { copy_to_clipboard(name, _("the game name")); });
+    // Le titre complet du DAT (« Street Fighter Zero 2 Alpha Dash / Gold
+    // (Hack, v1.2.1) ») : celui qu'on colle dans une recherche.
+    {
+        const Glib::ustring full = is_set ? Glib::ustring(m_audit.games[(unsigned int)row[m_cols.index]].description)
+                                          : Glib::ustring();
+        add(_("Copy full game name"), [this, full] { copy_to_clipboard(full, _("the full game name")); }, !full.empty());
+    }
     add(_("Copy expected filename"), [this, expected] { copy_to_clipboard(expected, _("the expected filename")); }, !expected.empty());
     add(_("Copy your filename"),     [this, yours]    { copy_to_clipboard(yours, _("your filename")); }, yours != "-" && !yours.empty());
     add(_("Copy parent name"),       [this, parent]   { copy_to_clipboard(parent, _("the parent name")); }, !parent.empty());
@@ -1184,8 +1044,6 @@ void RomLibraryTab::on_context_menu(const Gtk::TreeModel::Path& path, Gtk::TreeV
         const auto& g = m_audit.games[(unsigned int)row[m_cols.index]];
         add(g.ignored ? _("Stop ignoring this set") : _("Ignore this set (do not report again)"),
             [this, row] { toggle_ignore(row); });
-        if (can_download(g))
-            add(_("Download from Bootcade"), [this, row] { on_download_clicked({row}); });
         if (can_send_to_import(g))
             add(_("Fix : send to Import to be rebuilt"), [this, row] { on_fix_clicked({row}); });
         else if (can_quarantine_whole(g))
@@ -1568,52 +1426,8 @@ void RomLibraryTab::on_worker_finished() {
         m_db->setScanMetadata("last_audit_time", (int64_t)std::time(nullptr));
         update_last_audit_label();
         populate();
+        m_sig_audited.emit();
         AppContext::trim_heap();   // the audit's temporaries are gone : give the pages back
-    } else if (m_job == Job::Download) {
-        Glib::ustring status = m_dl.got.empty() && !m_dl.stopped.empty() ? Glib::ustring()
-            : Glib::ustring::compose(_("Download : %1 set(s) received, sent to Import."), (int)m_dl.got.size());
-        if (!m_dl.failed.empty()) status += Glib::ustring::compose(_(" %1 could not be downloaded."), (int)m_dl.failed.size());
-        if (m_cancelled) status += _(" Cancelled.");
-        if (!m_dl.stopped.empty()) status += (status.empty() ? "" : " ") + m_dl.stopped;
-        m_job = Job::None;
-        set_busy(false);
-        flash(status);
-        m_sig_log.emit(status.raw());
-        /* Un bilan qui reste a l'ecran.
-         *
-         * Le seul message etait celui de la barre d'etat, efface au bout de
-         * quelques secondes : quand aucune ROM n'arrivait (absente du serveur,
-         * quota atteint), le joueur ne voyait rien se passer et cherchait
-         * des fichiers qui n'existaient pas. Le bilan dit ce qui est arrive,
-         * OU, et ce qui a echoue avec sa raison. */
-        if (auto* top = dynamic_cast<Gtk::Window*>(get_toplevel())) {
-            std::string text;
-            if (!m_dl.got.empty())
-                text += Glib::ustring::compose(_("%1 set(s) downloaded into the import folder:\n%2"),
-                                               (int)m_dl.got.size(), m_job_paths.inbox).raw();
-            if (!m_dl.failed.empty()) {
-                if (!text.empty()) text += "\n\n";
-                text += Glib::ustring::compose(_("%1 set(s) could not be downloaded:"), (int)m_dl.failed.size()).raw();
-                const size_t shown = std::min<size_t>(m_dl.failed.size(), 8);
-                for (size_t i = 0; i < shown; ++i) text += "\n• " + m_dl.failed[i];
-                if (m_dl.failed.size() > shown)
-                    text += "\n" + Glib::ustring::compose(_("…and %1 more, listed in the Import log."),
-                                                          (int)(m_dl.failed.size() - shown)).raw();
-            }
-            if (!m_dl.stopped.empty()) text += (text.empty() ? "" : "\n\n") + m_dl.stopped;
-            if (m_cancelled) text += (text.empty() ? "" : "\n\n") + std::string(_("The download was cancelled."));
-            if (text.empty()) text = _("Nothing was downloaded.");
-            const bool got = !m_dl.got.empty();
-            if (got) {
-                if (ui::offer(*top, _("Download from Bootcade"), text, _("Open import folder"),
-                              "bc-download.svg", "bc-folder.svg"))
-                    ui::open_uri(Glib::filename_to_uri(m_job_paths.inbox), top);
-            } else {
-                ui::notice(*top, _("Download from Bootcade"), text, "bc-warning.svg");
-            }
-        }
-        if (!m_dl.got.empty()) m_sig_send_to_import.emit(m_dl.got);
-        return;
     } else if (m_job == Job::Fix) {
         Glib::ustring status = Glib::ustring::compose(
             _("Fix : %1 archive(s) moved to quarantine, %2 cleaned of extra files, %3 repairable set(s) sent to Import."),
@@ -1639,9 +1453,6 @@ void RomLibraryTab::set_busy(bool busy) {
     m_btn_scan->set_sensitive(!busy);
     m_btn_audit->set_sensitive(!busy);
     m_btn_export->set_sensitive(!busy);
-    m_btn_select_all->set_sensitive(!busy);
-    m_btn_select_none->set_sensitive(!busy);
-    if (m_btn_download) m_btn_download->set_sensitive(!busy);
     if (busy) { m_progress.set_fraction(0.0); m_progress.show(); m_btn_cancel->show(); }
     else      { m_progress.hide(); m_btn_cancel->hide(); }
     update_action_buttons();

@@ -23,6 +23,7 @@
 #include "RomOutboxTab.h"
 #include "RomQuarantineTab.h"
 #include "RomDatTab.h"
+#include "RomDownloadTab.h"
 
 class RomManagerWindow : public Gtk::Window {
 public:
@@ -40,8 +41,9 @@ public:
     // already performed this session, so this never starts an unrequested scan.
     void refresh_after_scan();
 
-    // Bring one tab to the front: "library", "import", "outbox", "quarantine", "dat".
+    // Bring one tab to the front: "library", "downloads", "import", "outbox", "quarantine", "dat".
     void show_tab(const std::string& id);
+    void grow_to_page();   // elargit la fenetre a l'onglet affiche, sans retrecir
 
     // Emitted when the user changes the DAT directory here, so the Settings panel
     // (which owns the same config.json key) can stay in sync.
@@ -64,6 +66,8 @@ public:
     // and must not interrupt the flow, this one is a button the user pressed
     // and goes through the same confirmation the header button always had.
     sigc::signal<void, std::string>& signal_rescan_requested() { return m_sig_rescan_requested; }
+    // Le compte Bootcade a change depuis « Manage » de l'onglet Downloads.
+    sigc::signal<void>& signal_account_changed() { return m_sig_account_changed; }
 
 private:
     // ── Shell : title bar, tabs ──────────────────────────────────────────────
@@ -109,6 +113,7 @@ private:
     RomOutboxTab*  m_outbox  = nullptr;
     RomQuarantineTab* m_quarantine = nullptr;
     RomDatTab*     m_dat     = nullptr;
+    RomDownloadTab* m_downloads = nullptr;
     // A string of the "rom_manager" object in config.json.
     std::string config_string(const char* key) const;
 
@@ -125,4 +130,5 @@ private:
     sigc::signal<void, bool, std::string> m_sig_update_dat;
     sigc::signal<void, std::string> m_sig_scan_requested;
     sigc::signal<void, std::string> m_sig_rescan_requested;
+    sigc::signal<void> m_sig_account_changed;
 };

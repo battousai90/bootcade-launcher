@@ -124,6 +124,8 @@ public:
     // Un FinalBurn Neo vient d'etre telecharge et retenu : la fenetre
     // principale prepare sa liste des jeux dans la foulee.
     sigc::signal<void>& signal_fbneo_installed() { return m_sig_fbneo_installed; }
+    // MAME vient d'etre installe : "release" ou "sooner".
+    sigc::signal<void, std::string>& signal_mame_installed() { return m_sig_mame_installed; }
     // A appeler quand la fenetre s'ouvre : relit ce qui a pu changer dehors
     // (compte, emulateur present ou non) et relance la sonde reseau.
     void on_window_shown();
@@ -341,6 +343,7 @@ private:
     sigc::signal<void> m_sig_update_found;
     sigc::signal<void> m_sig_save;
     sigc::signal<void> m_sig_fbneo_installed;
+    sigc::signal<void, std::string> m_sig_mame_installed;
 
     /* Quel jeu montrer au demarrage.
      *
@@ -548,6 +551,7 @@ private:
     std::string  mame_channel() const;
     void         refresh_sooner_state();
     void         on_sooner_download();
+    void         on_mame_official_download();   // Windows : la release de mamedev/mame
     // Les tuiles du bandeau d'identite, au meme endroit et dans le meme
     // dessin que la bande Build / Installed / Last checked de FinalBurn Neo :
     // deux emulateurs qui repondent aux memes questions doivent y repondre a

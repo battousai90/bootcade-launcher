@@ -22,6 +22,8 @@
 #include "GameListSetup.h"
 #include "GenerateDAT.h"
 #include "FbneoChannel.h"
+#include "EmulatorVariants.h"
+#include "DatGroupSetup.h"
 #include "FbneoUpdateCheck.h"
 #include "FbneoPaths.h"
 #include "ScreenshotAssignDialog.h"
@@ -639,8 +641,13 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // "Manage DATs in ROM Management" : the ROM window, on its DAT tab.
     // FinalBurn Neo vient d'etre installe depuis Settings : sa liste des jeux
     // suit, la fenetre de progression posee sur Settings, encore ouverte.
+    /* Un emulateur vient d'etre installe : ses DAT sont generes par lui, dans
+     * le groupe de cette version, et la liste des jeux suit. */
     m_settings_panel.signal_fbneo_installed().connect([this] {
-        prepare_game_list(m_settings_win);
+        auto_dat_group("fbneo", FbneoChannel::current(), m_settings_win);
+    });
+    m_settings_panel.signal_mame_installed().connect([this](std::string variant) {
+        auto_dat_group("mame", variant, m_settings_win);
     });
     m_settings_panel.signal_open_rom_manager().connect([this] {
         on_rom_manager();
@@ -3015,6 +3022,15 @@ void MainWindow::on_play_clicked() {
                 "bc-warning.svg");
             return;
         }
+        // Sans sa ROM, l'emulateur se ferme aussitot sans rien dire : le dire ici.
+        if (g.status == "missing") {
+            SettingsUi::notice(*this, _("You do not have this game"),
+                Glib::ustring::compose(_("The ROM of %1 is not in your ROM folders, so it cannot start.\n\n"
+                                         "Get it with ROM Manager › Download from Bootcade, then play."),
+                                       g.description.empty() ? g.name : g.description).raw(),
+                "bc-warning.svg");
+            return;
+        }
         break;
     }
     
@@ -3361,6 +3377,17 @@ void MainWindow::on_play_clicked() {
     // === Build launch args ===
     std::vector<std::string> launch_args;
     launch_args.push_back(fbneo_executable);
+    if (FbneoPaths::is_win32_build(fbneo_executable)) {
+        // Le FBNeo officiel de Windows attend le nom du jeu d'abord, puis « -w »
+        // pour une fenetre : il demarre en plein ecran sans option. Les options
+        // du port SDL2 ne lui sont pas transmises. Il n'ecrit les scores que si
+        // on le lui demande, et sans bSkipStartupCheck il reverifie toutes les
+        // ROMs a chaque demarrage.
+        FbneoPaths::set_ini_value("EnableHiscores", "1");
+        FbneoPaths::set_ini_value("bSkipStartupCheck", "1");
+        launch_args.push_back(fbneo_rom_name);
+        if (!m_launch_fullscreen) launch_args.push_back("-w");
+    } else {
     // No "-joy": that flag makes FBNeo map the pad onto EVERY player, so a
     // single controller ends up driving both P1 and P2 coin/start : one press
     // inserts two credits and starts a two-player game. Verified by running
@@ -3388,6 +3415,7 @@ void MainWindow::on_play_clicked() {
         while (words >> one) launch_args.push_back(one);
     }
     launch_args.push_back(fbneo_rom_name);
+    }
 
     std::cout << "Launching " << game_system << " game:";
     for (const auto& a : launch_args) std::cout << " " << a;
@@ -5375,7 +5403,8 @@ void MainWindow::on_fbneo_menu() {
     // Launch FBNeo with menu
     std::string fbneo_executable = m_settings_panel.get_fbneo_executable();
     std::cout << "Opening FBNeo menu: " << fbneo_executable << std::endl;
-    spawn_process({fbneo_executable, "-menu"});
+    if (FbneoPaths::is_win32_build(fbneo_executable)) spawn_process({fbneo_executable});
+    else                                              spawn_process({fbneo_executable, "-menu"});
 }
 
 void MainWindow::on_video_settings() {
@@ -5879,6 +5908,7 @@ void MainWindow::check_fbneo_update_async() {
         // arrive apres celui de Linux) : rien a proposer pour l'instant.
         if (r.ok && FbneoUpdateCheck::has_platform_asset(r)) {
             m_fbneo_update_sha = r.sha;
+            m_fbneo_update_upstream = FbneoUpdateCheck::upstream_commit(r);
             m_fbneo_update_tag = r.tag;
             m_fbneo_update_published_at = r.published_at;
         }
@@ -7154,6 +7184,14 @@ void MainWindow::on_fbneo_update_check_result() {
     nlohmann::json j;
     { std::ifstream fi(AppContext::get_config_path()); if (fi) { try { fi >> j; } catch (...) {} } }
     std::string known_sha = j.value(FbneoChannel::sha_key(), "");
+    // Le build installe est celui de la release : son commit upstream est
+    // donc connu, meme pour une installation faite avant qu'on le note.
+    if (!known_sha.empty() && known_sha == m_fbneo_update_sha && !m_fbneo_update_upstream.empty()
+        && j.value(FbneoChannel::upstream_key(), std::string()) != m_fbneo_update_upstream) {
+        j[FbneoChannel::upstream_key()] = m_fbneo_update_upstream;
+        std::ofstream fo(AppContext::get_config_path());
+        if (fo) fo << j.dump(4);
+    }
 
     if (!known_sha.empty()) {
         // We have a launcher-recorded baseline (a download done through this
@@ -7220,11 +7258,12 @@ void MainWindow::on_download_latest_fbneo() {
     // baseline to compare against. The startup check already did this fetch in
     // most cases (m_fbneo_update_sha), so this usually costs nothing extra;
     // it only falls back to a fresh call if that never completed.
-    auto record_sha = [](const std::string& sha) {
+    auto record_sha = [upstream = m_fbneo_update_upstream](const std::string& sha) {
         nlohmann::json j;
         const std::string path = AppContext::get_config_path();
         { std::ifstream fi(path); if (fi) { try { fi >> j; } catch (...) { j = nlohmann::json{}; } } }
         j[FbneoChannel::sha_key()] = sha;
+        if (!upstream.empty()) j[FbneoChannel::upstream_key()] = upstream;
         std::ofstream fo(path);
         if (fo) fo << j.dump(4);
     };
@@ -7245,8 +7284,10 @@ void MainWindow::on_download_latest_fbneo() {
 
     if (result != Gtk::RESPONSE_OK) return; // download failed or was cancelled
 
-    // Premiere installation : pas de question, la liste des jeux se prepare.
-    if (m_database->getGameCount("fbneo") == 0) { prepare_game_list(); return; }
+    // Un nouveau build : ses DAT, generes par lui, dans le groupe de cette
+    // version, puis la liste des jeux. Plus de question : c'est la regle.
+    auto_dat_group("fbneo", FbneoChannel::current(), this);
+    return;
 
     // A new build usually means new/changed game definitions : offer to chain
     // straight into DAT generation and the database update so the user ends
@@ -7269,6 +7310,17 @@ void MainWindow::on_download_latest_fbneo() {
     // the old snapshot with no error or indication anything was wrong.
     // A new FinalBurn Neo build changes FinalBurn Neo's DATs only.
     do_update_dat("fbneo");
+}
+
+void MainWindow::auto_dat_group(const std::string& emulator, const std::string& variant, Gtk::Window* parent) {
+    if (m_dat_update_running) return;
+    if (!DatGroupSetup::install_and_generate(parent ? *parent : *this, emulator, variant)) return;
+    // L'ancienne cle dat_path suit le groupe FinalBurn Neo actif.
+    if (emulator == "fbneo")
+        for (const auto& g : DatSource::load_groups())
+            if (g.active && g.emulator == "fbneo") m_settings_panel.set_dat_path(g.folder);
+    do_update_dat(emulator);
+    refresh_setup_guide();
 }
 
 void MainWindow::on_generate_dat_files() {
@@ -8827,6 +8879,10 @@ void MainWindow::on_rom_manager() {
         });
         m_rom_manager->signal_rescan_requested().connect(
             sigc::mem_fun(*this, &MainWindow::on_library_scan_requested));
+        m_rom_manager->signal_account_changed().connect([this] {
+            refresh_account_button();
+            m_settings_panel.refresh_account();
+        });
     }
 
     // Pick up any path the Settings dialog changed while the window was closed.
@@ -9164,17 +9220,9 @@ void MainWindow::refresh_emu_state() {
         ready         = fbneo_can_start(exe);
         label_ready   = _("FBNeo ready");
         label_missing = _("FBNeo not set");
-        // La meme identite de version que la page Reglages > Emulator :
-        // l'empreinte du commit telechargee, seule version que cette
-        // distribution de FinalBurn Neo expose. En inventer une ici, c'est
-        // annoncer deux versions differentes du meme binaire.
-        if (ready) {
-            nlohmann::json j;
-            std::ifstream fi(AppContext::get_config_path());
-            if (fi) { try { fi >> j; } catch (...) {} }
-            const std::string sha = j.value(FbneoChannel::sha_key(), std::string());
-            if (!sha.empty()) version = sha.substr(0, 7);
-        }
+        // La meme identite de version que la page Reglages > Emulator et le
+        // groupe de DAT : le commit de finalburnneo que ce build contient.
+        if (ready) version = EmulatorVariants::version("fbneo", FbneoChannel::current());
     }
     // MAME repond « 0.279 (mame0279) » : le pied de la colonne n'a la place
     // que du numero.

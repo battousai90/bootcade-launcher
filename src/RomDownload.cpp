@@ -203,6 +203,12 @@ Presence presence(const std::string& dat_header, const std::string& name) {
     return Presence::Unknown;
 }
 
+std::string ServerView::changed_on(const std::string& name) {
+    if (!m_loaded) load();
+    auto it = m_changed.find(name);
+    return it == m_changed.end() ? std::string() : it->second;
+}
+
 void ServerView::load() {
     m_loaded = true;
     std::string body;

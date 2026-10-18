@@ -147,6 +147,7 @@ private:
     void on_about_launcher();
     void on_download_latest_fbneo();
     void on_generate_dat_files();
+    void auto_dat_group(const std::string& emulator, const std::string& variant, Gtk::Window* parent);
     void update_status_bar_stats();
     void on_start_scan_clicked();
     // ROM Management › Library › Scan ROMs : the library of the DAT group's
@@ -511,6 +512,7 @@ private:
     Glib::Dispatcher m_fbneo_update_dispatcher;
     std::string   m_fbneo_update_sha;   // written by the worker thread, read after dispatch
     std::string   m_fbneo_update_tag;
+    std::string   m_fbneo_update_upstream;   // commit finalburnneo du build publie
     std::string   m_fbneo_update_published_at;
     // ── Sorting ────────────────────────────────────────────────────────
     // Applied to the filtered vector before the model is filled, so all three

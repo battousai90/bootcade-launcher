@@ -1,6 +1,7 @@
 // src/RomManagerWindow.cpp
 #include "FileChooser.h"
 #include "RomManagerWindow.h"
+#include <functional>
 #include "RomArchive.h"
 #include "RomImportTab.h"
 #include "RomLibraryTab.h"
@@ -64,7 +65,9 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
 {
     namespace ui = SettingsUi;
     set_title(_("ROM Management"));
-    SettingsUi::size_work_window(*this, &parent);
+    // Au moins la taille de travail, et plus large si un onglet le demande :
+    // une taille fixe (1400 x 900) rognait l'onglet DAT a droite.
+    SettingsUi::fit_work_window(*this, &parent);
     SettingsUi::dim_behind(*this, parent);
     set_transient_for(parent);
     set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
@@ -140,16 +143,17 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     });
     m_dat->signal_reload_database().connect([this](bool confirm, std::string emulator) { m_sig_update_dat.emit(confirm, emulator); });
     m_dat->signal_folder_changed().connect([this](std::string folder) { m_sig_dat_path_changed.emit(folder); });
-    m_dat->signal_generate_requested().connect([this](std::string folder) {
-        const std::string exe = fbneo_executable();
+    m_dat->signal_generate_requested().connect([this](std::string folder, std::string exe) {
         if (exe.empty()) {
-            SettingsUi::notice(*this, _("No FBNeo executable configured."), _("Set it in Settings › Emulator before generating DAT files."));
+            SettingsUi::notice(*this, _("This FinalBurn Neo is not installed."),
+                               _("Install and set it in Settings › Emulator before generating DAT files."));
             return;
         }
         // GenerateDAT runs the emulator and shows its own dialogs; once it
         // returns, the folder has changed and the database follows.
         GenerateDAT::execute(*this, exe, folder);
         m_dat->refresh();
+        m_dat->note_generated();
         m_sig_update_dat.emit(false, "fbneo");
     });
 
@@ -168,6 +172,25 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     // the combo follows every change made on the DAT tab.
     m_dat->signal_groups_changed().connect([this] { if (m_library) m_library->reload_groups(); });
 
+    // Downloads : les manquants du dernier audit de Library.
+    RomDownloadTab::Env denv;
+    denv.report      = [this] { return m_library ? m_library->report() : nullptr; };
+    denv.inbox       = [this] { return m_import ? m_import->inbox_path() : std::string(); };
+    denv.group_label = [this] { return m_library ? m_library->group_label() : std::string(); };
+    denv.outbox      = [this] { return config_string("outbox_path"); };
+    denv.library_root = [this](const std::string& emulator) {
+        const auto roots = read_roms_paths(emulator);
+        return roots.empty() ? std::string() : roots.front();
+    };
+    m_downloads = Gtk::make_managed<RomDownloadTab>(denv);
+    m_downloads->signal_audit_requested().connect([this] { if (m_library && !m_library->busy()) { show_tab("library"); m_library->start_audit(); } });
+    m_downloads->signal_send_to_import().connect(sigc::mem_fun(*this, &RomManagerWindow::on_send_to_import));
+    m_downloads->signal_log().connect([this](std::string line) { push_log(line); });
+    m_downloads->signal_account_changed().connect([this] { m_sig_account_changed.emit(); });
+    m_downloads->signal_scan_requested().connect([this](std::string emulator) { m_sig_scan_requested.emit(emulator); });
+    m_downloads->signal_outbox_changed().connect([this] { if (m_outbox) m_outbox->refresh(); });
+    m_library->signal_audited().connect([this] { if (m_downloads) m_downloads->refresh(); });
+
     m_tabbar.get_style_context()->add_class("set-tabbar");
     m_pages.set_transition_type(Gtk::STACK_TRANSITION_TYPE_NONE);
     m_pages.add(*m_library,       "library");
@@ -175,11 +198,13 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     m_pages.add(*m_outbox,        "outbox");
     m_pages.add(*m_quarantine,    "quarantine");
     m_pages.add(*m_dat,           "dat");
+    m_pages.add(*m_downloads,     "downloads");
     add_tab("library",    "bc-folder.svg",   _("Library"),    _("Scan your ROM library and compare it with DAT files."));
     add_tab("import",     "bc-download.svg", _("Import"),     _("Analyse and repair ROMs before they reach your library."));
     add_tab("outbox",     "bc-package.svg",  _("Outbox"),     _("Repaired ROMs, ready to be moved to your library."));
     add_tab("quarantine", "bc-shield.svg",   _("Quarantine"), _("Files that could not be used, or were rejected."));
     add_tab("dat",        "bc-file.svg",     _("DAT"),        _("The DAT files your library is compared with."));
+    add_tab("downloads",  "bc-cloud.svg",    _("Downloads"),  _("Download the sets your library is missing."));
 
     /* Les onglets defilent, la fenetre garde sa taille.
      *
@@ -194,6 +219,10 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     pages_scroll->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     pages_scroll->set_shadow_type(Gtk::SHADOW_NONE);
     pages_scroll->add(m_pages);
+    // La zone des onglets annonce leur largeur, et elle seule : les tableaux,
+    // eux, defilent dans la leur. Sans quoi une colonne de longues phrases
+    // demandait toute la largeur de l'ecran.
+    pages_scroll->set_propagate_natural_width(true);
 
     auto* shell = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
     shell->pack_start(m_tabbar,      Gtk::PACK_SHRINK);
@@ -201,6 +230,17 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     add(*shell);
 
     reload_settings();
+    // Dans l'onglet DAT, les listes annoncent aussi leur largeur : leurs
+    // colonnes sont courtes (noms de groupes, nombres, dates), et rognees elles
+    // ne se lisaient plus. Pas dans Library ni Import : leur colonne Details
+    // porte de longues phrases, qui demanderaient tout l'ecran.
+    std::function<void(Gtk::Widget*)> propagate = [&](Gtk::Widget* w) {
+        if (auto* sw = dynamic_cast<Gtk::ScrolledWindow*>(w))
+            if (sw->get_name() != "no-propagate-width") sw->set_propagate_natural_width(true);
+        if (auto* c = dynamic_cast<Gtk::Container*>(w))
+            for (Gtk::Widget* child : c->get_children()) propagate(child);
+    };
+    if (m_dat) propagate(m_dat);
     show_all_children();
     show_tab("library");
 }
@@ -236,6 +276,43 @@ void RomManagerWindow::show_tab(const std::string& id) {
     if (id == "outbox"     && m_outbox     && !m_outbox->busy()) m_outbox->refresh();
     if (id == "quarantine" && m_quarantine)                      m_quarantine->refresh();
     if (id == "dat"        && m_dat        && !m_dat->busy())    m_dat->refresh();
+    if (id == "downloads"  && m_downloads)                       m_downloads->update_group();
+    grow_to_page();
+}
+
+/* La fenetre n'est jamais plus etroite que l'onglet affiche.
+ *
+ * Chaque onglet garde sa propre taille (pile non homogene) : la fenetre,
+ * mesuree a l'ouverture sur Library, coupait l'onglet DAT a droite. Elle
+ * s'elargit donc quand l'onglet le demande, sans jamais retrecir : elle ne
+ * saute pas d'un onglet a l'autre. Bornee a 95 % de l'ecran. */
+void RomManagerWindow::grow_to_page() {
+    Glib::signal_idle().connect_once([this] {
+        if (!get_visible()) return;
+        Gtk::Requisition minimum, natural;
+        get_preferred_size(minimum, natural);
+        int w = 0, h = 0;
+        get_size(w, h);
+        int want = std::max(minimum.width, natural.width);
+        Gdk::Rectangle work;
+        if (auto win = get_window())
+            if (auto display = Gdk::Display::get_default())
+                if (auto monitor = display->get_monitor_at_window(win)) {
+                    monitor->get_workarea(work);
+                    if (work.get_width() > 0) want = std::min(want, work.get_width() * 95 / 100);
+                }
+        // Jamais plus large que la fenetre principale.
+        int pw = 0, ph = 0;
+        m_parent.get_size(pw, ph);
+        if (pw > 40) want = std::min(want, pw - 24);   // marge : bordure et ombre
+        if (want <= w) return;
+        resize(want, h);
+        // Elargie, elle reste au-dessus de la fenetre principale : recentree sur elle.
+        int px = 0, py = 0, x = 0, y = 0;
+        m_parent.get_position(px, py);
+        get_position(x, y);
+        move(px + (pw - want) / 2, y);
+    });
 }
 
 // Library hands over the archives of sets it found repairable : Import takes

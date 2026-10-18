@@ -177,6 +177,15 @@ add_executable(bootcade
     src/MainWindow.cpp
     src/MameCatalog.cpp
     src/MameSooner.cpp
+    src/MameOfficial.cpp
+    src/LolRoms.cpp
+    src/DownloadSources.cpp
+    src/RetroRoms.cpp
+    src/CrcDb.cpp
+    src/SourcesDialog.cpp
+    src/RomDownloadTab.cpp
+    src/EmulatorVariants.cpp
+    src/DatGroupSetup.cpp
     src/FbneoChannel.cpp
     src/EmulatorRegistry.cpp
     src/GameRow.cpp

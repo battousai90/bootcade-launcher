@@ -26,6 +26,8 @@
 #include "GenerateDAT.h"
 #include "DatSource.h"
 #include "FbneoChannel.h"
+#include "EmulatorVariants.h"
+#include "MameOfficial.h"
 #include "FbneoUpdateCheck.h"
 #include "FbneoPaths.h"
 #include "HiscoreClient.h"
@@ -1484,10 +1486,7 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
             sigc::mem_fun(*this, &SettingsPanel::on_fbneo_channel_changed));
         chan_line->pack_start(*chan_label, Gtk::PACK_SHRINK);
         chan_line->pack_start(m_combo_fbneo_channel, Gtk::PACK_EXPAND_WIDGET);
-#ifndef _WIN32
-        // Sous Windows il n'y a que la version Bootcade (FbneoChannel::current).
         exe.body->pack_start(*chan_line, Gtk::PACK_SHRINK);
-#endif
         m_lbl_fbneo_channel_note.set_xalign(0.0f);
         m_lbl_fbneo_channel_note.set_line_wrap(true);
         m_lbl_fbneo_channel_note.get_style_context()->add_class("set-sub");
@@ -1567,7 +1566,10 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
         // ecrit son mode d'emploi et s'arrete aussitot, sans aucune fenetre.
         Glib::Pid pid = 0;
         try {
-            Glib::spawn_async("", AppContext::host_command({path, "-menu"}),
+            Glib::spawn_async("", AppContext::host_command(
+                                  // Le FBNeo officiel de Windows ouvre son ecran sans option.
+                                  FbneoPaths::is_win32_build(path) ? std::vector<std::string>{path}
+                                                                    : std::vector<std::string>{path, "-menu"}),
                               Glib::SPAWN_SEARCH_PATH | Glib::SPAWN_DO_NOT_REAP_CHILD,
                               Glib::SlotSpawnChildSetup(), &pid);
         } catch (const Glib::Error& e) {
@@ -2812,6 +2814,24 @@ void SettingsPanel::download_catver_clicked() {
 // il s'eteint quand Sooner est la et choisi, sans perdre ce qu'il contient.
 void SettingsPanel::refresh_sooner_state() {
     const bool sooner = mame_channel() == MameSooner::kChannelSooner;
+#ifdef _WIN32
+    // Sous Windows, la version publiee se telecharge aussi : MAMEdev en fait
+    // un executable Windows a chaque version. La meme ligne la propose.
+    if (!sooner) {
+        m_sooner_line.set_visible(true);
+        m_entry_mame_exe.set_sensitive(true);
+        m_button_browse_mame.set_sensitive(true);
+        const std::string tag = MameOfficial::installed_tag();
+        if (tag.empty()) {
+            m_lbl_sooner.set_text(_("Download the official MAME published by MAMEdev."));
+            m_btn_sooner.set_label(_("Download"));
+        } else {
+            m_lbl_sooner.set_text(Glib::ustring::compose(_("Official MAME %1 is installed."), tag));
+            m_btn_sooner.set_label(_("Update"));
+        }
+        return;
+    }
+#endif
     m_sooner_line.set_visible(sooner);
     const auto here = MameSooner::installed();
     const bool in_use = sooner && !here.build.empty();
@@ -2838,6 +2858,9 @@ void SettingsPanel::refresh_sooner_state() {
 void SettingsPanel::on_sooner_download() {
     auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
     if (!parent) return;
+#ifdef _WIN32
+    if (mame_channel() != MameSooner::kChannelSooner) { on_mame_official_download(); return; }
+#endif
 
     Gtk::Dialog dialog;
     dialog.set_transient_for(*parent);
@@ -2935,6 +2958,98 @@ void SettingsPanel::on_sooner_download() {
                    Glib::ustring::compose(_("Bootcade now uses MAME Sooner %1. Its catalog "
                                             "is read on the next start."), build),
                    "bc-check.svg");
+    // Ses DAT, generes par lui, dans son groupe (DatGroupSetup).
+    m_sig_mame_installed.emit("sooner");
+}
+
+/* Le MAME officiel sous Windows : la derniere release de mamedev/mame,
+ * telechargee et extraite par Bootcade, puis designee comme executable. */
+void SettingsPanel::on_mame_official_download() {
+    auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
+    if (!parent) return;
+
+    Gtk::Dialog dialog;
+    dialog.set_transient_for(*parent);
+    dialog.set_modal(true);
+    dialog.set_resizable(false);
+    dialog.set_default_size(520, -1);
+    dialog.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
+    ui::window_header(dialog, "bc-download.svg", _("MAME"),
+                      _("Downloading the official MAME from MAMEdev..."));
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 14);
+    box->set_margin_start(22);
+    box->set_margin_end(22);
+    box->set_margin_top(20);
+    box->set_margin_bottom(20);
+    auto* bar = Gtk::make_managed<Gtk::ProgressBar>();
+    bar->set_show_text(true);
+    bar->set_text(_("Reading the latest release..."));
+    box->pack_start(*bar, Gtk::PACK_SHRINK);
+    auto* cancel = ui::button(_("Cancel"), "bc-close.svg");
+    cancel->set_halign(Gtk::ALIGN_END);
+    box->pack_start(*cancel, Gtk::PACK_SHRINK);
+    dialog.get_content_area()->set_spacing(0);
+    dialog.get_content_area()->pack_start(*box, Gtk::PACK_EXPAND_WIDGET);
+    dialog.show_all();
+
+    std::atomic<bool> cancelled{false}, finished{false};
+    std::mutex mtx;
+    double fraction = 0.0;
+    std::string text, error, tag;
+    bool ok = false;
+    Glib::Dispatcher on_tick, on_done;
+    on_tick.connect([&] {
+        std::lock_guard<std::mutex> lock(mtx);
+        bar->set_fraction(fraction);
+        if (!cancelled.load()) bar->set_text(text);
+    });
+    on_done.connect([&dialog] { dialog.response(Gtk::RESPONSE_OK); });
+    cancel->signal_clicked().connect([&] {
+        cancelled = true;
+        cancel->set_sensitive(false);
+        bar->set_text(_("Cancelling..."));
+    });
+
+    std::thread worker([&] {
+        const auto rel = MameOfficial::fetch_latest();
+        std::string err;
+        bool done = false;
+        if (!rel.ok) err = rel.error;
+        else done = MameOfficial::install(rel, err,
+                [&](double f, const std::string& msg) {
+                    { std::lock_guard<std::mutex> lock(mtx); fraction = f; text = msg; }
+                    on_tick.emit();
+                },
+                [&] { return cancelled.load(); });
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            ok = done;
+            error = err;
+            tag = rel.tag;
+        }
+        finished = true;
+        on_done.emit();
+    });
+    while (!finished.load()) dialog.run();
+    worker.join();
+    dialog.hide();
+
+    if (!ok) {
+        if (!cancelled.load())
+            ui::notice(*parent, _("Download failed"), error, "bc-error.svg");
+        refresh_mame_state();
+        return;
+    }
+    m_entry_mame_exe.set_text(MameOfficial::executable());
+    save_to_file(AppContext::get_config_path());
+    refresh_emulator_pill();
+    refresh_sections();
+    refresh_mame_state();
+    ui::notice(*parent, _("MAME is ready"),
+               Glib::ustring::compose(_("Bootcade now uses the official MAME %1. Its catalog "
+                                        "is read on the next start."), tag),
+               "bc-check.svg");
+    m_sig_mame_installed.emit("release");
 }
 
 void SettingsPanel::refresh_mame_state() {
@@ -3267,12 +3382,10 @@ void SettingsPanel::refresh_emulator_state() {
 
     nlohmann::json j;
     { std::ifstream fi(AppContext::get_config_path()); if (fi) { try { fi >> j; } catch (...) {} } }
-    // « Build » : l'empreinte du commit que le lanceur a telecharge. C'est la
-    // seule identite de version que cette distribution de FBNeo expose ; en
-    // inventer un numero serait plus lisible et faux.
-    std::string sha = j.value(FbneoChannel::sha_key(), std::string());
-    m_lbl_emu_version.set_text(sha.empty() ? std::string(_("Unknown"))
-                                           : sha.substr(0, 7));
+    // « Build » : le commit de finalburnneo que ce build contient, le meme
+    // que celui du groupe de DAT. Celui du fork Bootcade n'en dit rien.
+    const std::string up = EmulatorVariants::version("fbneo", FbneoChannel::current());
+    m_lbl_emu_version.set_text(up.empty() ? std::string(_("Unknown")) : up);
     const std::string installed = file_date(exe);
     m_lbl_emu_systems.set_text(installed.empty() ? "—" : installed);
     const std::string checked = j.value("fbneo_checked_at", std::string());
@@ -4746,10 +4859,13 @@ void SettingsPanel::on_download_fbneo_clicked() {
         const std::string path = AppContext::get_config_path();
         { std::ifstream fi(path); if (fi) { try { fi >> j; } catch (...) { j = nlohmann::json{}; } } }
         j[FbneoChannel::sha_key()] = r.sha;
+        j[FbneoChannel::upstream_key()] = FbneoUpdateCheck::upstream_commit(r);
         std::ofstream fo(path);
         if (fo) fo << j.dump(4);
     }
     refresh_emulator_state();
+    // Installe : la note « pas encore installe » n'a plus lieu d'etre.
+    if (installed && !m_entry_fbneo.get_text().empty()) m_lbl_fbneo_channel_note.hide();
     if (installed) m_sig_fbneo_installed.emit();
 }
 

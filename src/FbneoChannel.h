@@ -19,6 +19,8 @@ bool        official();
 
 // Cle de config.json qui retient le commit telecharge, une par version.
 const char* sha_key();
+// Et celle du commit upstream (finalburnneo) de ce build : la version montree.
+const char* upstream_key();
 // Le zip Linux SDL2 de la version, et l'API de sa release « latest ».
 std::string download_url();
 std::string releases_url();
