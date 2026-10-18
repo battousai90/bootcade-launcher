@@ -138,6 +138,7 @@ private:
     std::string   m_vis_needle;
     Gtk::Label    m_list_status;
     Gtk::Button*  m_btn_audit = nullptr;
+    Gtk::Button*  m_btn_refresh = nullptr;
 
     // Ce que la source a, par jeu (cle systeme/nom), pour la source m_avail_for.
     std::map<std::string, Avail> m_avail;

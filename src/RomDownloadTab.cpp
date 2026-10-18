@@ -64,6 +64,7 @@ RomDownloadTab::RomDownloadTab(Env env)
         set_loading(true, _("Building the list…"));
         populate();
         set_loading(false);
+        if (m_btn_refresh) m_btn_refresh->set_sensitive(true);
     });
     m_worker_event.connect(sigc::mem_fun(*this, &RomDownloadTab::on_worker_event));
     reload_sources();
@@ -217,6 +218,12 @@ void RomDownloadTab::build_table() {
     m_btn_audit->signal_clicked().connect([this] { m_sig_audit.emit(); });
     m_btn_audit->set_no_show_all(true);
     head->pack_end(*m_btn_audit, Gtk::PACK_SHRINK);
+    // Relit la liste des manquants (dernier audit) et redemande a la source ce qu'elle a, base de CRC comprise.
+    m_btn_refresh = ui::button(_("Refresh"), "bc-sync.svg");
+    m_btn_refresh->set_tooltip_text(_("Reload the missing sets from the last audit, and ask the source again what it holds "
+                                      "(the CRC database is read again). It does not run a new audit."));
+    m_btn_refresh->signal_clicked().connect([this] { update_quota(); refresh(); });
+    head->pack_end(*m_btn_refresh, Gtk::PACK_SHRINK);
     pack_start(*head, Gtk::PACK_SHRINK);
 
     m_filter = Gtk::make_managed<ui::FilterBar>(_("Search (game, system…)"));
@@ -516,6 +523,7 @@ void RomDownloadTab::start_availability_check() {
     m_avail_for.clear();
     m_list_status.set_text(Glib::ustring::compose(_("Asking %1 what it has…"), src.name));
     set_loading(true, Glib::ustring::compose(_("Loading what %1 holds and checking the CRC…"), src.name));
+    if (m_btn_refresh) m_btn_refresh->set_sensitive(false);
     std::vector<Set> sets;
     for (const auto& s : m_sets) if (eligible(s, src)) sets.push_back(s);
     const int gen = ++m_check_gen;
