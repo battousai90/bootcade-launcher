@@ -219,10 +219,10 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     pages_scroll->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     pages_scroll->set_shadow_type(Gtk::SHADOW_NONE);
     pages_scroll->add(m_pages);
-    // La zone des onglets annonce leur largeur, et elle seule : les tableaux,
-    // eux, defilent dans la leur. Sans quoi une colonne de longues phrases
-    // demandait toute la largeur de l'ecran.
-    pages_scroll->set_propagate_natural_width(true);
+    // La fenetre a la taille de Library, une fois pour toutes : aucun onglet ne
+    // l'agrandit. Un onglet plus large que la fenetre defile dans cette zone.
+    pages_scroll->set_propagate_natural_width(false);
+    pages_scroll->set_propagate_natural_height(false);
 
     auto* shell = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
     shell->pack_start(m_tabbar,      Gtk::PACK_SHRINK);
@@ -230,17 +230,6 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     add(*shell);
 
     reload_settings();
-    // Dans l'onglet DAT, les listes annoncent aussi leur largeur : leurs
-    // colonnes sont courtes (noms de groupes, nombres, dates), et rognees elles
-    // ne se lisaient plus. Pas dans Library ni Import : leur colonne Details
-    // porte de longues phrases, qui demanderaient tout l'ecran.
-    std::function<void(Gtk::Widget*)> propagate = [&](Gtk::Widget* w) {
-        if (auto* sw = dynamic_cast<Gtk::ScrolledWindow*>(w))
-            if (sw->get_name() != "no-propagate-width") sw->set_propagate_natural_width(true);
-        if (auto* c = dynamic_cast<Gtk::Container*>(w))
-            for (Gtk::Widget* child : c->get_children()) propagate(child);
-    };
-    if (m_dat) propagate(m_dat);
     show_all_children();
     show_tab("library");
 }
@@ -280,40 +269,10 @@ void RomManagerWindow::show_tab(const std::string& id) {
     grow_to_page();
 }
 
-/* La fenetre n'est jamais plus etroite que l'onglet affiche.
- *
- * Chaque onglet garde sa propre taille (pile non homogene) : la fenetre,
- * mesuree a l'ouverture sur Library, coupait l'onglet DAT a droite. Elle
- * s'elargit donc quand l'onglet le demande, sans jamais retrecir : elle ne
- * saute pas d'un onglet a l'autre. Bornee a 95 % de l'ecran. */
-void RomManagerWindow::grow_to_page() {
-    Glib::signal_idle().connect_once([this] {
-        if (!get_visible()) return;
-        Gtk::Requisition minimum, natural;
-        get_preferred_size(minimum, natural);
-        int w = 0, h = 0;
-        get_size(w, h);
-        int want = std::max(minimum.width, natural.width);
-        Gdk::Rectangle work;
-        if (auto win = get_window())
-            if (auto display = Gdk::Display::get_default())
-                if (auto monitor = display->get_monitor_at_window(win)) {
-                    monitor->get_workarea(work);
-                    if (work.get_width() > 0) want = std::min(want, work.get_width() * 95 / 100);
-                }
-        // Jamais plus large que la fenetre principale.
-        int pw = 0, ph = 0;
-        m_parent.get_size(pw, ph);
-        if (pw > 40) want = std::min(want, pw - 24);   // marge : bordure et ombre
-        if (want <= w) return;
-        resize(want, h);
-        // Elargie, elle reste au-dessus de la fenetre principale : recentree sur elle.
-        int px = 0, py = 0, x = 0, y = 0;
-        m_parent.get_position(px, py);
-        get_position(x, y);
-        move(px + (pw - want) / 2, y);
-    });
-}
+/* La fenetre garde la taille et la place qu'elle a prise a l'ouverture, celles de
+ * Library : passer d'un onglet a l'autre ne change que le contenu. Les onglets
+ * plus larges defilent au lieu d'agrandir la fenetre. */
+void RomManagerWindow::grow_to_page() {}
 
 // Library hands over the archives of sets it found repairable : Import takes
 // the stage and analyses them straight away : or as soon as the scan Library

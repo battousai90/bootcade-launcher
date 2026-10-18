@@ -230,7 +230,7 @@ void RomDatTab::build_groups_column() {
     scroll->set_margin_top(10);
     card.body->pack_start(*scroll, Gtk::PACK_EXPAND_WIDGET);
     card.body->pack_start(*m_btn_add_group, Gtk::PACK_SHRINK);
-    card.frame->set_size_request(268, -1);
+    card.frame->set_size_request(410, -1);
     card.frame->set_hexpand(false);
     m_columns.pack_start(*card.frame, Gtk::PACK_SHRINK);
 }
