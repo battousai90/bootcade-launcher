@@ -177,12 +177,21 @@ public:
     const std::unordered_map<std::string, Archive>& all() const { return m_archives; }
     size_t         size() const { return m_archives.size(); }
     bool           empty() const { return m_archives.empty(); }
+    // Ce que le cache du scan contenait, et pourquoi ce n'est pas tout dans l'index :
+    // archives hors des dossiers de ROMs, ou qui n'existent plus sur le disque.
+    size_t cache_files() const { return m_cache_files; }
+    size_t outside_roots() const { return m_outside; }
+    size_t gone_from_disk() const { return m_gone; }
+    const std::string& outside_sample() const { return m_outside_sample; }
+    const std::string& gone_sample() const { return m_gone_sample; }
 
 private:
     std::unordered_map<std::string, Archive>                  m_archives;   // path → contents
     std::unordered_map<std::string, std::vector<std::string>> m_by_stem;    // lower stem → paths
     std::unordered_set<std::string>                           m_headers;    // every DAT header the database knows
     std::unordered_map<std::string, std::vector<std::string>> m_by_folder;  // lower "folder\x1fstem" → paths
+    size_t m_cache_files = 0, m_outside = 0, m_gone = 0;
+    std::string m_outside_sample, m_gone_sample;
 };
 
 // ── Reading a DAT : its merge mode and its folder ───────────────────────────

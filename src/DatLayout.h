@@ -43,6 +43,7 @@ struct Entry {
     unsigned long crc = 0;
     uint64_t      size = 0;
     std::string   owner;      // the set whose ROM it is, when not the archive's own set
+    bool          merge = false;   // the DAT marks it merge= : a ROM of the parent, listed here as it is
 };
 
 struct DiskEntry {

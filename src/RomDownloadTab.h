@@ -109,6 +109,12 @@ private:
     // Les filtres : un jeu est dans UNE de ces categories ; « deja possede » s'y
     // ajoute pour ceux qu'on a deja.
     Gtk::FlowBox           m_pills;
+    // Au milieu de la liste pendant qu'elle se prepare : sans lui, l'ecran semble fige.
+    Gtk::Overlay           m_overlay;
+    Gtk::Box               m_loading{Gtk::ORIENTATION_HORIZONTAL, 12};
+    Gtk::Spinner           m_spinner;
+    Gtk::Label             m_loading_text;
+    void set_loading(bool on, const Glib::ustring& text = Glib::ustring());
     Gtk::CheckButton *m_p_invalid = nullptr, *m_p_all = nullptr;
     void set_filter_counts(int invalid, int all);
     struct Colours { Gdk::RGBA ok, err, muted; bool ready = false; } m_colours;

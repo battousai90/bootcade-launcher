@@ -122,11 +122,13 @@ Verdict Db::check(const std::string& key, const std::vector<unsigned long>& crcs
 std::string file_for(const std::string& source_kind, const std::string& emulator) {
     if (source_kind == "lolroms") return "lolroms.json";
     if (source_kind == "retroroms" && emulator == "mame") return "retroroms-mame.json";
+    if (source_kind == "retroroms" && emulator == "fbneo") return "retroroms-fbneo.json";
     return {};
 }
 
 std::string key_for(const std::string& source_kind, const std::string& lol_folder, const std::string& name) {
-    return source_kind == "lolroms" ? lol_folder + "/" + name : name;
+    // LolRoms et RetroRoms FinalBurn Neo rangent par dossier (arcade, megadrive...) ; MAME n'en a qu'un.
+    return lol_folder.empty() ? name : lol_folder + "/" + name;
 }
 
 }

@@ -669,7 +669,18 @@ void RomLibraryTab::update_summary() {
         m_status.set_text(_("Run an audit to compare your library with the DAT group."));
     } else if (m_audit.pool_empty) {
         m_status.set_text(_("The scan cache is empty : run a ROM scan first."));
+    } else if (m_audit.cache_files >= 20 && (m_audit.outside_roots + m_audit.gone_from_disk) * 2 > m_audit.cache_files) {
+        // Le scan a vu des ROMs que l'audit ne retient pas : on dit lesquelles et pourquoi.
+        const bool outside = m_audit.outside_roots >= m_audit.gone_from_disk;
+        m_status.set_text(outside
+            ? Glib::ustring::compose(_("The scan found %1 archives, but %2 of them are not in the ROM folders being audited (%3) : for example %4."),
+                                     (int)m_audit.cache_files, (int)m_audit.outside_roots,
+                                     m_audit.roots.empty() ? std::string("-") : m_audit.roots.front(), m_audit.outside_sample)
+            : Glib::ustring::compose(_("The scan found %1 archives, but %2 of them cannot be opened on the disk any more : for example %3."),
+                                     (int)m_audit.cache_files, (int)m_audit.gone_from_disk, m_audit.gone_sample));
+        m_status.set_tooltip_text(m_status.get_text());
     } else {
+        m_status.set_has_tooltip(false);
         m_status.set_text(Glib::ustring::compose(
             _("%1 set(s) with a problem, of which %2 can be repaired from the library itself (%3 misnamed). Each DAT is read with its own merge mode."),
             m_audit.incorrect + m_audit.missing, misnamed + fixable, misnamed));

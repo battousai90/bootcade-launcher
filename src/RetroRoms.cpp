@@ -192,7 +192,7 @@ bool list(const std::string& dir, std::map<std::string, std::string>& out,
 
 } // namespace
 
-Status status() {
+static Status status_once() {
     Status s;
     Page p = get(std::string(kSite) + "downloads/");
     if (!p.ok || p.status != 200) return s;
@@ -211,6 +211,19 @@ Status status() {
         if (std::regex_search(p.body, m, allowance)) { s.used = std::stoi(m[1]); s.limit = std::stoi(m[2]); }
     }
     std::cerr << "[RETROROMS] banner: " << s.banner << std::endl;
+    return s;
+}
+
+// La session du site expire en quelques heures, la connexion du forum est retenue bien plus
+// longtemps : quand le site ne nous reconnait plus, on lui fait relire celle du forum (sans
+// mot de passe), et il ouvre une nouvelle session.
+Status status() {
+    Status s = status_once();
+    std::error_code ec;
+    if (s.answered && !s.signed_in && fs::exists(jar_path(), ec)) {
+        get(std::string(kSite) + "login/start?go=%2Fdownloads%2F");
+        s = status_once();
+    }
     return s;
 }
 

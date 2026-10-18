@@ -103,7 +103,18 @@ Report audit(std::shared_ptr<DatabaseManager> db,
             crc_to_archive.emplace(crc, path);
 
     rep.pool_empty = index.empty();
-    log(cb, "Indexed " + std::to_string(index.size()) + " archive(s) from the scan cache.");
+    rep.cache_files = index.cache_files();
+    rep.outside_roots = index.outside_roots();
+    rep.gone_from_disk = index.gone_from_disk();
+    rep.outside_sample = index.outside_sample();
+    rep.gone_sample = index.gone_sample();
+    rep.roots = roms_paths;
+    log(cb, "Indexed " + std::to_string(index.size()) + " archive(s) from the scan cache ("
+            + std::to_string(rep.cache_files) + " in the cache, " + std::to_string(rep.outside_roots)
+            + " outside the ROM folders, " + std::to_string(rep.gone_from_disk) + " gone from the disk).");
+    for (const auto& r : roms_paths) log(cb, "  ROM folder audited : " + r);
+    if (!rep.outside_sample.empty()) log(cb, "  e.g. outside : " + rep.outside_sample);
+    if (!rep.gone_sample.empty()) log(cb, "  e.g. gone : " + rep.gone_sample);
 
     // ── 2. Walk every game in the database ───────────────────────────────────
     report(cb, 12.0, _("Loading the game list…"));
@@ -237,6 +248,7 @@ Report audit(std::shared_ptr<DatabaseManager> db,
                 r.crc       = x.crc;
                 r.size      = x.size;
                 r.inherited = !x.owner.empty() && x.owner != g.name;
+                r.merge_attr = x.merge;
                 r.state     = RomResolve::probe_rom(own, x.name, x.crc, &r.found_as, &r.found_crc);
                 if (r.found_as == x.name) r.found_as.clear();
                 if (r.state == RomState::Corrupt || r.state == RomState::Absent) {

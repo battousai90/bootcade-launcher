@@ -295,12 +295,23 @@ DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& root
 bool under_any_root(const std::string& path, const std::vector<std::string>& roots) {
     // Sous Windows le separateur est « \ » : le cache du scan l'ecrit ainsi
     // (Z:\...\FBNeo\jeu.zip), et n'accepter que « / » ne reconnaissait aucun fichier.
+    // Et « C:\Roms » est « c:/roms » : separateurs et casse ne distinguent rien.
     auto is_sep = [](char c) { return c == '/' || c == '\\'; };
+    auto same = [&](char a, char b) {
+#ifdef _WIN32
+        if (is_sep(a) && is_sep(b)) return true;
+        return std::tolower((unsigned char)a) == std::tolower((unsigned char)b);
+#else
+        return a == b;
+#endif
+    };
     for (std::string root : roots) {
         while (root.size() > 1 && is_sep(root.back())) root.pop_back();
         if (root.empty()) continue;
-        if (path.size() > root.size() && path.compare(0, root.size(), root) == 0 && is_sep(path[root.size()]))
-            return true;
+        if (path.size() <= root.size() || !is_sep(path[root.size()])) continue;
+        bool match = true;
+        for (size_t i = 0; i < root.size() && match; ++i) match = same(root[i], path[i]);
+        if (match) return true;
     }
     return false;
 }
@@ -328,7 +339,11 @@ CacheIndex::CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<st
             // The root first : a string compare, where exists() is a disk
             // access, and on a USB drive a slow one.
             bool ok = roots.empty() || under_any_root(r.filepath, roots);
-            if (ok && on_disk == OnDisk::Verify) ok = fs::exists(fs::path(r.filepath), ec);
+            if (!ok) { ++m_outside; if (m_outside_sample.empty()) m_outside_sample = r.filepath; }
+            if (ok && on_disk == OnDisk::Verify) {
+                ok = fs::exists(fs::path(r.filepath), ec);
+                if (!ok) { ++m_gone; if (m_gone_sample.empty()) m_gone_sample = r.filepath; }
+            }
             u = usable.emplace(r.filepath, ok).first;
             if (ok) {
                 const fs::path fp(r.filepath);
@@ -341,6 +356,7 @@ CacheIndex::CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<st
         if (!u->second) continue;
         m_archives[r.filepath].add(r.entry_name, r.crc);
     }
+    m_cache_files = usable.size();
 }
 
 std::vector<const Archive*> CacheIndex::in_folder(const std::string& folder, const std::string& set) const {

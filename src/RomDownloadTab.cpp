@@ -61,7 +61,9 @@ RomDownloadTab::RomDownloadTab(Env env)
         m_size = std::move(m_check_size);
         m_crcinfo = std::move(m_check_crcinfo);
         m_avail_for = m_check_for;
+        set_loading(true, _("Building the list…"));
         populate();
+        set_loading(false);
     });
     m_worker_event.connect(sigc::mem_fun(*this, &RomDownloadTab::on_worker_event));
     reload_sources();
@@ -268,6 +270,35 @@ void RomDownloadTab::build_table() {
         });
     }
     m_table->set_size_request(-1, 140);
+    // L'indicateur de chargement, au centre de la liste.
+    m_overlay.add(*m_table);
+    m_loading.set_halign(Gtk::ALIGN_CENTER);
+    m_loading.set_valign(Gtk::ALIGN_CENTER);
+    m_loading.get_style_context()->add_class("set-card");
+    m_loading.set_border_width(18);
+    m_spinner.set_size_request(28, 28);
+    m_loading.pack_start(m_spinner, Gtk::PACK_SHRINK);
+    m_loading_text.get_style_context()->add_class("set-title");
+    m_loading.pack_start(m_loading_text, Gtk::PACK_SHRINK);
+    m_loading.set_no_show_all(true);
+    m_overlay.add_overlay(m_loading);
+    m_overlay.set_overlay_pass_through(m_loading, false);
+}
+
+void RomDownloadTab::set_loading(bool on, const Glib::ustring& text) {
+    if (on) {
+        m_loading_text.set_text(text);
+        // show_all() ne fait rien sur un widget « no_show_all » : on montre chaque piece.
+        m_spinner.show();
+        m_loading_text.show();
+        m_loading.show();
+        m_spinner.start();
+        // Peint maintenant : la suite occupe le fil de l'interface, et sans cela rien n'apparait.
+        while (Gtk::Main::events_pending()) Gtk::Main::iteration(false);
+    } else {
+        m_spinner.stop();
+        m_loading.hide();
+    }
 }
 
 void RomDownloadTab::set_filter_counts(int invalid, int all) {
@@ -319,7 +350,7 @@ void RomDownloadTab::build_queue() {
     empty->show();
     m_queue_list.set_placeholder(*empty);
     // Tableau en haut, telechargements en bas, une poignee entre les deux.
-    pack_start(*ui::splitter(*m_table, *q.frame, 260), Gtk::PACK_EXPAND_WIDGET);
+    pack_start(*ui::splitter(m_overlay, *q.frame, 260), Gtk::PACK_EXPAND_WIDGET);
 }
 
 void RomDownloadTab::build_footer() {
@@ -484,6 +515,7 @@ void RomDownloadTab::start_availability_check() {
     m_avail.clear();
     m_avail_for.clear();
     m_list_status.set_text(Glib::ustring::compose(_("Asking %1 what it has…"), src.name));
+    set_loading(true, Glib::ustring::compose(_("Loading what %1 holds and checking the CRC…"), src.name));
     std::vector<Set> sets;
     for (const auto& s : m_sets) if (eligible(s, src)) sets.push_back(s);
     const int gen = ++m_check_gen;
@@ -525,7 +557,9 @@ void RomDownloadTab::start_availability_check() {
                 sizes[key_of(s.system, s.name)] = size;
                 // Les CRC du fichier, connus : ils disent tout, sans date a deviner.
                 if (const CrcDb::Db* db = db_for(s)) {
-                    const std::string folder = src.kind == "lolroms" ? LolRoms::folder_for(s.emulator, s.system) : std::string();
+                    std::string folder;
+                    if (src.kind == "lolroms") folder = LolRoms::folder_for(s.emulator, s.system);
+                    else if (s.emulator == "fbneo") folder = fs::path(RetroRoms::folder_for(s.emulator, s.system)).filename().string();
                     int have = 0;
                     const auto v = db->check(CrcDb::key_for(src.kind, folder, s.name), s.crcs, &have);
                     if (v == CrcDb::Verdict::Match || v == CrcDb::Verdict::Mismatch) crcinfo[key_of(s.system, s.name)] = {have, (int)s.crcs.size()};
@@ -581,12 +615,16 @@ void RomDownloadTab::refresh() {
         // dans la liste : le joueur voit tout, et peut tout retelecharger.
         const bool owned = (g.status != "missing" && g.status != "incorrect") || g.repairable;
         Set s{g.dat_header, g.name, g.description, g.system, rep->emulator, g.status, g.is_chd, {}, owned};
-        for (const auto& r : g.roms) if (!r.is_disk && !r.inherited && r.crc) s.crcs.push_back(r.crc);
+        // Les ROMs PROPRES du jeu : celles du parent (merge=) se verifient dans le zip du parent,
+        // et un site range tantot des zips split, tantot complets.
+        for (const auto& r : g.roms) if (!r.is_disk && !r.inherited && !r.merge_attr && r.crc) s.crcs.push_back(r.crc);
         m_sets.push_back(std::move(s));
     }
     m_avail.clear();
     m_avail_for.clear();
+    set_loading(true, _("Building the list…"));
     populate();
+    set_loading(false);
     start_availability_check();
 }
 
@@ -855,7 +893,7 @@ void RomDownloadTab::start_worker() {
 
 void RomDownloadTab::worker() {
     std::map<std::string, int> bootcade_left;   // compte -> telechargements restants
-    bool bootcade_asked = false;
+    bool bootcade_asked = false, retro_checked = false;
     for (;;) {
         std::shared_ptr<Item> item;
         {
@@ -916,6 +954,7 @@ void RomDownloadTab::worker() {
                 auto res = LolRoms::download(s.emulator, s.system, s.name, s.is_chd, item->dest, m_cancel_current, progress);
                 r.ok = res.ok; r.path = res.path; r.reason = res.reason; r.site_fault = res.site_fault;
             } else if (src.kind == "retroroms") {
+                if (!retro_checked) { retro_checked = true; RetroRoms::status(); }   // rouvre la session si elle a expire
                 r = RetroRoms::download(s.emulator, s.system, s.name, s.is_chd, item->dest, m_cancel_current, progress);
                 if (!r.ok && r.http_status == 403) {
                     // Pas connecte, ou quota du site atteint : les suivants auraient le meme sort.
