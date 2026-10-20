@@ -1,6 +1,8 @@
 // src/MainWindow.cpp
 #include "FileChooser.h"
 #include "MainWindow.h"
+#include "DefaultFolders.h"
+#include "RomFolderDialog.h"
 #include "EmulatorRegistry.h"
 #include "MameCatalog.h"
 #include "MameSooner.h"
@@ -643,11 +645,21 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // suit, la fenetre de progression posee sur Settings, encore ouverte.
     /* Un emulateur vient d'etre installe : ses DAT sont generes par lui, dans
      * le groupe de cette version, et la liste des jeux suit. */
+    m_settings_panel.signal_restart_requested().connect([this] {
+        AppUpdater::restart_after_exit();
+        on_quit();
+    });
     m_settings_panel.signal_fbneo_installed().connect([this] {
-        auto_dat_group("fbneo", FbneoChannel::current(), m_settings_win);
+        // Le bas de la colonne de gauche disait encore « FBNeo not set » apres l'installation.
+        refresh_emu_state();
+        const bool ok = auto_dat_group("fbneo", FbneoChannel::current(), m_settings_win);
+        refresh_emu_state();
+        // Installe et DAT generes : Settings a fini son travail. Elle passait derriere la fenetre principale
+        // et restait ouverte pour rien.
+        if (ok && m_settings_win) m_close_settings_signal.emit();
     });
     m_settings_panel.signal_mame_installed().connect([this](std::string variant) {
-        auto_dat_group("mame", variant, m_settings_win);
+        if (auto_dat_group("mame", variant, m_settings_win) && m_settings_win) m_close_settings_signal.emit();
     });
     m_settings_panel.signal_open_rom_manager().connect([this] {
         on_rom_manager();
@@ -733,39 +745,19 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_menu_emulator.set_submenu(m_submenu_emulator);
     m_app_menu.append(m_menu_emulator);
     
-    m_menu_item_fbneo_menu.set_label(_("Open FBNeo Menu"));
-    m_menu_item_fbneo_menu.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_fbneo_menu));
-    m_submenu_emulator.append(m_menu_item_fbneo_menu);
-
+    // Rien de propre a FinalBurn Neo ici : plein ecran et echelle entiere se choisissent dans le menu de
+    // Play, la liste des jeux et les DAT dans ROM Manager, la mise a jour de l'emulateur dans les reglages.
     m_menu_item_input_settings.set_label(_("Controller Settings..."));
     m_menu_item_input_settings.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_input_settings));
     m_submenu_emulator.append(m_menu_item_input_settings);
 
-    m_submenu_emulator.append(*Gtk::manage(new Gtk::SeparatorMenuItem()));
-    
-    m_menu_item_fullscreen_mode.set_label(_("Launch in Fullscreen  (-fullscreen)"));
-    m_menu_item_fullscreen_mode.signal_toggled().connect(sigc::mem_fun(*this, &MainWindow::on_fullscreen_mode));
-    m_submenu_emulator.append(m_menu_item_fullscreen_mode);
-
-    m_menu_item_integerscale_mode.set_label(_("Use Integer Scale  (-integerscale)"));
-    m_menu_item_integerscale_mode.signal_toggled().connect(sigc::mem_fun(*this, &MainWindow::on_integerscale_mode));
-    m_submenu_emulator.append(m_menu_item_integerscale_mode);
-    
     m_submenu_emulator.append(*Gtk::make_managed<Gtk::SeparatorMenuItem>());
-    
-    m_menu_item_download_latest_fbneo.set_label(_("Download Latest FBNeo Release"));
-    m_menu_item_download_latest_fbneo.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_download_latest_fbneo));
-    m_submenu_emulator.append(m_menu_item_download_latest_fbneo);
 
     m_menu_item_download_missing_art.set_label(_("Download missing artwork"));
     m_menu_item_download_missing_art.signal_activate().connect(
         sigc::mem_fun(*this, &MainWindow::on_download_missing_artwork));
     m_submenu_emulator.append(m_menu_item_download_missing_art);
-    
-    m_menu_item_generate_dat_files.set_label(_("Generate DAT Files"));
-    m_menu_item_generate_dat_files.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_generate_dat_files));
-    m_submenu_emulator.append(m_menu_item_generate_dat_files);
-    
+
     // Filter Menu
     // Le sous-menu « Filter » a ete retire : ses cinq entrees (tous les
     // jeux, arcade, console, disponibles, manquants) sont toutes doublees
@@ -778,13 +770,9 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_menu_roms.set_submenu(m_submenu_roms);
     m_app_menu.append(m_menu_roms);
     
-    m_menu_item_rescan_roms.set_label(_("Rescan ROMs"));
-    m_menu_item_rescan_roms.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_rescan_roms));
+    m_menu_item_rescan_roms.set_label(_("Full Rescan ROMs"));
+    m_menu_item_rescan_roms.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_full_rescan_roms));
     m_submenu_roms.append(m_menu_item_rescan_roms);
-    
-    m_menu_item_update_dat.set_label(_("Update DAT"));
-    m_menu_item_update_dat.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_update_dat_clicked));
-    m_submenu_roms.append(m_menu_item_update_dat);
 
     m_menu_item_find_duplicates.set_label(_("Find Duplicate ROMs..."));
     m_menu_item_find_duplicates.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_find_duplicate_roms));
@@ -805,6 +793,14 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_menu_item_about_fbneo.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_about_fbneo));
     m_submenu_help.append(m_menu_item_about_fbneo);
     
+    m_menu_item_about_mame.set_label(_("About MAME"));
+    m_menu_item_about_mame.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_about_mame));
+    m_submenu_help.append(m_menu_item_about_mame);
+
+    m_menu_item_about_downloads.set_label(_("About Downloads"));
+    m_menu_item_about_downloads.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_about_downloads));
+    m_submenu_help.append(m_menu_item_about_downloads);
+
     m_menu_item_about_launcher.set_label(_("About Launcher"));
     m_menu_item_about_launcher.signal_activate().connect(sigc::mem_fun(*this, &MainWindow::on_about_launcher));
     m_submenu_help.append(m_menu_item_about_launcher);
@@ -1205,8 +1201,9 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_dock_tabs.set_margin_top(4);
     m_dock_tabs.set_margin_bottom(2);
     m_dock_stack.set_valign(Gtk::ALIGN_START);
-    m_detail_text_col.pack_start(m_dock_tabs, Gtk::PACK_SHRINK);
-    m_detail_text_col.pack_start(m_dock_stack, Gtk::PACK_SHRINK);
+    m_tabs_col.pack_start(m_dock_tabs, Gtk::PACK_SHRINK);
+    m_tabs_col.pack_start(m_dock_stack, Gtk::PACK_SHRINK);
+    m_tabs_col.set_valign(Gtk::ALIGN_START);
     // Changer d'onglet remet le volet en haut : on lit une nouvelle page.
     m_dock_stack.property_visible_child_name().signal_changed().connect([this] {
         m_details_scroll.get_vadjustment()->set_value(0);
@@ -1359,6 +1356,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // PACK_SHRINK et non EXPAND : la colonne prend la hauteur de son
     // contenu. En EXPAND, chaque carte grandissait avec la fenetre.
     m_details_box.pack_start(m_detail_text_col, Gtk::PACK_SHRINK);
+    m_details_box.pack_start(m_tabs_col, Gtk::PACK_SHRINK);
 
     // Group C : status pills above the action buttons.
     /* Etoile et « ... » : de vraies icones, blanches et grandes.
@@ -1386,9 +1384,13 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     });
     m_mi_game_page.set_label(_("Open game page"));
     m_mi_game_page.signal_activate().connect([this] {
-        // Vers le classement tant que la page par jeu du site n'existe pas :
-        // un lien qui mene a une page absente est pire que pas de lien.
-        open_web("/leaderboard/");
+        // La page du jeu sur le site : classement complet, record, place du joueur.
+        auto iter = m_treeview_games.get_selection()->get_selected();
+        if (!iter) return;
+        Gtk::TreeModel::Row row = *iter;
+        const std::string name   = Glib::ustring(row[m_columns.m_col_name]).raw();
+        const std::string system = Glib::ustring(row[m_columns.m_col_system]).raw();
+        open_web("/leaderboard/game/?s=" + Glib::uri_escape_string(system) + "&n=" + Glib::uri_escape_string(name));
     });
     /* « Reset game settings » : ecarter le <rom>.ini que FBNeo ecrit par jeu.
      *
@@ -1423,25 +1425,8 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     /* Play scinde : l'action principale a gauche, ses variantes derriere le
      * chevron. Elles existaient deja dans le menu Emulator, ou personne ne
      * va les chercher au moment de lancer une partie. */
-    m_mi_play_fullscreen.set_label(_("Play fullscreen"));
-    m_mi_play_fullscreen.signal_activate().connect([this] {
-        m_menu_item_fullscreen_mode.set_active(true);
-        m_button_play.clicked();
-    });
-    m_mi_play_integer.set_label(_("Play with integer scale"));
-    m_mi_play_integer.signal_activate().connect([this] {
-        m_menu_item_integerscale_mode.set_active(true);
-        m_button_play.clicked();
-    });
-    m_mi_play_fbneo.set_label(_("Open FBNeo menu"));
-    m_mi_play_fbneo.signal_activate().connect([this] {
-        m_menu_item_fbneo_menu.activate();
-    });
-    m_play_menu.append(m_mi_play_fullscreen);
-    m_play_menu.append(m_mi_play_integer);
-    m_play_menu.append(*Gtk::make_managed<Gtk::SeparatorMenuItem>());
-    m_play_menu.append(m_mi_play_fbneo);
-    m_play_menu.show_all();
+    // Le menu se refait a chaque ouverture : il reflete les reglages d'affichage du moment.
+    m_play_menu.signal_show().connect(sigc::mem_fun(*this, &MainWindow::rebuild_play_menu));
     m_btn_play_more.set_popup(m_play_menu);
     m_btn_play_more.set_size_request(44, 52);
     m_btn_play_more.get_style_context()->add_class("accent-button");
@@ -1698,8 +1683,6 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_lbl_emu_state.set_xalign(0.0f);
     m_lbl_emu_state.get_style_context()->add_class("dim-label");
     refresh_emu_state();
-    m_sidebar_foot.pack_start(m_lbl_app_version, Gtk::PACK_SHRINK);
-    m_sidebar_foot.pack_start(m_lbl_emu_state,   Gtk::PACK_SHRINK);
     m_sidebar_foot.set_margin_start(14);
     m_sidebar_foot.set_margin_end(10);
     m_sidebar_foot.set_margin_top(6);
@@ -1707,7 +1690,6 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     build_emulator_picker();
     m_sidebar_box.pack_start(m_btn_emu_picker,   Gtk::PACK_SHRINK);
     m_sidebar_box.pack_start(m_scrolled_filters, Gtk::PACK_EXPAND_WIDGET);
-    m_sidebar_box.pack_start(m_sidebar_foot,     Gtk::PACK_SHRINK);
     m_paned_main.pack1(m_sidebar_box, false, false);
     m_paned_main.pack2(m_right_box, true, true);
     // Suit la largeur demandee par la colonne : les laisser diverger faisait
@@ -1801,6 +1783,10 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_zoom_box.pack_start(m_zoom_label, Gtk::PACK_SHRINK);
     m_zoom_box.pack_start(m_zoom_scale, Gtk::PACK_SHRINK);
     m_status_box.pack_end(m_btn_dock_toggle, Gtk::PACK_SHRINK);
+    // Les versions (du launcher et de l'emulateur) vivent ici, en bas a droite : la colonne de gauche
+    // garde toute sa hauteur pour les filtres.
+    m_status_box.pack_end(m_lbl_app_version, Gtk::PACK_SHRINK);
+    m_status_box.pack_end(m_lbl_emu_state,   Gtk::PACK_SHRINK);
 
     m_status_box.set_margin_start(6);
     m_status_box.set_margin_end(6);
@@ -1908,10 +1894,18 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_headerbar.pack_end(m_btn_account);
     m_headerbar.pack_end(m_menu_button);
     m_headerbar.pack_end(m_btn_settings);
+    // Les manettes, a cote des reglages : on y va souvent, il n'y avait que le menu pour y arriver.
+    m_btn_controller.set_image(*SettingsUi::image("bc-controller.svg", 19));
+    m_btn_controller.set_always_show_image(true);
+    m_btn_controller.set_tooltip_text(_("Controller settings"));
+    m_btn_controller.get_style_context()->add_class("hb-button");
+    m_btn_controller.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_input_settings));
+    m_headerbar.pack_end(m_btn_controller);
     m_headerbar.pack_end(m_button_scan);
     // Le de, a gauche de ROM Manager : une action de jeu, pas de gestion.
     m_btn_random.set_image(*SettingsUi::image("bc-dice.svg", 19));
     m_btn_random.set_always_show_image(true);
+    m_btn_random.set_label(_("Random"));
     m_btn_random.set_tooltip_text(_("Pick a random game"));
     m_btn_random.get_style_context()->add_class("hb-button");
     m_btn_random.signal_clicked().connect(sigc::mem_fun(*this, &MainWindow::on_random_game_clicked));
@@ -2757,6 +2751,11 @@ void MainWindow::set_dock_position(const std::string& pos) {
     m_detail_text_col.set_halign(lead);
     m_detail_text_col.set_hexpand(false);
     m_detail_text_col.set_size_request(right ? 420 : -1, -1);
+    // Les onglets : sous la fiche quand le volet est a droite, a sa droite quand il est en bas (la place
+    // manque en hauteur, pas en largeur).
+    m_tabs_col.set_halign(right ? Gtk::ALIGN_CENTER : Gtk::ALIGN_FILL);
+    m_tabs_col.set_hexpand(!right);
+    m_tabs_col.set_size_request(right ? 420 : 460, -1);
     m_dock_pills.set_halign(lead);
     m_dock_pills.set_spacing(10);
     m_dock_pills.set_margin_top(2);
@@ -4147,6 +4146,16 @@ void MainWindow::run_update_dat_once(const std::string& emulator) {
     std::vector<std::string> conflicts;
     std::vector<std::string> files = DATUpdateDialog::files_for_update(emulator, &conflicts);
     for (const auto& c : conflicts) std::cerr << "[DAT] conflict: " << c << std::endl;
+    // Les DAT sont la, dans le dossier du groupe FinalBurn Neo, mais aucun groupe actif ne les
+    // retient (groupe absent, desactive, selection vide) : la liste des jeux restait vide et la
+    // base se retrouvait videe pour rien. Pour FinalBurn Neo, on charge ce que le dossier contient.
+    if (files.empty() && (emulator.empty() || emulator == "fbneo")) {
+        for (const auto& name : DatSource::list_folder(dat_path))
+            files.push_back((std::filesystem::path(dat_path) / name).string());
+        if (!files.empty())
+            std::cerr << "[DAT] no active group selects a file : loading the " << files.size()
+                      << " DAT file(s) of " << dat_path << std::endl;
+    }
     DATUpdateDialog dialog(*this, m_database, dat_path, files, emulator);
     dialog.note_conflicts(conflicts);
     dialog.start_update();
@@ -4345,8 +4354,15 @@ void MainWindow::refresh_setup_guide() {
 
     // 3. Le dossier de ROMs
     if (roms_ok) {
-        sub = folders.front();
-        end = done();
+        // Le dossier par defaut existe deja (il est cree avec l'espace de travail) : l'etape est
+        // « faite », mais le joueur doit pouvoir designer le sien.
+        sub = folders.back();   // le dernier ajoute : celui que le joueur vient de choisir
+        auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+        box->pack_start(*done(), Gtk::PACK_SHRINK);
+        auto* change = ui::button(_("Choose folder..."), "bc-folder.svg");
+        change->signal_clicked().connect([this] { on_guide_choose_roms(); });
+        box->pack_start(*change, Gtk::PACK_SHRINK);
+        end = box;
     } else {
         sub = _("The folder that holds your ROM archives (.zip files).");
         end = action(_("Choose folder..."), "bc-folder.svg", true,
@@ -4371,25 +4387,84 @@ void MainWindow::refresh_setup_guide() {
 }
 
 void MainWindow::on_guide_choose_roms() {
-    BcFileChooser dialog(*this, _("Select ROMs Directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
-    dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
-    dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
-    if (const char* home = std::getenv("HOME")) dialog.set_current_folder(home);
-    if (dialog.run() != Gtk::RESPONSE_OK) return;
-    const std::string folder = dialog.get_filename();
-    dialog.hide();
-    // Un chemin tape a la main peut ne mener nulle part.
-    std::error_code ec;
-    if (folder.empty() || !std::filesystem::is_directory(folder, ec)) return;
-
     const bool fbneo = fbneo_can_start(m_settings_panel.get_fbneo_executable());
-    m_settings_panel.add_roms_path_for(fbneo ? "fbneo" : "mame", folder);
-    m_settings_panel.save_to_file(AppContext::get_config_path());
+    const std::string emu = fbneo ? "fbneo" : "mame";
+    // Le dossier que Bootcade tient deja pour ce joueur : celui de l'espace de travail.
+    const auto configured = m_settings_panel.get_roms_paths(emu);
+    const std::string folder = !configured.empty()
+        ? configured.front()
+        : DefaultFolders::sub(std::string("Roms/Library/") + (fbneo ? "FBNeo" : "Mame"));
+
+    // Une fenetre de l'application : en-tete a pictogramme, corps, actions en bas a droite
+    // (la principale en dernier), comme ConfirmationDialog.
+    namespace ui = SettingsUi;
+    Gtk::Dialog dlg;
+    dlg.set_transient_for(*this);
+    dlg.set_modal(true);
+    dlg.set_resizable(false);
+    dlg.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
+    dlg.set_default_size(560, -1);
+    ui::window_header(dlg, "bc-folder.svg", _("Where are your ROMs?"),
+                      _("Bootcade keeps a ROM folder for you."),
+                      [&dlg] { dlg.response(Gtk::RESPONSE_CANCEL); });
+
+    auto* body = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 14);
+    body->set_margin_start(22); body->set_margin_end(22); body->set_margin_top(20); body->set_margin_bottom(20);
+    auto* text = Gtk::make_managed<Gtk::Label>(
+        _("If you use it, drop your ROM archives (.zip) in it. "
+          "If your ROMs are already somewhere else, choose your own folder in Settings."));
+    text->set_xalign(0.0f); text->set_line_wrap(true); text->set_line_wrap_mode(Pango::WRAP_WORD);
+    text->set_max_width_chars(62);
+    body->pack_start(*text, Gtk::PACK_SHRINK);
+    auto* path_card = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
+    path_card->get_style_context()->add_class("set-card");
+    path_card->set_border_width(12);
+    auto* path = Gtk::make_managed<Gtk::Label>(folder);
+    path->set_xalign(0.0f); path->set_line_wrap(true); path->set_line_wrap_mode(Pango::WRAP_CHAR);
+    path->set_selectable(true);
+    path->get_style_context()->add_class("set-row-title");
+    path_card->pack_start(*path, Gtk::PACK_SHRINK);
+    body->pack_start(*path_card, Gtk::PACK_SHRINK);
+
+    auto* foot = ui::footer();
+    auto* use = ui::button(_("Use this folder"), "", ui::Tone::Accent);
+    auto* elsewhere = ui::button(_("My ROMs are elsewhere"));
+    auto* cancel = ui::button(_("Cancel"));
+    use->signal_clicked().connect([&dlg] { dlg.response(Gtk::RESPONSE_YES); });
+    elsewhere->signal_clicked().connect([&dlg] { dlg.response(Gtk::RESPONSE_NO); });
+    cancel->signal_clicked().connect([&dlg] { dlg.response(Gtk::RESPONSE_CANCEL); });
+    foot->pack_end(*use, Gtk::PACK_SHRINK);
+    foot->pack_end(*elsewhere, Gtk::PACK_SHRINK);
+    foot->pack_end(*cancel, Gtk::PACK_SHRINK);
+
+    auto* column = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
+    column->pack_start(*body, Gtk::PACK_EXPAND_WIDGET);
+    column->pack_start(*foot, Gtk::PACK_SHRINK);
+    dlg.get_content_area()->set_spacing(0);
+    dlg.get_content_area()->pack_start(*column, Gtk::PACK_EXPAND_WIDGET);
+    dlg.show_all();
+    const int answer = dlg.run();
+    dlg.hide();
+
+    if (answer == Gtk::RESPONSE_NO) {
+        // Son dossier a lui : l'onglet Library des reglages, la ou il se definit.
+        on_settings_clicked();
+        m_settings_panel.open_library(emu);
+        return;
+    }
+    if (answer != Gtk::RESPONSE_YES) return;
+
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    // Le dossier, dans une fenetre de Bootcade : on y depose ses ROMs, on y cree des dossiers.
+    RomFolderDialog folder_dialog(*this, folder);
+    const int result = folder_dialog.run();
+    folder_dialog.hide();
     refresh_setup_guide();
-    // Le joueur vient de dire ou sont ses jeux : la suite logique est de les
-    // chercher, pas de lui reposer la question.
-    if (fbneo) run_fbneo_scan();
-    else       on_start_scan_clicked();
+    if (result == RomFolderDialog::kScan) {
+        if (m_active_emulator == "mame") on_start_scan_clicked();
+        else                             run_fbneo_scan();
+    }
 }
 
 void MainWindow::on_settings_clicked() {
@@ -5434,6 +5509,78 @@ void MainWindow::on_input_settings() {
     present_controller_dialog(dlg, cfg_path);
 }
 
+/* Les options d'affichage, la ou on lance une partie : plein ecran, echelle entiere, filtre d'image,
+ * lignes de balayage, masque RVB, etirement. Ce que le binaire de FinalBurn Neo ne propose pas n'apparait pas. */
+void MainWindow::rebuild_play_menu() {
+    SettingsUi::destroy_children(m_play_menu);
+    auto add_check = [this](const Glib::ustring& label, bool active, std::function<void(bool)> on) {
+        auto* it = Gtk::make_managed<Gtk::CheckMenuItem>(label);
+        it->set_active(active);
+        it->signal_toggled().connect([it, on] { on(it->get_active()); });
+        m_play_menu.append(*it);
+    };
+    add_check(_("Fullscreen"), m_menu_item_fullscreen_mode.get_active(),
+              [this](bool on) { m_menu_item_fullscreen_mode.set_active(on); });
+    add_check(_("Integer scale"), m_menu_item_integerscale_mode.get_active(),
+              [this](bool on) { m_menu_item_integerscale_mode.set_active(on); });
+
+    const auto& caps = m_settings_panel.fbneo_caps();
+    if (caps.ok) {
+        m_play_menu.append(*Gtk::make_managed<Gtk::SeparatorMenuItem>());
+        FbneoVideo::Options opts = m_settings_panel.fbneo_video();
+
+        // Un sous-menu a choix unique : « None » + chaque entree que le binaire accepte.
+        auto add_choice = [this](const Glib::ustring& title, const std::vector<std::pair<std::string, Glib::ustring>>& items,
+                                 const std::string& current, std::function<void(const std::string&)> on) {
+            auto* head = Gtk::make_managed<Gtk::MenuItem>(title);
+            auto* sub = Gtk::make_managed<Gtk::Menu>();
+            Gtk::RadioMenuItem::Group group;
+            for (const auto& [id, label] : items) {
+                auto* r = Gtk::make_managed<Gtk::RadioMenuItem>(group, label);
+                r->set_active(id == current);
+                r->signal_toggled().connect([r, id, on] { if (r->get_active()) on(id); });
+                sub->append(*r);
+            }
+            head->set_submenu(*sub);
+            m_play_menu.append(*head);
+        };
+
+        std::vector<std::pair<std::string, Glib::ustring>> filters{{"", _("None")}};
+        for (const auto& f : caps.softfx)
+            if (f.available && f.index != caps.softfx_range.def)
+                filters.push_back({std::to_string(f.index), f.name + " (x" + std::to_string(f.zoom) + ")"});
+        if (filters.size() > 1)
+            add_choice(_("Picture filter"), filters, opts.softfx_on ? std::to_string(opts.softfx) : std::string(),
+                       [this](const std::string& id) {
+                           auto o = m_settings_panel.fbneo_video();
+                           o.softfx_on = !id.empty();
+                           if (!id.empty()) o.softfx = std::atoi(id.c_str());
+                           m_settings_panel.set_fbneo_video(o);
+                       });
+
+        add_check(_("Scanlines"), opts.scanlines, [this](bool on) {
+            auto o = m_settings_panel.fbneo_video(); o.scanlines = on; m_settings_panel.set_fbneo_video(o);
+        });
+
+        std::vector<std::pair<std::string, Glib::ustring>> masks{{"", _("None")}};
+        for (const auto& m : caps.rgbmask)
+            if (m.index != caps.rgbmask_range.def) masks.push_back({std::to_string(m.index), m.name});
+        if (masks.size() > 1)
+            add_choice(_("RGB mask"), masks, opts.rgbmask_on ? std::to_string(opts.rgbmask) : std::string(),
+                       [this](const std::string& id) {
+                           auto o = m_settings_panel.fbneo_video();
+                           o.rgbmask_on = !id.empty();
+                           if (!id.empty()) o.rgbmask = std::atoi(id.c_str());
+                           m_settings_panel.set_fbneo_video(o);
+                       });
+
+        add_check(_("Stretch to window"), opts.stretch, [this](bool on) {
+            auto o = m_settings_panel.fbneo_video(); o.stretch = on; m_settings_panel.set_fbneo_video(o);
+        });
+    }
+    m_play_menu.show_all();
+}
+
 void MainWindow::on_game_controls() {
     auto iter = m_treeview_games.get_selection()->get_selected();
     if (!iter) return;
@@ -5685,6 +5832,23 @@ void MainWindow::on_all_systems() {
     std::cout << "Showing all systems" << std::endl;
 }
 
+void MainWindow::on_full_rescan_roms() {
+    ConfirmationDialog confirm(*this, _("Full Rescan ROMs"),
+        _("Bootcade forgets everything the previous scans read, then reads all your ROM folders again from "
+          "scratch, as on the very first scan. Favourites and play history are kept.\n\n"
+          "Are you sure you want to continue?"),
+        "bc-search.svg", /*destructive=*/false,
+        _("This process can take several minutes depending on your ROM collection."));
+    if (!confirm.show_and_confirm()) return;
+    if (m_scan_in_progress) return;
+    const std::string emu = m_active_emulator == "mame" ? "mame" : "fbneo";
+    m_database->clearRomCache();
+    m_database->clearDirectorySnapshots();
+    m_database->resetGamesToMissing(emu);
+    if (emu == "mame") run_mame_audit();
+    else               run_fbneo_scan();
+}
+
 void MainWindow::on_rescan_roms() {
     // Trigger ROM rescan
     on_start_scan_clicked();
@@ -5865,6 +6029,77 @@ void MainWindow::on_about_fbneo() {
 
     dialog.show_all();
     dialog.run();
+}
+
+void MainWindow::show_about(const std::string& icon, const std::string& title, const std::string& subtitle,
+                            const std::string& markup,
+                            const std::vector<std::pair<std::string, std::string>>& links) {
+    Gtk::Dialog dialog;
+    dialog.set_transient_for(*this);
+    dialog.set_modal(true);
+    dialog.set_default_size(560, -1);
+    dialog.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
+    SettingsUi::window_header(dialog, icon, title, subtitle, [&dialog] { dialog.response(Gtk::RESPONSE_CLOSE); });
+    auto* area = dialog.get_content_area();
+    area->set_spacing(0);
+    auto* body = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 8));
+    body->set_margin_start(22); body->set_margin_end(22); body->set_margin_top(18); body->set_margin_bottom(18);
+    area->pack_start(*body, Gtk::PACK_EXPAND_WIDGET);
+    auto* label = Gtk::manage(new Gtk::Label());
+    label->set_markup(markup);
+    label->set_line_wrap(true);
+    label->set_xalign(0.0f);
+    label->set_max_width_chars(70);
+    body->pack_start(*label, Gtk::PACK_SHRINK);
+    auto* links_box = Gtk::manage(new Gtk::Box(Gtk::ORIENTATION_VERTICAL, 5));
+    links_box->set_margin_top(10);
+    for (const auto& [text, url] : links) {
+        auto* b = SettingsUi::button(text, "bc-external.svg");
+        b->signal_clicked().connect([this, url] { SettingsUi::open_uri(url, this); });
+        links_box->pack_start(*b, Gtk::PACK_SHRINK);
+    }
+    body->pack_start(*links_box, Gtk::PACK_SHRINK);
+    auto* foot = SettingsUi::footer();
+    auto* close = SettingsUi::button(_("Close"), "", SettingsUi::Tone::Accent);
+    close->set_size_request(96, -1);
+    close->signal_clicked().connect([&dialog] { dialog.response(Gtk::RESPONSE_CLOSE); });
+    foot->pack_end(*close, Gtk::PACK_SHRINK);
+    area->pack_start(*foot, Gtk::PACK_SHRINK);
+    dialog.show_all();
+    dialog.run();
+}
+
+void MainWindow::on_about_mame() {
+    const std::string exe = m_settings_panel.mame_executable();
+    std::string text = Glib::Markup::escape_text(_(
+        "MAME (Multiple Arcade Machine Emulator) preserves thousands of arcade machines and other systems by "
+        "emulating their hardware. It is developed by the MAME team and many contributors, and distributed under "
+        "free software licences."));
+    text += "\n\n<b>" + Glib::Markup::escape_text(_("Configured executable:")) + "</b> "
+          + Glib::Markup::escape_text(exe.empty() ? _("(not set)") : exe);
+    show_about("bc-package.svg", _("About MAME"), _("The reference arcade emulator"), text,
+               {{_("MAME website"), "https://www.mamedev.org/"},
+                {_("MAME on GitHub"), "https://github.com/mamedev/mame"}});
+}
+
+void MainWindow::on_about_downloads() {
+    std::string text = "<b>" + Glib::Markup::escape_text(_("Thank you")) + "</b>\n"
+        + Glib::Markup::escape_text(_(
+            "Bootcade can fetch missing ROM sets from sites that curate and share them. They do the hard work "
+            "of collecting, verifying and hosting these collections; Bootcade only checks what you download "
+            "against your DAT and files it for you. Please support them."));
+    text += "\n\n<b>LolRoms</b>\n" + Glib::Markup::escape_text(_(
+            "A large, well organised collection of arcade and console sets, shared for free."));
+    text += "\n\n<b>RetroRoms</b>\n" + Glib::Markup::escape_text(_(
+            "A community and download site for MAME and FinalBurn Neo sets. Downloads use your own RetroRoms "
+            "account and its daily allowance."));
+    text += "\n\n<b>Bootcade</b>\n" + Glib::Markup::escape_text(_(
+            "The Bootcade server provides the DAT files and the CRC database that tell which sets are valid."));
+    text += "\n\n" + Glib::Markup::escape_text(_(
+            "Bootcade does not host any ROM. You are responsible for the use of what you download."));
+    show_about("bc-download.svg", _("About Downloads"), _("Where the ROM sets come from"), text,
+               {{_("LolRoms"), "https://lolroms.com/"},
+                {_("RetroRoms"), "https://www.retroroms.info/"}});
 }
 
 void MainWindow::on_controls_help() {
@@ -7312,15 +7547,16 @@ void MainWindow::on_download_latest_fbneo() {
     do_update_dat("fbneo");
 }
 
-void MainWindow::auto_dat_group(const std::string& emulator, const std::string& variant, Gtk::Window* parent) {
-    if (m_dat_update_running) return;
-    if (!DatGroupSetup::install_and_generate(parent ? *parent : *this, emulator, variant)) return;
+bool MainWindow::auto_dat_group(const std::string& emulator, const std::string& variant, Gtk::Window* parent) {
+    if (m_dat_update_running) return false;
+    if (!DatGroupSetup::install_and_generate(parent ? *parent : *this, emulator, variant)) return false;
     // L'ancienne cle dat_path suit le groupe FinalBurn Neo actif.
     if (emulator == "fbneo")
         for (const auto& g : DatSource::load_groups())
             if (g.active && g.emulator == "fbneo") m_settings_panel.set_dat_path(g.folder);
     do_update_dat(emulator);
     refresh_setup_guide();
+    return true;
 }
 
 void MainWindow::on_generate_dat_files() {
@@ -8925,8 +9161,15 @@ void MainWindow::on_find_duplicate_roms() {
                          std::filesystem::recursive_directory_iterator(
                              dir, std::filesystem::directory_options::skip_permission_denied))
                     {
-                        if (entry.path().extension() == ".zip")
-                            seen[entry.path().stem().string()].push_back(entry.path().string());
+                        // Same name AND same folder name : "005.zip" in the FinalBurn Neo
+                        // Arcade folder and in the MAME folder are two different sets,
+                        // each in the folder of its own DAT, not one set twice.
+                        if (entry.path().extension() == ".zip") {
+                            std::string folder = entry.path().parent_path().filename().string();
+                            std::transform(folder.begin(), folder.end(), folder.begin(),
+                                           [](unsigned char c) { return (char)std::tolower(c); });
+                            seen[entry.path().stem().string() + '\x1f' + folder].push_back(entry.path().string());
+                        }
                     }
                 } catch (...) {}
             }
@@ -8940,8 +9183,8 @@ void MainWindow::on_find_duplicate_roms() {
 
     // Filter to actual duplicates
     std::vector<std::pair<std::string, std::vector<std::string>>> dupes;
-    for (auto& [name, paths] : seen)
-        if (paths.size() > 1) dupes.push_back({name, paths});
+    for (auto& [key, paths] : seen)
+        if (paths.size() > 1) dupes.push_back({key.substr(0, key.find('\x1f')), paths});
 
     if (dupes.empty()) {
         SettingsUi::notice(*this, _("No duplicates found"),
@@ -8999,7 +9242,7 @@ void MainWindow::open_web(const std::string& path) {
     // transporte AUCUN jeton, il demande seulement au site de verifier en
     // silence aupres de Keycloak, qui reconnait la session du navigateur.
     std::string url = "https://bootcade.netlify.app" + path;
-    if (BootcadeAuth::signed_in()) url += "?sso=1";
+    if (BootcadeAuth::signed_in()) url += (path.find('?') == std::string::npos ? "?sso=1" : "&sso=1");
     SettingsUi::open_uri(url, this);
 }
 

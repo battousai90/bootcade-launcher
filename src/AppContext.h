@@ -34,6 +34,25 @@ public:
     // True when running inside a Flatpak sandbox.
     static bool in_flatpak();
 
+    /* ── Ou Bootcade range ses fichiers ────────────────────────────────────
+     *
+     * Le dossier de travail porte tout : config.json, games.db et le dossier
+     * Bootcade (DAT, images, ROMs de travail, emulateurs). Trois cas :
+     *  - mode portable : un fichier « portable.txt » a cote de l'executable
+     *    (de l'AppImage pour une AppImage) ; rien n'est ecrit hors de ce dossier ;
+     *  - un dossier choisi par le joueur, retenu par un petit fichier repere
+     *    (« workdir ») a l'emplacement habituel de l'application ;
+     *  - sinon l'emplacement habituel (%APPDATA%\bootcade, ~/.config/bootcade),
+     *    comme avant : une installation existante ne bouge pas.
+     * Vide quand c'est le dernier cas, ou pour un build de chantier
+     * (BOOTCADE_CONFIG_DIR). */
+    static std::string workspace_dir();
+    static bool is_portable();
+    // %APPDATA%\bootcade ou ~/.config/bootcade : la ou vit le fichier repere.
+    static std::string standard_config_dir();
+    static void set_workspace_pointer(const std::string& dir);
+    static void reset_workspace_cache();
+
     // Prefix a command so it runs on the host when sandboxed, unchanged otherwise.
     //
     // FinalBurn Neo lives on the host and links against the host's libraries (SDL2

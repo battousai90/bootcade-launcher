@@ -36,6 +36,8 @@ public:
     bool resetGamesFromDirectory(const std::string& directory, const std::string& emulator = "fbneo");
     bool updateGameSnapshot(const std::string& game_name, const std::string& snapshot_path);
     bool resetAllGamesToMissing();
+    // Les jeux d'un seul emulateur : le « Full rescan » ne touche pas aux statuts de l'autre.
+    bool resetGamesToMissing(const std::string& emulator);
     
     // Un seul catalogue a la fois, FinalBurn Neo par defaut : la table porte
     // aussi les sets MAME que le gestionnaire de ROMs importe de ses DAT, et

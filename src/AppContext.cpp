@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <iostream>
 #include <vector>
+#include <mutex>
 
 // Static member initialization
 std::string AppContext::s_executable_dir = "";
@@ -125,6 +126,75 @@ static bool migrate_config_dir(const std::string& from, const std::string& to) {
     return true;
 }
 
+// ── Dossier de travail ──────────────────────────────────────────────────────
+
+static std::mutex g_workspace_mutex;
+static bool g_workspace_known = false;
+static std::string g_workspace;
+
+std::string AppContext::standard_config_dir() {
+#ifdef _WIN32
+    const char* appdata = std::getenv("APPDATA");
+    const char* home = std::getenv("HOME");
+    if (appdata && *appdata) return std::string(appdata) + "/bootcade";
+    return home && *home ? std::string(home) + "/bootcade" : std::string();
+#else
+    const char* home = std::getenv("HOME");
+    return home && *home ? std::string(home) + "/.config/bootcade" : std::string();
+#endif
+}
+
+// Le dossier ou se trouve le programme : celui de l'AppImage elle-meme quand
+// c'en est une (l'executable est alors dans un point de montage temporaire).
+static std::string portable_base() {
+    if (const char* ai = std::getenv("APPIMAGE"); ai && *ai)
+        return std::filesystem::path(ai).parent_path().string();
+    return AppContext::get_executable_dir();
+}
+
+bool AppContext::is_portable() {
+    std::error_code ec;
+    const std::string base = portable_base();
+    return !base.empty() && std::filesystem::exists(base + "/portable.txt", ec);
+}
+
+std::string AppContext::workspace_dir() {
+    if (const char* env = std::getenv("BOOTCADE_CONFIG_DIR"); env && *env) return {};
+    std::lock_guard<std::mutex> lock(g_workspace_mutex);
+    if (g_workspace_known) return g_workspace;
+    g_workspace.clear();
+    if (is_portable()) {
+        g_workspace = portable_base() + "/Bootcade";
+    } else {
+        const std::string std_dir = standard_config_dir();
+        if (!std_dir.empty()) {
+            std::ifstream in(std_dir + "/workdir");
+            std::string line;
+            if (in && std::getline(in, line)) {
+                while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ')) line.pop_back();
+                g_workspace = line;
+            }
+        }
+    }
+    g_workspace_known = true;
+    return g_workspace;
+}
+
+void AppContext::set_workspace_pointer(const std::string& dir) {
+    const std::string std_dir = standard_config_dir();
+    if (std_dir.empty()) return;
+    std::error_code ec;
+    std::filesystem::create_directories(std_dir, ec);
+    { std::ofstream out(std_dir + "/workdir", std::ios::trunc); out << dir << "\n"; }
+    reset_workspace_cache();
+}
+
+void AppContext::reset_workspace_cache() {
+    std::lock_guard<std::mutex> lock(g_workspace_mutex);
+    g_workspace_known = false;
+    g_workspace.clear();
+}
+
 std::string AppContext::get_user_config_dir() {
     // Un chantier parallele (le support MAME, une campagne de tests, une
     // capture de demo) doit pouvoir tourner sans toucher a l'etat du launcher
@@ -135,6 +205,12 @@ std::string AppContext::get_user_config_dir() {
             std::filesystem::create_directories(env, ec);
             return env;
         }
+    }
+
+    if (const std::string w = workspace_dir(); !w.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(w, ec);
+        return w;
     }
 
     const char* home = std::getenv("HOME");

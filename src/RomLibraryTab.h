@@ -19,6 +19,7 @@
 #include "DatSource.h"
 #include "DatabaseManager.h"
 #include "RomAudit.h"
+#include "Pager.h"
 #include "SettingsUi.h"
 
 #include <gtkmm.h>
@@ -191,7 +192,11 @@ private:
     };
     Columns m_cols;
     Glib::RefPtr<Gtk::ListStore>       m_store;
-    SettingsUi::ModelStack             m_models;    // filter + sort, rebuilt on every change
+    SettingsUi::ModelStack             m_models;    // filter + sort + page, rebuilt on every change
+    SettingsUi::Pager*                 m_pager = nullptr;
+    Gtk::Box*                          m_table_box = nullptr;
+    void attach_models();   // rebuilds the stack for the current page, then tells the pager the total
+    void on_page_changed();
     Glib::ustring m_vis_system;                     // filter inputs, snapshotted per refilter
     std::string   m_vis_needle;
     Gtk::TreeModel::Row source_row(const Gtk::TreeModel::Path& sorted_path) const;

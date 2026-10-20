@@ -274,6 +274,21 @@ std::string install(const Assets& assets, const Progress& progress) {
 
 void restart_after_exit() {
 #ifdef _WIN32
+    // Pas de script d'attente sous Windows : la nouvelle instance attend elle-meme
+    // la fin de celle-ci (BOOTCADE_WAIT_PID, lu au debut de main).
+    const std::string exe = own_executable();
+    if (exe.empty()) return;
+    _putenv_s("BOOTCADE_WAIT_PID", std::to_string(GetCurrentProcessId()).c_str());
+    STARTUPINFOA si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    std::string cmdline = "\"" + exe + "\"";
+    const std::string dir = fs::path(exe).parent_path().string();
+    if (CreateProcessA(exe.c_str(), cmdline.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    _putenv_s("BOOTCADE_WAIT_PID", "");
     return;
 #endif
     const Install how = detect();

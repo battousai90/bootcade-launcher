@@ -137,9 +137,12 @@ void RomDownloadTab::build_top() {
 
     // ── Ou ils vont ───────────────────────────────────────────────────────
     auto dst = ui::card("bc-folder.svg", _("Download to"), _("Where the downloaded sets are written."));
-    m_target.append("inbox",   _("Import folder : checked against the DAT, then filed"));
-    m_target.append("outbox",  _("Outbox : ready to be moved to the library"));
-    m_target.append("library", _("Library : straight into your ROM folders"));
+    // Deux destinations seulement. Import verifie chaque set contre le DAT puis le range dans le bon
+    // dossier de la bibliotheque (systeme / DAT) : c'est le chemin qui garde la collection alignee.
+    // L'Outbox et « droit dans la bibliotheque » ne sont plus proposes : un 7z (LolRoms) ne peut pas y
+    // aller sans passer par Import de toute facon, et un set non verifie ne doit pas arriver, ni
+    // ecraser un bon, directement dans la bibliotheque.
+    m_target.append("inbox",   _("Import folder (recommended) : checked against the DAT, then filed in your library"));
     m_target.append("folder",  _("Another folder…"));
     m_target.set_active_id(DownloadSources::download_target());
     if (m_target.get_active_row_number() < 0) m_target.set_active_id("inbox");
@@ -255,7 +258,10 @@ void RomDownloadTab::build_table() {
     m_store = Gtk::ListStore::create(m_cols);
     m_models.sort_column = m_cols.game.index();
     m_table = Gtk::make_managed<ui::Table>(Gtk::SELECTION_MULTIPLE);
-    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomDownloadTab::row_visible));
+    // La liste est paginee : 10, 20, 50 ou 100 lignes par page, au choix du joueur.
+    m_pager = Gtk::make_managed<ui::Pager>();
+    m_pager->signal_changed().connect(sigc::mem_fun(*this, &RomDownloadTab::on_page_changed));
+    attach_models();
     m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomDownloadTab::on_toggled),
                               [this](bool on) { set_all(on); });
     std::vector<std::pair<Gtk::TreeViewColumn*, bool>> cols;
@@ -357,7 +363,10 @@ void RomDownloadTab::build_queue() {
     empty->show();
     m_queue_list.set_placeholder(*empty);
     // Tableau en haut, telechargements en bas, une poignee entre les deux.
-    pack_start(*ui::splitter(m_overlay, *q.frame, 260), Gtk::PACK_EXPAND_WIDGET);
+    m_list_box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
+    m_list_box->pack_start(m_overlay, Gtk::PACK_EXPAND_WIDGET);
+    m_list_box->pack_start(*m_pager, Gtk::PACK_SHRINK);
+    pack_start(*ui::splitter(*m_list_box, *q.frame, 260), Gtk::PACK_EXPAND_WIDGET);
 }
 
 void RomDownloadTab::build_footer() {
@@ -726,18 +735,30 @@ bool RomDownloadTab::row_visible(const Gtk::TreeModel::const_iterator& it) const
     return true;
 }
 
+void RomDownloadTab::attach_models() {
+    m_models.page_size  = m_pager->page_size();
+    m_models.page_index = m_pager->page_index();
+    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomDownloadTab::row_visible));
+    m_pager->set_total(m_models.visible_count());
+    m_models.set_page(m_pager->page_index(), m_pager->page_size());
+}
+
+void RomDownloadTab::on_page_changed() {
+    m_models.set_page(m_pager->page_index(), m_pager->page_size());
+}
+
 void RomDownloadTab::refilter() {
     m_vis_system = m_system_combo->get_active_row_number() > 0 ? m_system_combo->get_active_text() : Glib::ustring();
     m_vis_needle = lower(m_filter->search_text());
     m_models.detach(m_table->view());
-    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomDownloadTab::row_visible));
+    m_pager->reset();   // un filtre change : retour a la premiere page
+    attach_models();
     m_filter->set_summary(Glib::ustring::compose(_("%1 shown"), m_models.visible_count()));
     update_buttons();
 }
 
 void RomDownloadTab::on_toggled(const Glib::ustring& path) {
-    auto child = m_models.filter->convert_path_to_child_path(m_models.sort->convert_path_to_child_path(Gtk::TreeModel::Path(path)));
-    Gtk::TreeModel::Row row = *m_store->get_iter(child);
+    Gtk::TreeModel::Row row = *m_store->get_iter(m_models.store_path(Gtk::TreeModel::Path(path)));
     if (!row[m_cols.selectable]) return;
     row[m_cols.include] = !row[m_cols.include];
     update_buttons();
@@ -758,7 +779,7 @@ void RomDownloadTab::set_all(bool on) {
         const bool safe = !row[m_cols.owned] && (cat == 0 || (cat == 2 && src.kind == "lolroms"));
         if (!on || safe) row[m_cols.include] = on;
     }
-    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomDownloadTab::row_visible));
+    attach_models();
     update_buttons();
 }
 

@@ -216,6 +216,9 @@ add_executable(bootcade
     src/FbneoUpdateCheck.cpp
     src/AppUpdater.cpp
     src/DefaultFolders.cpp
+    src/Workspace.cpp
+    src/Pager.cpp
+    src/RomFolderDialog.cpp
     src/RetroAchievements.cpp
     src/FbneoVideo.cpp
     src/HiscoreClient.cpp

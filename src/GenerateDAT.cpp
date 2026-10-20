@@ -95,9 +95,17 @@ static void patch_fbneo_ini_dat_path(const std::string& path) {
     std::vector<std::string> lines;
     {
         std::ifstream in(config_file);
-        if (!in.is_open()) return; // fbneo has never run yet : nothing to patch
-        std::string line;
-        while (std::getline(in, line)) lines.push_back(line);
+        // FinalBurn Neo n'a encore jamais tourne (installation neuve) : pas de fbneo.ini. On le cree
+        // avec cette seule consigne, que FinalBurn Neo lit au demarrage, pour qu'il ecrive ses DAT
+        // dans le dossier de Bootcade et nulle part ailleurs (il ecrivait dans son propre dossier,
+        // qui n'existait pas : rien n'etait ecrit).
+        if (in.is_open()) {
+            std::string line;
+            while (std::getline(in, line)) lines.push_back(line);
+        } else {
+            std::error_code mk;
+            std::filesystem::create_directories(std::filesystem::path(config_file).parent_path(), mk);
+        }
     }
 
     bool found = false;
@@ -210,6 +218,14 @@ bool GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executab
             for (const auto& f : DatSource::list_folder(own.string()))
                 std::filesystem::copy_file(own / f, std::filesystem::path(dat_output_dir) / f,
                                            std::filesystem::copy_options::overwrite_existing, ec);
+        }
+        // Reussie seulement si des DAT sont la : un FinalBurn Neo qui rend 0 sans rien ecrire ne
+        // doit pas lancer la mise a jour de la base sur un dossier vide.
+        if (DatSource::list_folder(dat_output_dir).empty()) {
+            SettingsUi::notice(parent, _("DAT generation failed"),
+                               _("FinalBurn Neo ran but wrote no DAT file in:") + std::string("\n") + dat_output_dir,
+                               "bc-error.svg");
+            return false;
         }
         if (dat_entry) dat_entry->set_text(dat_output_dir);
         if (!quiet) show_success_dialog(parent, dat_output_dir, dat_entry);

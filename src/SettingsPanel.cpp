@@ -21,6 +21,9 @@
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
 #include "DatabaseManager.h"
+#include "DefaultFolders.h"
+#include "Workspace.h"
+#include "FileChooser.h"
 #include "DownloadDialog.h"
 #include "EmulatorRegistry.h"
 #include "GenerateDAT.h"
@@ -695,6 +698,17 @@ Gtk::Widget* SettingsPanel::build_page_general() {
     auto storage = ui::card("database.svg", _("Data & Storage"),
                             _("Manage local application data."));
     auto* sto_rows = ui::rows();
+    // Ou Bootcade range ses fichiers : config, base, DAT, images, ROMs de travail, emulateurs.
+    m_btn_workdir.set_label(AppContext::is_portable() ? _("Portable") : _("Change…"));
+    m_btn_workdir.set_sensitive(!AppContext::is_portable());
+    m_btn_workdir.signal_clicked().connect(sigc::mem_fun(*this, &SettingsPanel::on_change_workdir_clicked));
+    {
+        const Glib::ustring where = AppContext::is_portable()
+            ? Glib::ustring(_("Portable mode : everything stays next to Bootcade, in ")) + DefaultFolders::root()
+            : Glib::ustring(DefaultFolders::root());
+        auto* row = ui::row("bc-folder.svg", _("Bootcade folder"), where, &m_btn_workdir);
+        ui::add_row(sto_rows, *row);
+    }
     m_btn_clear_cache.set_label(_("Clear…"));
     m_btn_clear_cache.signal_clicked().connect(
         sigc::mem_fun(*this, &SettingsPanel::on_clear_cache_clicked));
@@ -2320,6 +2334,13 @@ Gtk::Widget* SettingsPanel::build_fbneo_video() {
     return box;
 }
 
+void SettingsPanel::set_fbneo_video(const FbneoVideo::Options& o) {
+    m_fbneo_video = o;
+    fbneo_video_fill();
+    refresh_sections();
+    save_to_file(AppContext::get_config_path());
+}
+
 void SettingsPanel::fbneo_video_fill() {
     m_fx_syncing = true;
     const FbneoVideo::Capabilities& caps = m_fbneo_caps;
@@ -2470,6 +2491,11 @@ void SettingsPanel::open_emulator(const std::string& emulator_id) {
     for (size_t i = 0; i < registry.size(); ++i)
         if (registry[i].id == emulator_id)
             if (auto* row = m_emu_list.get_row_at_index(static_cast<int>(i))) m_emu_list.select_row(*row);
+}
+
+void SettingsPanel::open_library(const std::string& emulator_id) {
+    if (m_tabs_buttons.size() > 1) m_tabs_buttons[1]->clicked();
+    library_show(emulator_id);   // la bibliotheque de l'emulateur dont il s'agit
 }
 
 void SettingsPanel::show_emulator_page(size_t index) {
@@ -3937,6 +3963,36 @@ void SettingsPanel::on_restore_defaults_clicked() {
     apply_defaults();
 }
 
+void SettingsPanel::on_change_workdir_clicked() {
+    auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
+    if (!win) return;
+    BcFileChooser chooser(*win, _("Choose the new Bootcade folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    chooser.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+    chooser.add_button(_("Select"), Gtk::RESPONSE_OK);
+    chooser.set_current_folder(DefaultFolders::root());
+    if (chooser.run() != Gtk::RESPONSE_OK) return;
+    const std::string chosen = chooser.get_filename();
+    chooser.hide();   // sinon il reste affiche derriere la question
+    if (chosen.empty()) return;
+
+    ConfirmationDialog dlg(
+        *win, _("Move Bootcade to this folder?"),
+        Glib::ustring::compose(
+            _("Your settings, game database, DAT files, artwork, emulators and working ROM folders "
+              "move to :\n\n%1\n\nBootcade closes and opens again by itself to do it. Folders "
+              "outside the Bootcade folder, such as a ROM library on another drive, are not touched."),
+            chosen),
+        "bc-folder.svg", false);
+    if (!dlg.show_and_confirm()) return;
+
+    const std::string err = Workspace::request(chosen);
+    if (!err.empty()) {
+        ui::notice(*win, _("This folder cannot be used."), err);
+        return;
+    }
+    m_sig_restart.emit();
+}
+
 void SettingsPanel::on_clear_cache_clicked() {
     auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
     if (!win) return;
@@ -3959,7 +4015,10 @@ void SettingsPanel::on_clear_cache_clicked() {
         auto size = std::filesystem::file_size(f, ec);
         if (!ec) total += size;
     }
-    if (total == 0) {
+    /* Le cache du scan des ROMs vit dans games.db : il se vide table par table,
+     * jamais en effacant le fichier (favoris et historique y sont aussi). */
+    const bool rom_cache = m_database && m_database->getRomCacheCount() > 0;
+    if (total == 0 && !rom_cache) {
         ui::notice(*win, _("Nothing to clear."),
                    _("The local cache is already empty."));
         return;
@@ -3980,9 +4039,10 @@ void SettingsPanel::on_clear_cache_clicked() {
         *win, _("Clear local cache?"),
         Glib::ustring::compose(
             _("Bootcade will delete %1 of cached filters, cached leaderboards "
-              "and the debug log.\n\nYour games, favourites, play history and "
-              "pending scores are not touched. Everything deleted here is "
-              "rebuilt automatically."),
+              "and the debug log, and forget what the last ROM scan read.\n\n"
+              "Your games, favourites, play history and pending scores are not "
+              "touched. Everything deleted here is rebuilt automatically ; run "
+              "Scan ROMs to read your ROM folders again."),
             size_text),
         "bc-clear.svg", true);
     if (!dlg.show_and_confirm()) return;
@@ -3990,6 +4050,10 @@ void SettingsPanel::on_clear_cache_clicked() {
     for (const auto& f : files) {
         std::error_code ec;
         std::filesystem::remove(f, ec);
+    }
+    if (m_database) {
+        m_database->clearRomCache();
+        m_database->clearDirectorySnapshots();
     }
     ui::notice(*win, _("Local cache cleared."),
                _("The deleted files are rebuilt automatically as you use Bootcade."),
@@ -4396,6 +4460,11 @@ void SettingsPanel::add_roms_path(const std::string& path) {
 void SettingsPanel::add_roms_path_for(const std::string& emulator, const std::string& path) {
     if (emulator == m_library_emu) { add_roms_path(path); return; }
     m_library[emulator].roms_paths.push_back(path);
+}
+
+void SettingsPanel::set_roms_paths_for(const std::string& emulator, const std::vector<std::string>& paths) {
+    if (emulator == m_library_emu) { set_roms_paths(paths); return; }
+    m_library[emulator].roms_paths = paths;
 }
 
 void SettingsPanel::remove_roms_path(int index) {

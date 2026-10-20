@@ -339,7 +339,13 @@ void RomLibraryTab::build_table() {
     m_models.sort_order  = Gtk::SORT_ASCENDING;
 
     m_table = Gtk::make_managed<ui::Table>(Gtk::SELECTION_MULTIPLE);
-    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomLibraryTab::row_visible));
+    // La liste est paginee : 10, 20, 50 ou 100 lignes par page, au choix du joueur.
+    m_pager = Gtk::make_managed<ui::Pager>();
+    m_pager->signal_changed().connect(sigc::mem_fun(*this, &RomLibraryTab::on_page_changed));
+    m_table_box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
+    m_table_box->pack_start(*m_table, Gtk::PACK_EXPAND_WIDGET);
+    m_table_box->pack_start(*m_pager, Gtk::PACK_SHRINK);
+    attach_models();
     m_table->add_check_column(m_cols.include, sigc::mem_fun(*this, &RomLibraryTab::on_row_toggled),
                               [this](bool on) { set_all_checked(on); });
     {
@@ -384,7 +390,7 @@ void RomLibraryTab::build_detail() {
                                                   _("Every ROM of the selected set, and where it was found."), 110);
     m_detail->show_placeholder(_("Select a set to see its ROMs."));
     // Table above, detail below, a grip between the two to trade height.
-    pack_start(*ui::splitter(*m_table, *m_detail, 230), Gtk::PACK_EXPAND_WIDGET);
+    pack_start(*ui::splitter(*m_table_box, *m_detail, 230), Gtk::PACK_EXPAND_WIDGET);
 }
 
 void RomLibraryTab::build_footer() {
@@ -669,8 +675,11 @@ void RomLibraryTab::update_summary() {
         m_status.set_text(_("Run an audit to compare your library with the DAT group."));
     } else if (m_audit.pool_empty) {
         m_status.set_text(_("The scan cache is empty : run a ROM scan first."));
-    } else if (m_audit.cache_files >= 20 && (m_audit.outside_roots + m_audit.gone_from_disk) * 2 > m_audit.cache_files) {
-        // Le scan a vu des ROMs que l'audit ne retient pas : on dit lesquelles et pourquoi.
+    } else if (m_audit.cache_files >= 20 && (m_audit.outside_roots + m_audit.gone_from_disk) * 2 > m_audit.cache_files
+               && (long)(correct + incorrect + misnamed + fixable) * 20 < (long)m_audit.total) {
+        // Le scan a vu des ROMs que l'audit ne retient pas ET l'audit n'en a presque rien trouve :
+        // on dit lesquelles et pourquoi. Des archives d'un autre emulateur dans le cache (MAME,
+        // pendant qu'on audite FinalBurn Neo) ne sont pas un probleme : l'audit, lui, est complet.
         const bool outside = m_audit.outside_roots >= m_audit.gone_from_disk;
         m_status.set_text(outside
             ? Glib::ustring::compose(_("The scan found %1 archives, but %2 of them are not in the ROM folders being audited (%3) : for example %4."),
@@ -737,21 +746,34 @@ bool RomLibraryTab::row_visible(const Gtk::TreeModel::const_iterator& it) const 
     return true;
 }
 
+void RomLibraryTab::attach_models() {
+    // La page demandee d'abord (la pile se batit une fois, au bon endroit), puis le total la recale.
+    m_models.page_size  = m_pager->page_size();
+    m_models.page_index = m_pager->page_index();
+    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomLibraryTab::row_visible));
+    m_pager->set_total(m_models.visible_count());
+    m_models.set_page(m_pager->page_index(), m_pager->page_size());
+}
+
+void RomLibraryTab::on_page_changed() {
+    m_models.set_page(m_pager->page_index(), m_pager->page_size());
+}
+
 void RomLibraryTab::refilter() {
     // Rebuilt, not refiltered : see SettingsUi::ModelStack. The filter's
     // inputs are read once here, not once per row inside row_visible.
     m_vis_system = m_system_combo->get_active_row_number() > 0 ? m_system_combo->get_active_text() : Glib::ustring();
     m_vis_needle = lower(m_filter->search_text());
     m_models.detach(m_table->view());
-    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomLibraryTab::row_visible));
+    m_pager->reset();   // un filtre change : retour a la premiere page
+    attach_models();
     m_filter->set_summary(Glib::ustring::compose(_("%1 result(s) (%2 sets audited)"), m_models.visible_count(), m_audit.total));
     // "Fix all" counts what is shown.
     if (m_btn_fix) update_action_buttons();
 }
 
 Gtk::TreeModel::Row RomLibraryTab::source_row(const Gtk::TreeModel::Path& sorted_path) const {
-    auto child = m_models.filter->convert_path_to_child_path(m_models.sort->convert_path_to_child_path(sorted_path));
-    return *m_store->get_iter(child);
+    return *m_store->get_iter(m_models.store_path(sorted_path));
 }
 
 // ═══ Detail panel ═══════════════════════════════════════════════════════════
@@ -885,7 +907,7 @@ void RomLibraryTab::set_all_checked(bool on) {
         Gtk::TreeModel::Row row = *it;
         if (row[m_cols.checkable]) row[m_cols.include] = on;
     }
-    m_models.attach(m_table->view(), m_store, sigc::mem_fun(*this, &RomLibraryTab::row_visible));
+    attach_models();
     update_action_buttons();
 }
 

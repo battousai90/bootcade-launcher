@@ -145,9 +145,14 @@ private:
     void on_about_fbneo();
     void on_controls_help();
     void on_about_launcher();
+    void on_about_mame();
+    void on_about_downloads();
+    void show_about(const std::string& icon, const std::string& title, const std::string& subtitle,
+                    const std::string& markup, const std::vector<std::pair<std::string, std::string>>& links);
+    void on_full_rescan_roms();
     void on_download_latest_fbneo();
     void on_generate_dat_files();
-    void auto_dat_group(const std::string& emulator, const std::string& variant, Gtk::Window* parent);
+    bool auto_dat_group(const std::string& emulator, const std::string& variant, Gtk::Window* parent);
     void update_status_bar_stats();
     void on_start_scan_clicked();
     // ROM Management › Library › Scan ROMs : the library of the DAT group's
@@ -368,6 +373,8 @@ private:
     Gtk::MenuItem m_menu_item_about_fbneo;
     Gtk::MenuItem m_menu_item_controls_help;
     Gtk::MenuItem m_menu_item_about_launcher;
+    Gtk::MenuItem m_menu_item_about_mame;
+    Gtk::MenuItem m_menu_item_about_downloads;
 
     // === Toolbar ===
     Gtk::Box m_main_box{Gtk::ORIENTATION_VERTICAL};
@@ -376,7 +383,8 @@ private:
     Gtk::Box m_toolbar_row2{Gtk::ORIENTATION_HORIZONTAL};
     Gtk::Button m_toolbar_play;   // libelle pose dans le constructeur, sinon non traduit
     Gtk::Button m_button_scan{"Scan ROMs"}; // Button to scan for ROMs
-    Gtk::Button m_btn_random;               // le « de » : un jeu au hasard
+    Gtk::Button m_btn_random;                   // le « de » : un jeu au hasard
+    Gtk::Button m_btn_controller;               // les manettes, a cote des reglages
     Gtk::Button m_button_update_dat{"Update DAT"}; // Button to update DAT database
     // --- Portee par emulateur ------------------------------------------
     //
@@ -903,6 +911,7 @@ private:
     // stack on the right and sit side-by-side at the bottom.
     Gtk::Box m_details_box{Gtk::ORIENTATION_HORIZONTAL, 16};      // A | B | C
     Gtk::Box m_detail_image_wrap{Gtk::ORIENTATION_HORIZONTAL, 8}; // A: Title / Preview
+    Gtk::Box m_tabs_col{Gtk::ORIENTATION_VERTICAL, 0};   // les quatre onglets : sous la fiche (dock a droite) ou a sa droite (dock en bas)
     Gtk::Box m_detail_text_col{Gtk::ORIENTATION_VERTICAL, 6};     // B: title + info
     Gtk::Box m_detail_actions_col{Gtk::ORIENTATION_VERTICAL, 8};  // C: pills + buttons
     Gtk::Box m_detail_actions{Gtk::ORIENTATION_HORIZONTAL, 8};    // Play / ★ / ⋯
@@ -922,6 +931,7 @@ private:
     Gtk::MenuItem    m_mi_play_fullscreen;
     Gtk::MenuItem    m_mi_play_integer;
     Gtk::MenuItem    m_mi_play_fbneo;
+    void rebuild_play_menu();
 
     Gtk::MenuButton  m_btn_detail_more;
     Gtk::Menu        m_detail_menu;

@@ -3,6 +3,10 @@
 #include "SettingsUi.h"
 #include "Platform.h"
 #include <gio/gio.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <shellapi.h>
+#endif
 #include <sstream>
 #include "AppContext.h"
 
@@ -158,8 +162,25 @@ void ModelStack::detach(Gtk::TreeView& view) {
         if (sort->get_sort_column_id(col, order)) { sort_column = col; sort_order = order; }
     }
     view.unset_model();
+    sort_changed.disconnect();
+    for (auto& c : header_clicks) c.disconnect();
+    header_clicks.clear();
+    page.reset();
     sort.reset();
     filter.reset();
+}
+
+void ModelStack::set_page(int index, int size) {
+    if (index == page_index && size == page_size) return;
+    page_index = index;
+    page_size  = size;
+    if (page) page->refilter();
+}
+
+Gtk::TreeModel::Path ModelStack::store_path(const Gtk::TreeModel::Path& view_path) const {
+    Gtk::TreeModel::Path p = view_path;
+    if (page) p = page->convert_path_to_child_path(p);
+    return filter->convert_path_to_child_path(sort->convert_path_to_child_path(p));
 }
 
 void ModelStack::attach(Gtk::TreeView& view, const Glib::RefPtr<Gtk::TreeModel>& store,
@@ -184,7 +205,39 @@ void ModelStack::attach(Gtk::TreeView& view, const Glib::RefPtr<Gtk::TreeModel>&
     if (sort_column != Gtk::TreeSortable::DEFAULT_SORT_COLUMN_ID &&
         sort_column != Gtk::TreeSortable::DEFAULT_UNSORTED_COLUMN_ID)
         sort->set_sort_column(sort_column, sort_order);
-    view.set_model(sort);
+    // La tranche se decoupe APRES le tri : la position d'une ligne dans le modele trie decide de sa page.
+    page = Gtk::TreeModelFilter::create(sort);
+    page->set_visible_func([this](const Gtk::TreeModel::const_iterator& it) -> bool {
+        if (page_size <= 0) return true;
+        const Gtk::TreeModel::Path p = sort->get_path(it);
+        if (p.empty()) return true;
+        const int idx = p[0];
+        return idx >= page_index * page_size && idx < (page_index + 1) * page_size;
+    });
+    // Un autre tri change quelle ligne tombe dans la page.
+    sort_changed = sort->signal_sort_column_changed().connect([this] { if (page && page_size > 0) page->refilter(); });
+    view.set_model(page);
+
+    // La vue ne montre plus le modele trie mais sa page, qui n'est pas triable : un clic sur un
+    // en-tete ne ferait donc plus rien. On le branche nous-memes sur le tri.
+    for (Gtk::TreeViewColumn* col : view.get_columns()) {
+        const int id = col->get_sort_column_id();
+        if (id < 0) continue;
+        header_clicks.push_back(col->signal_clicked().connect([this, col, id] {
+            int cur; Gtk::SortType order;
+            const bool has = sort->get_sort_column_id(cur, order);
+            const Gtk::SortType next = (has && cur == id && order == Gtk::SORT_ASCENDING)
+                                     ? Gtk::SORT_DESCENDING : Gtk::SORT_ASCENDING;
+            sort->set_sort_column(id, next);
+            sort_column = id; sort_order = next;
+            // La tranche se recalcule une fois le tri termine : sinon elle garde les lignes de l'ancien ordre.
+            if (page && page_size > 0) page->refilter();
+            for (Gtk::TreeViewColumn* c : col->get_tree_view()->get_columns()) c->set_sort_indicator(c == col);
+            col->set_sort_order(next);
+        }));
+        if (id == sort_column) { col->set_sort_indicator(true); col->set_sort_order(sort_order); }
+        else col->set_sort_indicator(false);
+    }
 }
 
 int ModelStack::visible_count() const {
@@ -1269,9 +1322,19 @@ bool open_uri(const std::string& uri, Gtk::Window* parent) {
     if (uri.empty()) return false;
 #ifdef _WIN32
     (void)parent;
-    try { return Gio::AppInfo::launch_default_for_uri(uri); }
-    catch (const Glib::Error& e) { std::cerr << "[OPEN] " << e.what() << std::endl; }
-    return false;
+    // Le shell de Windows, directement : GIO cherche un gestionnaire enregistre
+    // pour file:// et n'en trouve pas dans un dossier portable (« Could not open
+    // the folder »). ShellExecute ouvre l'explorateur ou le navigateur par defaut.
+    std::string target = uri;
+    if (uri.rfind("file:", 0) == 0) {
+        try { target = Glib::filename_from_uri(uri); }
+        catch (const Glib::Error& e) { std::cerr << "[OPEN] " << e.what() << std::endl; return false; }
+    }
+    const int n = MultiByteToWideChar(CP_UTF8, 0, target.c_str(), -1, nullptr, 0);
+    if (n <= 0) return false;
+    std::wstring wide((size_t)n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, target.c_str(), -1, wide.data(), n);
+    return (INT_PTR)ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL) > 32;
 #else
     const bool is_file = uri.rfind("file:", 0) == 0;
 

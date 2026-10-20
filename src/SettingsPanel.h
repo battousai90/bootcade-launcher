@@ -22,6 +22,8 @@ public:
     // L'onglet Emulator, sur la fiche de cet emulateur (« fbneo », « mame ») :
     // la ou se regle ce qui manque pour jouer.
     void open_emulator(const std::string& emulator_id);
+    // Onglet Library, sur la bibliotheque de cet emulateur.
+    void open_library(const std::string& emulator_id);
     SettingsPanel();
     virtual ~SettingsPanel();
 
@@ -33,6 +35,7 @@ public:
     void add_roms_path(const std::string& path);
     // Ajoute un dossier a la bibliotheque de `emulator`, affichee ou non.
     void add_roms_path_for(const std::string& emulator, const std::string& path);
+    void set_roms_paths_for(const std::string& emulator, const std::vector<std::string>& paths);
     void remove_roms_path(int index);
 
     std::string get_dat_path() const;
@@ -118,6 +121,13 @@ public:
      */
     Gtk::HeaderBar&     header_bar()             { return m_headerbar; }
     sigc::signal<void>& signal_close_requested() { return m_sig_close; }
+    // Les options d'affichage de FinalBurn Neo, pour le menu de Play : ce que le binaire sait faire et
+    // ce que le joueur a choisi. set_fbneo_video() les enregistre aussitot (pas de bouton Save a presser).
+    const FbneoVideo::Capabilities& fbneo_caps() const { return m_fbneo_caps; }
+    FbneoVideo::Options             fbneo_video() const { return m_fbneo_video; }
+    void                            set_fbneo_video(const FbneoVideo::Options& o);
+    // Le joueur a change le dossier de travail : le launcher doit redemarrer (seul) pour le deplacer.
+    sigc::signal<void>& signal_restart_requested() { return m_sig_restart; }
     // Le bouton « Check for updates now » a trouve une version plus recente.
     sigc::signal<void>& signal_update_found() { return m_sig_update_found; }
     sigc::signal<void>& signal_save_requested()  { return m_sig_save; }
@@ -340,6 +350,10 @@ private:
     std::vector<Gtk::ToggleButton*> m_tabs_buttons;
     bool m_tab_switching{false};
     sigc::signal<void> m_sig_close;
+    sigc::signal<void> m_sig_restart;
+    Gtk::Button m_btn_workdir;
+    Gtk::Label* m_lbl_workdir = nullptr;
+    void on_change_workdir_clicked();
     sigc::signal<void> m_sig_update_found;
     sigc::signal<void> m_sig_save;
     sigc::signal<void> m_sig_fbneo_installed;

@@ -17,8 +17,14 @@
  * dans les reglages. */
 namespace DefaultFolders {
 
-// ~/Bootcade (ou <BOOTCADE_CONFIG_DIR>/Bootcade pour un build de chantier).
+// Le dossier de donnees de Bootcade : le dossier de travail quand il y en a un
+// (choisi par le joueur, ou portable), sinon default_root().
 std::string root();
+// ~/Bootcade (ou <BOOTCADE_CONFIG_DIR>/Bootcade pour un build de chantier).
+std::string default_root();
+// Premier lancement : aucune installation existante, aucun dossier choisi.
+// Jamais pour un build de chantier (BOOTCADE_CONFIG_DIR) ; BOOTCADE_ASK_WORK_DIR=1 le force.
+bool is_first_run();
 // Un sous-dossier de root(), ex. sub("Support/DAT/FBNeo").
 std::string sub(const std::string& relative);
 

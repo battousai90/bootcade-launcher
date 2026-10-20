@@ -192,8 +192,20 @@ void destroy_children(Gtk::Container& parent);
 struct ModelStack {
     Glib::RefPtr<Gtk::TreeModelFilter> filter;
     Glib::RefPtr<Gtk::TreeModelSort>   sort;
+    // La page affichee : une tranche du resultat TRIE. Le magasin garde toutes les lignes (cases
+    // cochees comprises) ; la vue n'en recoit qu'une page, ce qui la rend rapide sur 30 000 lignes.
+    Glib::RefPtr<Gtk::TreeModelFilter> page;
+    int          page_size  = 0;   // 0 : tout afficher
+    int          page_index = 0;
+    sigc::connection sort_changed;
+    std::vector<sigc::connection> header_clicks;   // le clic d'un en-tete trie le modele trie (la vue montre la page)
     int          sort_column = Gtk::TreeSortable::DEFAULT_SORT_COLUMN_ID;
     Gtk::SortType sort_order = Gtk::SORT_ASCENDING;
+
+    // Change de page (ou de taille de page) sans rebatir la pile.
+    void set_page(int index, int size);
+    // Le chemin dans le magasin d'un chemin de la vue (qui montre la page).
+    Gtk::TreeModel::Path store_path(const Gtk::TreeModel::Path& view_path) const;
 
     // Retient la colonne de tri, detache la vue, laisse tomber les deux
     // modeles. A appeler AVANT de toucher au magasin.

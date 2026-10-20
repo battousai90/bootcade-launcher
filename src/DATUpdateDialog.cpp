@@ -144,6 +144,24 @@ void DATUpdateDialog::worker_thread() {
     };
 
     try {
+        // Avant de toucher a la base : sans un seul DAT a charger, vider les jeux
+        // ne laisserait rien a la place, et le joueur perdrait sa liste pour une erreur.
+        {
+            update_progress(0.1, "", "Looking for DAT files...");
+            log("Searching for DAT files in: " + m_dat_path);
+            bool any = false;
+            for (const auto& f : m_files)
+                if (std::filesystem::is_regular_file(f)) { any = true; break; }
+            if (!any) {
+                log("No DAT files found in: " + m_dat_path, Level::Error);
+                log("Nothing was changed : your game list is kept as it is.", Level::Ok);
+                m_failed.store(true);
+                m_update_finished.store(true);
+                m_finished_dispatcher();
+                return;
+            }
+        }
+
         // Phase 1: Reset database
         update_progress(0.1, "", "Clearing database...");
         log("Removing all existing data...");
@@ -186,8 +204,6 @@ void DATUpdateDialog::worker_thread() {
         if (m_cancelled.load()) { m_update_finished.store(true); m_finished_dispatcher(); return; }
 
         update_progress(0.2, "", "Scanning DAT files...");
-        log("Searching for DAT files in: " + m_dat_path);
-
         // What the DAT groups select, resolved by the caller : a file the
         // folder holds but no active group wants is simply not here.
         std::vector<std::string> dat_files;

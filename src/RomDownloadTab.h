@@ -6,6 +6,7 @@
 // progression et de quoi les annuler un par un ou tous.
 #pragma once
 
+#include "Pager.h"
 #include <gtkmm.h>
 
 #include <atomic>
@@ -122,6 +123,10 @@ private:
     void style_cell(Gtk::CellRenderer* renderer, const Gtk::TreeModel::iterator& it, bool crc_column);
     SettingsUi::Table*     m_table = nullptr;
     SettingsUi::ModelStack m_models;
+    SettingsUi::Pager*     m_pager = nullptr;
+    Gtk::Box*              m_list_box = nullptr;
+    void attach_models();
+    void on_page_changed();
     struct Columns : public Gtk::TreeModel::ColumnRecord {
         Gtk::TreeModelColumn<bool>          include;
         Gtk::TreeModelColumn<Glib::ustring> game, system, status, avail, crc, size, search;
