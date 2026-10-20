@@ -19,6 +19,7 @@
 #include <cstring>
 #include <tuple>
 #include "RomScanner.h"
+#include "RomResolve.h"
 
 // Helper function to safely get text from SQLite column
 static std::string safe_column_text(sqlite3_stmt* stmt, int column) {
@@ -1196,6 +1197,16 @@ bool DatabaseManager::updateGameSnapshot(const std::string& game_name, const std
     sqlite3_finalize(stmt);
     
     return rc == SQLITE_DONE;
+}
+
+bool DatabaseManager::resetGamesToMissing(const std::string& emulator) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(m_db, "UPDATE games SET status = 'missing' WHERE emulator = ?;", -1, &st, nullptr) != SQLITE_OK) return false;
+    sqlite3_bind_text(st, 1, emulator.c_str(), -1, SQLITE_TRANSIENT);
+    const bool ok = sqlite3_step(st) == SQLITE_DONE;
+    sqlite3_finalize(st);
+    return ok;
 }
 
 bool DatabaseManager::resetAllGamesToMissing() {
@@ -3181,13 +3192,11 @@ bool DatabaseManager::cleanupRomCache(const std::vector<std::string>& rom_paths)
             // Skip this file - we can't reliably compare
             continue;
         }
-        if (!fp_canon.empty() && fp_canon.back() != '/') fp_canon.push_back('/');
 
-        // If canonical filepath is not under any configured canonical root, mark for removal
-        bool under_any = false;
-        for (const auto& rp : canon_rom_paths) {
-            if (!rp.empty() && fp_canon.rfind(rp, 0) == 0) { under_any = true; break; }
-        }
+        // If canonical filepath is not under any configured canonical root, mark for removal.
+        // Separator- and case-aware : on Windows the paths use '\\', and a '/' compare
+        // took every archive for one outside the libraries.
+        const bool under_any = RomResolve::under_any_root(fp_canon, canon_rom_paths);
         if (!under_any) files_to_remove.push_back(filepath);
     }
 

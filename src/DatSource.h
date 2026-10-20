@@ -96,6 +96,12 @@ struct Group {
     // 'fbneo' : les groupes deja ecrits dans config.json ne portent pas ce
     // champ et decrivent tous FinalBurn Neo.
     std::string emulator = "fbneo";  // "fbneo" | "mame"
+    // Quelle version de cet emulateur (EmulatorVariants) : "bootcade" ou
+    // "official" pour FinalBurn Neo, "release" ou "sooner" pour MAME. Vide
+    // dans un groupe ancien : EmulatorVariants::resolve dit laquelle.
+    std::string variant;
+    // La version de l'emulateur qui a produit ses DAT, montree a cote du nom.
+    std::string version;
     std::string url;                // Kind::Url : the DAT, or archive of DATs, to download
     bool        unzip = true;       // Kind::Url : unpack an archive's DATs into the folder
     std::string site;               // Kind::Site : the label of the chosen site (sites())

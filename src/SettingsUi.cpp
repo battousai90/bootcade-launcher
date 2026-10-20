@@ -1,6 +1,12 @@
 // src/SettingsUi.cpp
+#include "FileChooser.h"
 #include "SettingsUi.h"
+#include "Platform.h"
 #include <gio/gio.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <shellapi.h>
+#endif
 #include <sstream>
 #include "AppContext.h"
 
@@ -156,8 +162,25 @@ void ModelStack::detach(Gtk::TreeView& view) {
         if (sort->get_sort_column_id(col, order)) { sort_column = col; sort_order = order; }
     }
     view.unset_model();
+    sort_changed.disconnect();
+    for (auto& c : header_clicks) c.disconnect();
+    header_clicks.clear();
+    page.reset();
     sort.reset();
     filter.reset();
+}
+
+void ModelStack::set_page(int index, int size) {
+    if (index == page_index && size == page_size) return;
+    page_index = index;
+    page_size  = size;
+    if (page) page->refilter();
+}
+
+Gtk::TreeModel::Path ModelStack::store_path(const Gtk::TreeModel::Path& view_path) const {
+    Gtk::TreeModel::Path p = view_path;
+    if (page) p = page->convert_path_to_child_path(p);
+    return filter->convert_path_to_child_path(sort->convert_path_to_child_path(p));
 }
 
 void ModelStack::attach(Gtk::TreeView& view, const Glib::RefPtr<Gtk::TreeModel>& store,
@@ -182,7 +205,39 @@ void ModelStack::attach(Gtk::TreeView& view, const Glib::RefPtr<Gtk::TreeModel>&
     if (sort_column != Gtk::TreeSortable::DEFAULT_SORT_COLUMN_ID &&
         sort_column != Gtk::TreeSortable::DEFAULT_UNSORTED_COLUMN_ID)
         sort->set_sort_column(sort_column, sort_order);
-    view.set_model(sort);
+    // La tranche se decoupe APRES le tri : la position d'une ligne dans le modele trie decide de sa page.
+    page = Gtk::TreeModelFilter::create(sort);
+    page->set_visible_func([this](const Gtk::TreeModel::const_iterator& it) -> bool {
+        if (page_size <= 0) return true;
+        const Gtk::TreeModel::Path p = sort->get_path(it);
+        if (p.empty()) return true;
+        const int idx = p[0];
+        return idx >= page_index * page_size && idx < (page_index + 1) * page_size;
+    });
+    // Un autre tri change quelle ligne tombe dans la page.
+    sort_changed = sort->signal_sort_column_changed().connect([this] { if (page && page_size > 0) page->refilter(); });
+    view.set_model(page);
+
+    // La vue ne montre plus le modele trie mais sa page, qui n'est pas triable : un clic sur un
+    // en-tete ne ferait donc plus rien. On le branche nous-memes sur le tri.
+    for (Gtk::TreeViewColumn* col : view.get_columns()) {
+        const int id = col->get_sort_column_id();
+        if (id < 0) continue;
+        header_clicks.push_back(col->signal_clicked().connect([this, col, id] {
+            int cur; Gtk::SortType order;
+            const bool has = sort->get_sort_column_id(cur, order);
+            const Gtk::SortType next = (has && cur == id && order == Gtk::SORT_ASCENDING)
+                                     ? Gtk::SORT_DESCENDING : Gtk::SORT_ASCENDING;
+            sort->set_sort_column(id, next);
+            sort_column = id; sort_order = next;
+            // La tranche se recalcule une fois le tri termine : sinon elle garde les lignes de l'ancien ordre.
+            if (page && page_size > 0) page->refilter();
+            for (Gtk::TreeViewColumn* c : col->get_tree_view()->get_columns()) c->set_sort_indicator(c == col);
+            col->set_sort_order(next);
+        }));
+        if (id == sort_column) { col->set_sort_indicator(true); col->set_sort_order(sort_order); }
+        else col->set_sort_indicator(false);
+    }
 }
 
 int ModelStack::visible_count() const {
@@ -671,9 +726,12 @@ Gtk::TreeViewColumn* Table::add_check_column(const Gtk::TreeModelColumn<bool>& c
         col->set_widget(*m_header_check);
         col->set_clickable(true);
         col->signal_clicked().connect([this, on_header] {
-            // Toutes cochees : on decoche. Sinon (aucune, ou une partie) : on coche.
-            const bool all = m_header_check->get_active() && !m_header_check->get_inconsistent();
-            on_header(!all);
+            // Au moins une cochee : on decoche tout. Aucune : on coche tout.
+            // « Toutes cochees » ne suffisait pas : quand certaines lignes ne
+            // peuvent pas l'etre, la case restait a moitie et recochait tout a
+            // chaque clic, sans jamais pouvoir decocher.
+            const bool any = m_header_check->get_active() || m_header_check->get_inconsistent();
+            on_header(!any);
             refresh_header_check();
         });
     }
@@ -780,7 +838,7 @@ bool LogPanel::auto_scroll() const { return m_follow ? m_follow->get_active() : 
 
 void LogPanel::on_export() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-    Gtk::FileChooserDialog dlg(_("Export log"), Gtk::FILE_CHOOSER_ACTION_SAVE);
+    BcFileChooser dlg(_("Export log"), Gtk::FILE_CHOOSER_ACTION_SAVE);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Save"),   Gtk::RESPONSE_OK);
@@ -1071,13 +1129,94 @@ void refresh_fold(const Fold& f) {
  * (1080p, ou 4K affichee a 200 %) : 1400 x 900 y tient avec la barre des
  * taches et la barre de titre. La borne a 90 % de la zone de travail ne sert
  * qu'aux ecrans plus petits. */
-void size_work_window(Gtk::Window& win, Gtk::Window* near) {
+void fit_to_content(Gtk::Window& win, Gtk::Window* anchor,
+                    std::function<void(int, int)> adapt) {
+    win.get_style_context()->add_class("work-window");
+    auto done = std::make_shared<bool>(false);
+    win.signal_show().connect([&win, anchor, done, adapt] {
+        if (*done) return;
+        *done = true;
+        Gtk::Requisition minimum, natural;
+        win.get_preferred_size(minimum, natural);
+        int w = std::max(minimum.width, natural.width);
+        int h = std::max(minimum.height, natural.height);
+
+        Glib::RefPtr<Gdk::Monitor> monitor;
+        if (auto display = Gdk::Display::get_default()) {
+            if (anchor && anchor->get_window())
+                monitor = display->get_monitor_at_window(anchor->get_window());
+            if (!monitor) monitor = display->get_primary_monitor();
+            if (!monitor && display->get_n_monitors() > 0) monitor = display->get_monitor(0);
+        }
+        if (monitor) {
+            Gdk::Rectangle work;
+            monitor->get_workarea(work);
+            const int avail_w = work.get_width()  * 95 / 100;
+            const int avail_h = work.get_height() * 95 / 100;
+            // Plus large que l'ecran : la fenetre se resserre, puis on mesure
+            // de nouveau. Sans quoi le minimum du contenu depasse l'ecran et
+            // le bord droit est rogne.
+            if (adapt && ((avail_w > 0 && w > avail_w) || (avail_h > 0 && h > avail_h))) {
+                adapt(std::max(0, w - avail_w), std::max(0, h - avail_h));
+                win.get_preferred_size(minimum, natural);
+                w = std::max(minimum.width, natural.width);
+                h = std::max(minimum.height, natural.height);
+            }
+            if (avail_w > 0) w = std::min(w, avail_w);
+            if (avail_h > 0) h = std::min(h, avail_h);
+        }
+        win.set_default_size(w, h);
+    });
+}
+
+void fit_work_window(Gtk::Window& win, Gtk::Window* anchor) {
+    size_work_window(win, anchor);
+    auto done = std::make_shared<bool>(false);
+    win.signal_show().connect([&win, anchor, done] {
+        if (*done) return;
+        *done = true;
+        int w = 0, h = 0;
+        win.get_default_size(w, h);
+        Gtk::Requisition minimum, natural;
+        win.get_preferred_size(minimum, natural);
+        w = std::max({w, minimum.width, natural.width});
+        h = std::max({h, minimum.height});
+        Glib::RefPtr<Gdk::Monitor> monitor;
+        if (auto display = Gdk::Display::get_default()) {
+            if (anchor && anchor->get_window())
+                monitor = display->get_monitor_at_window(anchor->get_window());
+            if (!monitor) monitor = display->get_primary_monitor();
+            if (!monitor && display->get_n_monitors() > 0) monitor = display->get_monitor(0);
+        }
+        if (monitor) {
+            Gdk::Rectangle work;
+            monitor->get_workarea(work);
+            if (work.get_width() > 0)  w = std::min(w, work.get_width()  * 95 / 100);
+            if (work.get_height() > 0) h = std::min(h, work.get_height() * 95 / 100);
+        }
+        // Jamais plus grande que la fenetre principale, et posee au milieu
+        // d'elle. Une marge : la bordure et l'ombre de la fenetre s'ajoutent.
+        int ax = 0, ay = 0, aw = 0, ah = 0;
+        const bool on_anchor = anchor && anchor->get_visible();
+        if (on_anchor) {
+            anchor->get_size(aw, ah);
+            anchor->get_position(ax, ay);
+            if (aw > 40) w = std::min(w, aw - 24);
+            if (ah > 40) h = std::min(h, ah - 24);
+        }
+        win.set_default_size(w, h);
+        win.resize(w, h);
+        if (on_anchor && aw > 0 && ah > 0) win.move(ax + (aw - w) / 2, ay + (ah - h) / 2);
+    });
+}
+
+void size_work_window(Gtk::Window& win, Gtk::Window* anchor) {
     int w = kWorkWindowWidth, h = kWorkWindowHeight;
     auto display = Gdk::Display::get_default();
     Glib::RefPtr<Gdk::Monitor> monitor;
     if (display) {
-        if (near && near->get_window())
-            monitor = display->get_monitor_at_window(near->get_window());
+        if (anchor && anchor->get_window())
+            monitor = display->get_monitor_at_window(anchor->get_window());
         if (!monitor) monitor = display->get_primary_monitor();
         if (!monitor && display->get_n_monitors() > 0) monitor = display->get_monitor(0);
     }
@@ -1181,6 +1320,22 @@ bool open_with_portal(const std::string& uri) {
 
 bool open_uri(const std::string& uri, Gtk::Window* parent) {
     if (uri.empty()) return false;
+#ifdef _WIN32
+    (void)parent;
+    // Le shell de Windows, directement : GIO cherche un gestionnaire enregistre
+    // pour file:// et n'en trouve pas dans un dossier portable (« Could not open
+    // the folder »). ShellExecute ouvre l'explorateur ou le navigateur par defaut.
+    std::string target = uri;
+    if (uri.rfind("file:", 0) == 0) {
+        try { target = Glib::filename_from_uri(uri); }
+        catch (const Glib::Error& e) { std::cerr << "[OPEN] " << e.what() << std::endl; return false; }
+    }
+    const int n = MultiByteToWideChar(CP_UTF8, 0, target.c_str(), -1, nullptr, 0);
+    if (n <= 0) return false;
+    std::wstring wide((size_t)n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, target.c_str(), -1, wide.data(), n);
+    return (INT_PTR)ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL) > 32;
+#else
     const bool is_file = uri.rfind("file:", 0) == 0;
 
     // Dans le Flatpak, GTK passe deja par le portail, et c'est la seule voie.
@@ -1205,6 +1360,7 @@ bool open_uri(const std::string& uri, Gtk::Window* parent) {
     try { return Gio::AppInfo::launch_default_for_uri(uri); }
     catch (const Glib::Error& e) { std::cerr << "[OPEN] " << e.what() << std::endl; }
     return false;
+#endif
 }
 
 }  // namespace SettingsUi

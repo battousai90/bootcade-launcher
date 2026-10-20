@@ -1,5 +1,6 @@
 // src/DatSource.cpp
 #include "DatSource.h"
+#include "Platform.h"
 #include "DatParser.h"
 
 #include "AppContext.h"
@@ -8,7 +9,7 @@
 
 #include <archive.h>
 #include <archive_entry.h>
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <glibmm/checksum.h>
 #include <nlohmann/json.hpp>
 #include <pugixml.hpp>
@@ -244,6 +245,8 @@ std::vector<Group> load_groups() {
             grp.active      = flag(g, "active", true);
             grp.last_check  = str(g, "last_check");
             grp.last_update = str(g, "last_update");
+            grp.variant     = str(g, "variant");
+            grp.version     = str(g, "version");
             if (g.contains("all_files") || g.contains("files")) {
                 grp.all_files = flag(g, "all_files", true);
                 grp.files     = list(g, "files");
@@ -345,6 +348,8 @@ bool save_groups(const std::vector<Group>& groups) {
         o["dat_rules"] = std::move(rules);
         o["last_check"] = g.last_check;
         o["last_update"] = g.last_update;
+        o["variant"] = g.variant;
+        o["version"] = g.version;
         arr.push_back(std::move(o));
     }
     j["rom_manager"]["dat_groups"] = std::move(arr);
@@ -744,7 +749,7 @@ bool fetch_direct(const std::string& url, const std::string& folder,
     struct archive* a = archive_read_new();
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
-    bool ok = archive_read_open_filename(a, tmp.c_str(), 1 << 16) == ARCHIVE_OK;
+    bool ok = archive_read_open_filename(a, tmp.string().c_str(), 1 << 16) == ARCHIVE_OK;
     if (!ok) error = archive_error_string(a) ? archive_error_string(a) : "cannot open the archive";
     struct archive_entry* e = nullptr;
     while (ok && archive_read_next_header(a, &e) == ARCHIVE_OK) {

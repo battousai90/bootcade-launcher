@@ -2,7 +2,7 @@
 #include "ThumbnailDownloader.h"
 #include "AppContext.h"
 #include "SystemPrefix.h"
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <fstream>

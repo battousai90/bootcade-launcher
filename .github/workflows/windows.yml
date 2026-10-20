@@ -1,0 +1,115 @@
+name: Windows build
+
+# MSYS2 a retire gtkmm3 de MINGW64 : on construit en UCRT64.
+# Build a part du port Windows : il ne publie rien et ne touche ni release.yml ni
+# ci.yml. Il produit un dossier portable (bootcade.exe, ses DLL, le runtime GTK,
+# assets/ et locale/) a telecharger dans les artefacts du run et a essayer dans
+# une machine Windows.
+on:
+  push:
+    branches: ['2.0.0']
+    paths:
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'assets/**'
+      - 'locale/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Les tags servent a CMake pour numeroter le build (git describe).
+          fetch-depth: 0
+
+      - uses: msys2/setup-msys2@v2.33.0
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            zip
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-gtkmm3
+            mingw-w64-ucrt-x86_64-pugixml
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-libzip
+            mingw-w64-ucrt-x86_64-libarchive
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+
+      - name: Configure
+        run: |
+          git config --global --add safe.directory '*'
+          cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-windows -j$(nproc)
+
+      - name: Assemble the portable folder
+        run: |
+          cmake --install build-windows --prefix "$PWD/dist-windows/Bootcade"
+          cd dist-windows/Bootcade
+
+          # Toutes les DLL dont l'exe depend, de proche en proche, prises dans
+          # le prefixe MSYS2 UCRT64 (jamais celles de Windows).
+          copy_deps() {
+            ldd "$1" | awk '/=> \/ucrt64\// {print $3}' | while read -r dll; do
+              [ -f "./$(basename "$dll")" ] || { cp "$dll" .; copy_deps "$dll"; }
+            done
+          }
+          copy_deps ./bootcade.exe
+
+          # GLib lance les processus par ces deux programmes, a cote de l'exe :
+          # sans eux, « failed to execute helper program ».
+          cp /ucrt64/bin/gspawn-win64-helper.exe /ucrt64/bin/gspawn-win64-helper-console.exe .
+
+          # Le runtime GTK : schemas GSettings, icones, chargeurs d'images.
+          P=/ucrt64
+          mkdir -p share/glib-2.0 share/icons lib
+          cp -r $P/share/glib-2.0/schemas share/glib-2.0/
+          cp -r $P/share/icons/Adwaita share/icons/
+          cp -r $P/share/icons/hicolor share/icons/
+          cp -r $P/lib/gdk-pixbuf-2.0 lib/
+          mkdir -p lib/gio && cp -r $P/lib/gio/modules lib/gio/ 2>/dev/null || true
+          for d in lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll lib/gio/modules/*.dll; do
+            [ -f "$d" ] && copy_deps "$d"
+          done
+
+          # Les autorites de certification, que CurlInit.h donne a libcurl.
+          mkdir -p ssl/certs && cp $P/etc/ssl/certs/ca-bundle.crt ssl/certs/
+          # La configuration des polices, lue seulement si le moteur fontconfig
+          # est choisi (PANGOCAIRO_BACKEND=fc, utile sous Wine).
+          cp -r $P/etc/fonts etc/ 2>/dev/null || { mkdir -p etc && cp -r $P/etc/fonts etc/; }
+          ls
+
+      - name: Zip the portable folder
+        id: zip
+        run: |
+          VERSION=$(sed -n 's/^project(bootcade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          echo "name=bootcade-${VERSION}-windows-x64" >> "$GITHUB_OUTPUT"
+          cd dist-windows
+          mv Bootcade "bootcade-${VERSION}-windows-x64"
+          zip -qr9 "bootcade-${VERSION}-windows-x64.zip" "bootcade-${VERSION}-windows-x64"
+          ls -la
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.zip.outputs.name }}
+          path: dist-windows/${{ steps.zip.outputs.name }}.zip
+          if-no-files-found: error

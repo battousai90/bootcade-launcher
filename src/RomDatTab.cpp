@@ -1,9 +1,12 @@
 // src/RomDatTab.cpp
+#include "FileChooser.h"
 #include "RomDatTab.h"
+#include "Platform.h"
 
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
 #include "EmulatorRegistry.h"
+#include "EmulatorVariants.h"
 #include "DatParser.h"
 #include "GenerateDAT.h"
 #include "MameCatalog.h"
@@ -227,7 +230,7 @@ void RomDatTab::build_groups_column() {
     scroll->set_margin_top(10);
     card.body->pack_start(*scroll, Gtk::PACK_EXPAND_WIDGET);
     card.body->pack_start(*m_btn_add_group, Gtk::PACK_SHRINK);
-    card.frame->set_size_request(268, -1);
+    card.frame->set_size_request(410, -1);
     card.frame->set_hexpand(false);
     m_columns.pack_start(*card.frame, Gtk::PACK_SHRINK);
 }
@@ -269,13 +272,17 @@ void RomDatTab::build_group_card() {
     auto* emu_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
     auto* emu_label = ui::title_label(_("Emulator"));
     emu_label->set_valign(Gtk::ALIGN_CENTER);
-    for (const auto& e : EmulatorRegistry::all())
-        m_combo_emulator.append(e.id, e.name + "  —  " + e.tagline);
+    // Chaque version de chaque emulateur : c'est elle qui genere les DAT.
+    for (const auto& v : EmulatorVariants::all())
+        m_combo_emulator.append(EmulatorVariants::key(v.emulator, v.variant), v.label);
     m_combo_emulator.set_tooltip_text(_("Which emulator this group describes. It says what generates its DAT files and which catalogue the audit judges."));
     m_combo_emulator.signal_changed().connect([this] {
-        std::string v = m_combo_emulator.get_active_id().raw();
-        if (v.empty() || v == group().emulator) return;
-        group().emulator = v;
+        std::string emu, var;
+        if (!EmulatorVariants::split(m_combo_emulator.get_active_id().raw(), emu, var)) return;
+        if (emu == group().emulator && var == EmulatorVariants::resolve(group().emulator, group().variant)) return;
+        group().emulator = emu;
+        group().variant  = var;
+        group().version.clear();
         // Change d'emulateur, le groupe actif y devient le seul actif ; son
         // ancien emulateur garde (ou retrouve) le sien.
         DatSource::one_active_per_emulator(m_groups, group().active ? m_current : DatSource::kNoGroup);
@@ -420,7 +427,9 @@ void RomDatTab::build_source_card() {
 }
 
 void RomDatTab::build_table() {
-    auto* middle = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, ui::kCardSpacing);
+    // Le tableau sur toute la largeur, les cartes d'informations en dessous :
+    // a cote, elles le privaient de ses dernieres colonnes.
+    auto* middle = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, ui::kCardSpacing);
 
     m_store = Gtk::ListStore::create(m_cols);
     m_table = Gtk::make_managed<ui::Table>(Gtk::SELECTION_SINGLE);
@@ -441,7 +450,7 @@ void RomDatTab::build_table() {
         // The names all share a long prefix : a bounded, resizable column
         // keeps the counts on screen at the window's default size.
         col->set_sizing(Gtk::TREE_VIEW_COLUMN_FIXED);
-        col->set_fixed_width(290);
+        col->set_fixed_width(230);
         col->set_resizable(true);
         col->set_sort_column(m_cols.file);
         col->set_cell_data_func(*renderer, [this, renderer](Gtk::CellRenderer*, const Gtk::TreeModel::iterator& it) {
@@ -456,6 +465,15 @@ void RomDatTab::build_table() {
         m_table->view().append_column(*col);
     }
     m_table->add_text_column(_("System"), m_cols.system);
+    // Un nom de systeme long (« Astrocade Home Computer ») se coupe plutot que
+    // de pousser les colonnes suivantes hors de la fenetre.
+    if (auto* sys = m_table->view().get_column(m_table->view().get_n_columns() - 1)) {
+        sys->set_sizing(Gtk::TREE_VIEW_COLUMN_FIXED);
+        sys->set_fixed_width(150);
+        sys->set_resizable(true);
+        for (auto* cr : sys->get_cells())
+            if (auto* t = dynamic_cast<Gtk::CellRendererText*>(cr)) t->property_ellipsize() = Pango::ELLIPSIZE_END;
+    }
     { ui::ColumnOptions o; o.xalign = 1.0f; m_table->add_text_column(_("Sets"), m_cols.sets, o); }
     { ui::ColumnOptions o; o.xalign = 1.0f; m_table->add_text_column(_("ROM entries"), m_cols.roms, o); }
     m_table->add_text_column(_("Version / Date"), m_cols.version);
@@ -463,13 +481,14 @@ void RomDatTab::build_table() {
     { ui::ColumnOptions o; o.expand = true; o.sortable = false; m_table->add_text_column(_("Update"), m_cols.update, o); }
     m_table->view().get_selection()->signal_changed().connect(sigc::mem_fun(*this, &RomDatTab::on_selection_changed));
     m_table->set_hexpand(true);
-    middle->pack_start(*m_table, Gtk::PACK_EXPAND_WIDGET);
 
     // ── Right column : DAT information, Source information, preview ──────
     // Fixed width : the table is what needs the room, and a long value in the
     // panel must ellipsize, not push the table aside.
-    m_info_column.set_size_request(360, -1);
-    m_info_column.set_hexpand(false);
+    // Chaque carte prend la largeur qu'il lui faut : a largeurs egales, la plus
+    // large imposait la sienne aux trois autres.
+    m_info_column.set_homogeneous(false);
+    m_info_column.set_hexpand(true);
     auto info = ui::card("bc-info.svg", _("DAT information"), "");
     m_info_grid.set_column_spacing(14);
     m_info_grid.set_row_spacing(3);
@@ -486,9 +505,7 @@ void RomDatTab::build_table() {
     m_btn_open_in_folder->set_margin_top(8);
     m_btn_open_in_folder->signal_clicked().connect(sigc::mem_fun(*this, &RomDatTab::on_open_folder));
     info.body->pack_start(*m_btn_open_in_folder, Gtk::PACK_SHRINK);
-    m_info_column.pack_start(*fold_card(info, "dat_info", [this] {
-        return m_info_values["file"]->get_text().raw();
-    }), Gtk::PACK_SHRINK);
+    add_info_page(info, "dat_info", "bc-info.svg", _("DAT information"));
 
     // How this DAT is read : a rule of its own, never one of the group's.
     auto rule = ui::card("bc-sliders.svg", _("How this DAT is read"), "");
@@ -527,9 +544,7 @@ void RomDatTab::build_table() {
     folder_row->pack_start(m_entry_dat_folder, Gtk::PACK_EXPAND_WIDGET);
     folder_row->set_margin_top(6);
     rule.body->pack_start(*folder_row, Gtk::PACK_SHRINK);
-    m_info_column.pack_start(*fold_card(rule, "dat_rule", [this] {
-        return m_rule_values["mode"]->get_text().raw();
-    }), Gtk::PACK_SHRINK);
+    add_info_page(rule, "dat_rule", "bc-sliders.svg", _("How this DAT is read"));
 
     auto src = ui::card("bc-cloud.svg", _("Source information"), "");
     m_source_grid.set_column_spacing(14);
@@ -541,9 +556,7 @@ void RomDatTab::build_table() {
                     {"shared", N_("Shared with")}, {"last_check", N_("Last check")}, {"last_update", N_("Last update")}})
         grid_row(m_source_grid, r++, _(kv.second), m_source_values, kv.first);
     src.body->pack_start(m_source_grid, Gtk::PACK_SHRINK);
-    m_info_column.pack_start(*fold_card(src, "dat_source", [this] {
-        return m_source_values["kind"]->get_text().raw();
-    }), Gtk::PACK_SHRINK);
+    add_info_page(src, "dat_source", "bc-cloud.svg", _("Source information"));
 
     auto prev = ui::card("bc-file.svg", _("File preview (header)"), "");
     m_preview_buffer = Gtk::TextBuffer::create();
@@ -559,14 +572,47 @@ void RomDatTab::build_table() {
     scroll->add(m_preview);
     scroll->set_margin_top(8);
     prev.body->pack_start(*scroll, Gtk::PACK_EXPAND_WIDGET);
-    // Ouverte, elle prend la hauteur qui reste ; fermee, elle n'est plus que
-    // son en-tete (refresh_folds).
-    m_info_column.pack_start(*fold_card(prev, "dat_preview", [this] {
-        return m_info_values["system"]->get_text().raw();
-    }), Gtk::PACK_EXPAND_WIDGET);
+    add_info_page(prev, "dat_preview", "bc-file.svg", _("File preview (header)"));
 
-    middle->pack_start(m_info_column, Gtk::PACK_SHRINK);
+    // Le tableau en haut, les fiches en dessous, separes par une poignee. Une
+    // fiche a la fois, sur toute la largeur : a cote du tableau elles lui
+    // prenaient ses dernieres colonnes, cote a cote elles n'avaient plus la
+    // place d'afficher leurs valeurs.
+    auto* bottom = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 6);
+    bottom->pack_start(m_info_tabs, Gtk::PACK_SHRINK);
+    bottom->pack_start(m_info_stack, Gtk::PACK_EXPAND_WIDGET);
+    show_info_page("dat_info");
+    middle->pack_start(*ui::splitter(*m_table, *bottom, 170), Gtk::PACK_EXPAND_WIDGET);
     m_main.pack_start(*middle, Gtk::PACK_EXPAND_WIDGET);
+}
+
+void RomDatTab::add_info_page(const ui::Card& card, const std::string& id,
+                              const std::string& icon, const Glib::ustring& title) {
+    // L'onglet porte deja le titre : l'en-tete de la carte ferait doublon.
+    if (card.head) { card.head->set_no_show_all(true); card.head->hide(); }
+    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    scroll->set_name("no-propagate-width");
+    scroll->set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+    scroll->set_shadow_type(Gtk::SHADOW_NONE);
+    scroll->add(*card.frame);
+    m_info_stack.add(*scroll, id);
+
+    auto* btn = Gtk::make_managed<Gtk::ToggleButton>();
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+    box->pack_start(*ui::image(icon, 16), Gtk::PACK_SHRINK);
+    box->pack_start(*Gtk::make_managed<Gtk::Label>(title), Gtk::PACK_SHRINK);
+    btn->add(*box);
+    btn->get_style_context()->add_class("set-tab");
+    btn->signal_clicked().connect([this, id] { if (!m_info_switching) show_info_page(id); });
+    m_info_tabs.pack_start(*btn, Gtk::PACK_SHRINK);
+    m_info_btns.emplace_back(id, btn);
+}
+
+void RomDatTab::show_info_page(const std::string& id) {
+    m_info_switching = true;
+    for (auto& [key, btn] : m_info_btns) btn->set_active(key == id);
+    m_info_switching = false;
+    m_info_stack.set_visible_child(id);
 }
 
 Gtk::Widget* RomDatTab::fold_card(const ui::Card& card, const std::string& key,
@@ -658,17 +704,19 @@ const std::map<std::string, RomDatTab::Backend>& RomDatTab::backends() {
     // traduction, prete seulement apres l'initialisation de i18n.
     static const std::map<std::string, Backend> table = {
         {"fbneo", {
-            [](RomDatTab& t) { return t.m_env().fbneo_executable; },
-            // L'executable de FBNeo est un reglage, detenu par le proprietaire
-            // de l'onglet : c'est lui qui lance et qui montre les dialogues.
-            [](RomDatTab& t) { t.m_sig_generate.emit(t.group().folder); },
+            // L'executable de la version du groupe (EmulatorVariants).
+            [](RomDatTab& t) { return EmulatorVariants::executable("fbneo", t.group().variant); },
+            // Le proprietaire de l'onglet lance et montre les dialogues.
+            [](RomDatTab& t) {
+                t.m_sig_generate.emit(t.group().folder, EmulatorVariants::executable("fbneo", t.group().variant));
+            },
             N_("Run the installed %1 with -dat, writing its DAT files into the folder."),
             N_("No %1 executable configured : set it in Settings › Emulator."),
         }},
         {"mame", {
             // Le MAME des Settings, canal compris : les DAT generes decrivent
             // celui avec lequel on joue.
-            [](RomDatTab&) { return MameSooner::resolve_executable(); },
+            [](RomDatTab& t) { return EmulatorVariants::executable("mame", t.group().variant); },
             [](RomDatTab& t) { t.on_generate_mame(); },
             N_("Read the machine list from the installed %1 and write its DAT files into the folder."),
             N_("%1 was not found on this system : install it, then try again."),
@@ -685,11 +733,12 @@ const RomDatTab::Backend* RomDatTab::backend() const {
 std::string RomDatTab::executable_of(const std::string& emulator) {
     // Une seule recherche par session et par emulateur : trouver MAME coute
     // un `which`, et l'ecran redemande le chemin a chaque rafraichissement.
-    auto cached = m_exe_cache.find(emulator);
+    const std::string k = EmulatorVariants::key(emulator, group().variant);
+    auto cached = m_exe_cache.find(k);
     if (cached != m_exe_cache.end()) return cached->second;
     auto it = backends().find(emulator);
     std::string exe = (it == backends().end()) ? std::string() : it->second.locate(*this);
-    m_exe_cache[emulator] = exe;
+    m_exe_cache[k] = exe;
     return exe;
 }
 
@@ -741,7 +790,22 @@ void RomDatTab::rebuild_group_list() {
         txt->set_valign(Gtk::ALIGN_CENTER);
         auto* name = ui::title_label(g.name);
         name->set_ellipsize(Pango::ELLIPSIZE_END);
-        txt->pack_start(*name, Gtk::PACK_SHRINK);
+        // La version de l'emulateur qui a produit ses DAT, en petit a cote.
+        // La version installee d'abord : une valeur notee par une version
+        // plus ancienne du lanceur (commit du fork) ne doit pas rester.
+        std::string shown_version = EmulatorVariants::version(g.emulator, g.variant);
+        if (shown_version.empty()) shown_version = g.version;
+        if (!shown_version.empty()) {
+            auto* head = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 6);
+            head->pack_start(*name, Gtk::PACK_SHRINK);
+            auto* ver = Gtk::make_managed<Gtk::Label>(shown_version);
+            ver->get_style_context()->add_class("set-sub");
+            ver->set_valign(Gtk::ALIGN_BASELINE);
+            head->pack_start(*ver, Gtk::PACK_SHRINK);
+            txt->pack_start(*head, Gtk::PACK_SHRINK);
+        } else {
+            txt->pack_start(*name, Gtk::PACK_SHRINK);
+        }
         // The second line : the state dot, how many files, how many sets.
         long sets = 0;
         auto selected = DatSource::selected_in_folder(g);
@@ -750,7 +814,7 @@ void RomDatTab::rebuild_group_list() {
         if (sets) sub += " · " + Glib::ustring::compose(sets == 1 ? _("%1 set") : _("%1 sets"), thousands(sets)).raw();
         // Deux groupes peuvent porter les memes noms de sets (mslug) : dire
         // quel emulateur chacun decrit evite de les confondre.
-        sub += " · " + EmulatorRegistry::display_name(g.emulator);
+        sub += " · " + EmulatorVariants::short_name(g.emulator, g.variant);
         sub = (g.active ? std::string(_("Active")) : std::string(_("Inactive"))) + " · " + sub;
         auto* state = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 6);
         auto* dot = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 0);
@@ -895,6 +959,16 @@ void RomDatTab::on_toggle_group_active(size_t index) {
 // The buttons say what the chosen source can do, and nothing else.
 void RomDatTab::apply_source_ui() {
     const auto& g = group();
+    /* « Emulator executable » seulement si la version du groupe est installee
+     * et configuree : on ne genere pas de DAT avec un executable qu'on n'a pas. */
+    {
+        const std::string exe = backends().count(g.emulator) ? executable_of(g.emulator) : std::string();
+        const bool can = !exe.empty();
+        m_radio_emulator.set_sensitive(can);
+        m_radio_emulator.set_tooltip_text(can ? Glib::ustring()
+            : Glib::ustring(_("This version of the emulator is not installed or not set in Settings › Emulator : "
+                              "install it there first to generate its DAT files.")));
+    }
     switch (g.source) {
         case DatSource::Kind::Emulator: {
             // Un seul bouton : l'emulateur du groupe dit quoi lancer, et la
@@ -995,7 +1069,7 @@ void RomDatTab::on_source_changed() {
 
 void RomDatTab::on_browse_folder() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-    Gtk::FileChooserDialog dlg(_("Select the DAT folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    BcFileChooser dlg(_("Select the DAT folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Select"), Gtk::RESPONSE_OK);
@@ -1013,7 +1087,7 @@ void RomDatTab::on_browse_folder() {
 void RomDatTab::on_add_files() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
     if (group().folder.empty()) { if (top) ui::notice(*top, _("No DAT folder"), _("Choose the group's folder first.")); return; }
-    Gtk::FileChooserDialog dlg(_("Add DAT files"), Gtk::FILE_CHOOSER_ACTION_OPEN);
+    BcFileChooser dlg(_("Add DAT files"), Gtk::FILE_CHOOSER_ACTION_OPEN);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Add"), Gtk::RESPONSE_OK);
@@ -1079,8 +1153,18 @@ void RomDatTab::on_generate_mame() {
     // rend la main, le dossier a change et la base suit, comme apres une
     // generation depuis FBNeo.
     GenerateDAT::execute_mame(*top, executable_of("mame"), group().folder, nullptr);
+    note_generated();
     refresh();
     m_sig_reload.emit(false, group().emulator);
+}
+
+void RomDatTab::note_generated() {
+    if (m_groups.empty() || DatSource::list_folder(group().folder).empty()) return;
+    group().version     = EmulatorVariants::version(group().emulator, group().variant);
+    group().variant     = EmulatorVariants::resolve(group().emulator, group().variant);
+    group().last_update = DatSource::now_iso();
+    save_groups();
+    rebuild_group_list();
 }
 
 void RomDatTab::on_rescan() {
@@ -1194,7 +1278,7 @@ void RomDatTab::refresh() {
     m_source_filling = false;
     // Un groupe peut porter un emulateur que cette version ignore : mieux
     // vaut laisser le selecteur vide que lui en faire dire un autre.
-    if (!m_combo_emulator.set_active_id(g.emulator)) m_combo_emulator.set_active(-1);
+    if (!m_combo_emulator.set_active_id(EmulatorVariants::key(g.emulator, g.variant))) m_combo_emulator.set_active(-1);
     // Radios follow the model without re-entering on_source_changed.
     switch (g.source) {
         case DatSource::Kind::Emulator: m_radio_emulator.set_active(true); break;
@@ -1265,7 +1349,8 @@ void RomDatTab::populate() {
         row[m_cols.system]   = it.system;
         row[m_cols.sets]     = it.games ? thousands(it.games) : "";
         row[m_cols.roms]     = it.roms ? thousands(it.roms) : "";
-        row[m_cols.version]  = it.version + (it.date.empty() ? "" : "  ·  " + short_date(it.date));
+        // Le jour seul dans le tableau ; l'heure est dans le panneau DAT information.
+        row[m_cols.version]  = it.version + (it.date.empty() ? "" : "  ·  " + it.date.substr(0, 10));
         row[m_cols.size]     = human_size(it.size);
         Glib::ustring update;
         if (!it.on_disk) update = it.in_group ? _("not downloaded yet") : _("on the server, not in this group");

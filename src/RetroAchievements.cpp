@@ -1,11 +1,12 @@
 // src/RetroAchievements.cpp
 #include "RetroAchievements.h"
+#include "Platform.h"
 
 #include "AppContext.h"
 #include "BootcadeAuth.h"
 #include "i18n.h"
 
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <glibmm.h>
 #include <nlohmann/json.hpp>
 #include <sys/stat.h>

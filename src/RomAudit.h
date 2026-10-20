@@ -42,6 +42,9 @@ struct RomEntry {
     std::string   found_in;
     // The DAT marks this ROM merge= : it belongs to the parent or the BIOS.
     bool          inherited = false;
+    // Listed as it is in the DAT but marked merge= there : a ROM of the parent, whatever the
+    // collection's style. What tells a set's own ROMs from the ones it only carries along.
+    bool          merge_attr = false;
     // Set when an ancestor's archive satisfied it: that set's short name. An
     // audit that says "present" about a ROM the set's own zip does not hold
     // must be able to say who does.
@@ -143,6 +146,12 @@ struct Report {
     std::vector<BiosGap> missing_bios;
     bool cancelled = false;
     bool pool_empty = false;        // no scan cache: results would be meaningless
+    // What the scan cache held and why part of it was not used : archives
+    // outside the audited ROM folders, or gone from the disk. For the one who
+    // asks why a library the scan found shows up as missing.
+    size_t cache_files = 0, outside_roots = 0, gone_from_disk = 0;
+    std::string outside_sample, gone_sample;
+    std::vector<std::string> roots;
 };
 
 // `dat_sources` narrows the audit to the games of those DAT files (the DAT

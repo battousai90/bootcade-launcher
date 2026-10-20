@@ -1,5 +1,6 @@
 // src/RomManifest.cpp
 #include "RomManifest.h"
+#include "Platform.h"
 
 #include <nlohmann/json.hpp>
 

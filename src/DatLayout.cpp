@@ -184,7 +184,7 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode) : 
             for (const auto& r : g->roms) {
                 if (r.crc.empty() || !seen.insert(r.name + '\x1f' + lower(r.crc)).second) continue;
                 names.insert(entry_path(r.name));
-                a.entries.push_back({entry_path(r.name), crc_of(r.crc), (uint64_t)r.size, ""});
+                a.entries.push_back({entry_path(r.name), crc_of(r.crc), (uint64_t)r.size, "", r.is_inherited()});
             }
             std::unordered_set<std::string> disk_names;
             for (const auto& d : g->disks) {

@@ -16,6 +16,7 @@ struct Result {
     bool ok = false;          // false on any network/parse failure
     std::string sha;          // target_commitish : the exact commit this build is
     std::string tag;          // release tag_name, e.g. "latest"
+    std::string name;         // release name : « FBNeo-sdl (upstream 66adff745, 2026-10-18) » pour le fork
     std::string published_at; // ISO 8601, for display
     std::string error;        // set when ok == false
     // Les fichiers joints a la release : la mise a jour automatique y choisit
@@ -27,6 +28,23 @@ struct Result {
 
 // GET https://api.github.com/repos/battousai90/FBNeo/releases/tags/latest
 Result fetch_latest();
+
+// Le commit de finalburnneo/FBNeo que ce build contient, 7 caracteres. Le fork
+// l'ecrit dans le nom de sa release (« upstream 66adff745 ») ; la release
+// officielle est construite sur ce commit lui-meme.
+std::string upstream_commit(const Result& release);
+
+// Le fichier a telecharger pour installer FinalBurn Neo, et le nom de son
+// executable une fois extrait : le meme port SDL2 du fork partout, un zip par
+// systeme dans la release « latest ».
+std::string download_url();
+std::string asset_name();
+std::string executable_name();
+
+// La release publie-t-elle le fichier de CE systeme ? Le zip Windows arrive
+// une dizaine de minutes apres celui de Linux, et la release est recreee a
+// chaque synchro : tant qu'il manque, il n'y a rien a proposer.
+bool has_platform_asset(const Result& release);
 
     // La derniere version publiee du lanceur lui-meme. Le flatpak est
     // distribue en bundle et non par un depot, l'AppImage et l'archive n'ont

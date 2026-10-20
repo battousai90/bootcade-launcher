@@ -1,10 +1,20 @@
 // src/ControllerManager.cpp
 #include "ControllerManager.h"
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#include <cmath>
+#include <deque>
+#endif
+#include "FbneoPaths.h"
+#include "Platform.h"
+#ifndef _WIN32
 #include <linux/joystick.h>
 #include <sys/ioctl.h>
+#include <glob.h>
+#endif
 #include <fcntl.h>
 #include <unistd.h>
-#include <glob.h>
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
@@ -20,6 +30,159 @@
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
+
+#ifdef _WIN32
+// ── Manettes Windows (winmm) ───────────────────────────────────────────────
+//
+// L'API joystick de Windows lit toutes les manettes HID, y compris celles que
+// DirectInput et XInput exposent : un nom, des boutons, six axes et un chapeau
+// (POV). On la presente comme joydev le fait sous Linux : un identifiant
+// « winmm:js<N> » (le chiffre final est lu comme un numero de manette, exactement
+// comme /dev/input/js<N>), des axes de -32767 a 32767, et un chapeau rendu par
+// deux axes supplementaires, 6 (X) et 7 (Y), comme joydev.
+namespace {
+
+std::string narrow(const wchar_t* w) {
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 1) return {};
+    std::string out(n - 1, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+struct WinPad {
+    UINT id = 0;
+    JOYCAPSW caps{};
+    int buttons = 0;
+    int axes = 0;                // axes « vrais » : X, Y, Z, R, U, V selon la manette
+    bool has_pov = false;
+    int axis_slot[6] = {-1, -1, -1, -1, -1, -1};   // axe winmm -> numero d'axe presente
+    int value[8] = {};           // dernier etat des axes presentes (6 vrais + 2 chapeau)
+    DWORD held = 0;              // boutons enfonces
+    bool primed = false;
+    std::deque<ControllerManager::RawInput> pending;
+};
+
+std::map<int, WinPad>& pads() { static std::map<int, WinPad> m; return m; }
+
+int axis_value(DWORD pos, DWORD lo, DWORD hi) {
+    if (hi <= lo) return 0;
+    const double mid = (double(lo) + double(hi)) / 2.0;
+    const double half = (double(hi) - double(lo)) / 2.0;
+    double v = (double(pos) - mid) / half * 32767.0;
+    if (v > 32767) v = 32767;
+    if (v < -32767) v = -32767;
+    return (int)v;
+}
+
+bool read_pad(WinPad& p, JOYINFOEX& ji) {
+    ji = {};
+    ji.dwSize = sizeof ji;
+    ji.dwFlags = JOY_RETURNALL | JOY_RETURNPOVCTS;
+    return joyGetPosEx(p.id, &ji) == JOYERR_NOERROR;
+}
+
+// Etat courant -> valeurs d'axes presentes.
+void axes_of(const WinPad& p, const JOYINFOEX& ji, int out[8]) {
+    for (int i = 0; i < 8; ++i) out[i] = 0;
+    const DWORD pos[6] = {ji.dwXpos, ji.dwYpos, ji.dwZpos, ji.dwRpos, ji.dwUpos, ji.dwVpos};
+    const UINT lo[6] = {p.caps.wXmin, p.caps.wYmin, p.caps.wZmin, p.caps.wRmin, p.caps.wUmin, p.caps.wVmin};
+    const UINT hi[6] = {p.caps.wXmax, p.caps.wYmax, p.caps.wZmax, p.caps.wRmax, p.caps.wUmax, p.caps.wVmax};
+    for (int i = 0; i < 6; ++i)
+        if (p.axis_slot[i] >= 0) out[p.axis_slot[i]] = axis_value(pos[i], lo[i], hi[i]);
+    if (p.has_pov && ji.dwPOV != JOY_POVCENTERED && ji.dwPOV <= 36000) {
+        const double a = ji.dwPOV / 100.0 * 3.14159265358979 / 180.0;   // 0 = haut, sens horaire
+        const double x = std::sin(a), y = -std::cos(a);
+        out[6] = x > 0.5 ? 32767 : (x < -0.5 ? -32767 : 0);
+        out[7] = y > 0.5 ? 32767 : (y < -0.5 ? -32767 : 0);
+    }
+}
+
+int pad_number(const std::string& path) {
+    size_t i = path.size();
+    while (i > 0 && std::isdigit((unsigned char)path[i - 1])) --i;
+    return i < path.size() ? std::stoi(path.substr(i)) : -1;
+}
+
+}  // namespace
+
+static std::vector<JoystickInfo> win_list_devices() {
+    std::vector<JoystickInfo> result;
+    const UINT n = joyGetNumDevs();
+    for (UINT id = 0; id < n; ++id) {
+        JOYCAPSW caps{};
+        if (joyGetDevCapsW(id, &caps, sizeof caps) != JOYERR_NOERROR) continue;
+        JOYINFOEX ji{};
+        ji.dwSize = sizeof ji;
+        ji.dwFlags = JOY_RETURNALL;
+        if (joyGetPosEx(id, &ji) != JOYERR_NOERROR) continue;   // rien de branche a cet emplacement
+        JoystickInfo info;
+        info.path = "winmm:js" + std::to_string(id);
+        info.name = narrow(caps.szPname);
+        if (info.name.empty()) info.name = "Joystick";
+        info.num_buttons = (int)caps.wNumButtons;
+        int axes = (int)caps.wNumAxes;
+        if (caps.wCaps & JOYCAPS_HASPOV) axes += 2;
+        info.num_axes = axes;
+        result.push_back(std::move(info));
+    }
+    return result;
+}
+
+static int win_open(const std::string& path) {
+    const int id = pad_number(path);
+    if (id < 0) return -1;
+    WinPad p;
+    p.id = (UINT)id;
+    if (joyGetDevCapsW(p.id, &p.caps, sizeof p.caps) != JOYERR_NOERROR) return -1;
+    JOYINFOEX ji;
+    if (!read_pad(p, ji)) return -1;
+    p.buttons = (int)p.caps.wNumButtons;
+    p.has_pov = (p.caps.wCaps & JOYCAPS_HASPOV) != 0;
+    // Les axes que la manette declare, dans l'ordre X Y Z R U V, numerotes de 0.
+    const bool has[6] = {true, true, (p.caps.wCaps & JOYCAPS_HASZ) != 0, (p.caps.wCaps & JOYCAPS_HASR) != 0,
+                         (p.caps.wCaps & JOYCAPS_HASU) != 0, (p.caps.wCaps & JOYCAPS_HASV) != 0};
+    int slot = 0;
+    for (int i = 0; i < 6 && slot < 6; ++i)
+        if (has[i] && slot < (int)p.caps.wNumAxes) p.axis_slot[i] = slot++;
+    p.axes = slot;
+    // Le chapeau suit les vrais axes : joydev les place a la fin.
+    // On le rapporte toujours en 6 et 7 pour garder des numeros stables.
+    axes_of(p, ji, p.value);
+    p.held = ji.dwButtons;
+    p.primed = true;
+    const int fd = id + 1;
+    pads()[fd] = std::move(p);
+    return fd;
+}
+
+static void win_close(int fd) { pads().erase(fd); }
+
+// Compare l'etat courant au dernier connu, empile les differences, rend la suivante.
+static bool win_next_event(int fd, ControllerManager::RawInput& out) {
+    auto it = pads().find(fd);
+    if (it == pads().end()) return false;
+    WinPad& p = it->second;
+    if (p.pending.empty()) {
+        JOYINFOEX ji;
+        if (read_pad(p, ji)) {
+            const DWORD changed = ji.dwButtons ^ p.held;
+            for (int b = 0; b < p.buttons && b < 32; ++b)
+                if (changed & (1u << b))
+                    p.pending.push_back({false, b, (ji.dwButtons & (1u << b)) ? 1 : 0});
+            p.held = ji.dwButtons;
+            int now[8];
+            axes_of(p, ji, now);
+            for (int a = 0; a < 8; ++a)
+                if (now[a] != p.value[a]) { p.pending.push_back({true, a, now[a]}); p.value[a] = now[a]; }
+        }
+    }
+    if (p.pending.empty()) return false;
+    out = p.pending.front();
+    p.pending.pop_front();
+    return true;
+}
+#endif
 
 // ── Device discovery ───────────────────────────────────────────────────────
 
@@ -50,6 +213,9 @@ std::vector<JoystickInfo> ControllerManager::list_devices() {
         return result;
     }
 
+#ifdef _WIN32
+    return win_list_devices();
+#else
     glob_t g{};
     if (glob("/dev/input/js*", 0, nullptr, &g) != 0) return result;
 
@@ -78,10 +244,32 @@ std::vector<JoystickInfo> ControllerManager::list_devices() {
     }
     globfree(&g);
     return result;
+#endif
 }
 
 // ── Device I/O ────────────────────────────────────────────────────────────
 
+#ifdef _WIN32
+int ControllerManager::open_device(const std::string& path) { return win_open(path); }
+void ControllerManager::close_device(int fd) { win_close(fd); }
+
+bool ControllerManager::poll_event(int fd, InputBinding& result) {
+    RawInput ev;
+    while (win_next_event(fd, ev)) {
+        if (!ev.is_axis && ev.value == 1) {
+            result = { true, InputSource::PAD, false, ev.index, -1, 0, -1 };
+            return true;
+        }
+        if (ev.is_axis && std::abs(ev.value) > 16000) {
+            result = { true, InputSource::PAD, true, -1, ev.index, ev.value > 0 ? 1 : -1, -1 };
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ControllerManager::poll_raw(int fd, RawInput& out) { return win_next_event(fd, out); }
+#else
 int ControllerManager::open_device(const std::string& path) {
     return open(path.c_str(), O_RDONLY | O_NONBLOCK);
 }
@@ -129,6 +317,7 @@ bool ControllerManager::poll_raw(int fd, RawInput& out) {
     }
     return false;
 }
+#endif
 
 // ── JSON helpers ──────────────────────────────────────────────────────────
 
@@ -345,8 +534,7 @@ void ControllerManager::save_profiles(const std::map<std::string, ControllerConf
 // ── FBNeo config writer ───────────────────────────────────────────────────
 
 std::string ControllerManager::get_fbneo_config_dir() {
-    const char* home = std::getenv("HOME");
-    return std::string(home ? home : "") + "/.local/share/fbneo/config";
+    return FbneoPaths::config_dir();
 }
 
 // Nom FBNeo d'une action, sans le prefixe du joueur ("up", "fire 3").
@@ -448,8 +636,11 @@ static uint32_t joystick_base_for(const std::string& device_path)
 void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
                                             const std::string& fbneo_config_dir)
 {
+    // Sous Windows aussi : le port SDL2 est le meme. A VERIFIER avec une vraie
+    // manette : SDL numerote les manettes a sa facon, pas toujours comme winmm
+    // sur laquelle repose la detection.
     // Read the installed FBNeo version so we can stamp it in the defaults files.
-    const uint32_t burn_ver = read_fbneo_burn_ver(fbneo_config_dir + "/fbneo.ini");
+    const uint32_t burn_ver = read_fbneo_burn_ver(FbneoPaths::ini_path());
 
     for (int p = 0; p < 2; ++p) {
         const auto& player = cfg.players[p];
@@ -491,7 +682,7 @@ void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
     }
 
     // ── Update fbneo.ini szPlayerDefaultIni entries ───────────────────────
-    std::string fbneo_ini = fbneo_config_dir + "/fbneo.ini";
+    std::string fbneo_ini = FbneoPaths::ini_path();
 
     std::vector<std::string> lines;
     {

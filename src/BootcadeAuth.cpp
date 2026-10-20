@@ -1,11 +1,12 @@
 // src/BootcadeAuth.cpp
 #include "BootcadeAuth.h"
+#include "Platform.h"
 #include <iostream>
 #include <functional>
 #include <algorithm>
 #include "AppContext.h"
 
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <nlohmann/json.hpp>

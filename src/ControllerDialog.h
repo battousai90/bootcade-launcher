@@ -102,6 +102,14 @@ private:
     Gtk::Label* m_device_title[2]{};
     Gtk::Label* m_device_sub[2]{};
     Gtk::Image* m_device_art[2]{};
+    // Dimensions de l'illustration : celles de la maquette, resserrees quand
+    // l'ecran est trop etroit (compact_layout).
+    int m_art_w = 322;
+    int m_art_h = 226;
+    int m_panel_w = 368;
+    int m_field_w = 136;
+    Gtk::Expander* m_analog_exp[2]{};
+    void compact_layout(int missing_width, int missing_height);
 
     /* L'encart du bas dit toujours quelque chose : la recommandation quand
      * elle existe, l'etat neutre sinon. Un conteneur vert vide qui affirme

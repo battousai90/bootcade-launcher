@@ -164,6 +164,31 @@ void ROMScanDialog::worker_thread() {
         // Get current DAT timestamp
         time_t current_dat_timestamp = m_db->getLastDatTimestamp();
 
+        // What Audit reads is the cache of the archives' contents (zip_contents),
+        // not the list of files this scan remembers (rom_cache) : the scan below
+        // only reads what that list calls new, so a cache that lost archives
+        // (older version, cleaned, restored) was never refilled and the audit
+        // saw a handful of sets. When the cache holds fewer archives than the
+        // scan has seen, it is rebuilt first : it reads only what is missing.
+        if ((size_t)m_db->getRomCacheCount() > m_db->getZipContentPaths().size()) {
+            add_log_message("The archive cache is incomplete : rebuilding it...");
+            auto rebuilt = RomScanner::scan_into_cache(m_db, m_roms_paths, m_emulator, m_scan_recursive,
+                [this](double pct, const std::string& msg) {
+                    {
+                        std::lock_guard<std::mutex> lk(m_shared_mutex);
+                        m_current_progress.store(pct * 0.5);
+                        m_current_message = msg;
+                    }
+                    m_progress_dispatcher();
+                    return !m_cancelled;
+                },
+                [this](const std::string& line, bool warn) {
+                    add_log_message(line, warn ? Level::Warn : Level::Info);
+                });
+            add_log_message(std::to_string(rebuilt.archives) + " archives in the library, "
+                            + std::to_string(rebuilt.reread) + " read");
+        }
+
         // Cleanup cache: remove entries for files that no longer exist
         add_log_message("Cleaning up ROM cache...");
         // First, detect any saved roots that were removed from settings and

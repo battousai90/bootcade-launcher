@@ -1,6 +1,7 @@
 // src/main.cpp
 #include "MainWindow.h"
 #include "DefaultFolders.h"
+#include "Workspace.h"
 #include "SplashScreen.h"
 #include "DatabaseManager.h"
 #include "MameCatalog.h"
@@ -20,12 +21,15 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include "Platform.h"
+#ifndef _WIN32
 #include <malloc.h>
+#endif
 #include <iostream>
 #include <fstream>
 #include <memory>
 #include <nlohmann/json.hpp>
-#include <curl/curl.h>
+#include "CurlInit.h"
 
 /* Chien de garde de la boucle GTK (diagnostic, BOOTCADE_WATCHDOG=1).
  *
@@ -52,11 +56,13 @@ static void start_main_loop_watchdog() {
             // Every 5 s : what the allocator holds, against what it hands out.
             // In-use bytes that climb are a leak or a growing cache ; a total
             // that climbs while in-use stays flat is fragmentation.
+#ifndef _WIN32
             if (++ticks % 50 == 0) {
                 struct mallinfo2 mi = mallinfo2();
                 std::cout << "[MEM] t=" << now_ms() / 1000 << "s malloc_inuse=" << (mi.uordblks + mi.hblkhd) / (1024 * 1024)
                           << "MB malloc_total=" << (mi.arena + mi.hblkhd) / (1024 * 1024) << "MB" << std::endl;
             }
+#endif
             const int64_t gap = now_ms() - last_beat;
             if (gap > 500 && !blocked) { blocked = true; since = last_beat; }
             else if (gap <= 500 && blocked) {
@@ -71,15 +77,22 @@ static void start_main_loop_watchdog() {
 }
 
 int main(int argc, char *argv[]) {
+    Platform::init();   // Windows : pose HOME depuis %USERPROFILE% ; sans effet sous Linux
+#ifdef _WIN32
+    // Relance par l'instance precedente (changement de dossier de travail, mise a jour) :
+    // on attend sa fin, elle tient encore la base.
+    if (const char* w = std::getenv("BOOTCADE_WAIT_PID"); w && *w) {
+        if (HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)std::atoi(w))) {
+            WaitForSingleObject(h, 15000);
+            CloseHandle(h);
+        }
+        _putenv_s("BOOTCADE_WAIT_PID", "");
+    }
+#endif
+
     // Once, before any thread : curl_global_init is not thread-safe, and the
     // hiscore probe, the artwork downloader and the DAT client all use curl.
     curl_global_init(CURL_GLOBAL_DEFAULT);
-
-    // Redirect stderr to a log file for debugging
-    std::string log_path = AppContext::get_user_config_dir() + "/debug.log";
-    static std::ofstream debug_log(log_path, std::ios::app);
-    std::cerr.rdbuf(debug_log.rdbuf());
-    std::cerr << "\n=== Application started at " << std::time(nullptr) << " ===" << std::endl;
 
     /* Nos propres options sont retirees d'argv AVANT Gtk::Application.
      *
@@ -118,10 +131,6 @@ int main(int argc, char *argv[]) {
     // une exception sur un document vide. Le launcher plantait ainsi des le
     // premier lancement d'un nouveau joueur.
     AppContext::ensure_config();
-    // Le dossier Bootcade et ses sous-dossiers, une fois : avant que quoi que
-    // ce soit ne lise les chemins, pour que tous trouvent les leurs.
-    DefaultFolders::apply();
-
     // Initialize translations before any UI string is built. Use the language saved
     // in settings if any; otherwise auto-detect the system language (English fallback).
     std::string ui_lang;
@@ -136,6 +145,28 @@ int main(int argc, char *argv[]) {
 
     // Avant la premiere fenetre : le splash aussi s'ouvre sur Adwaita.
     MainWindow::pin_base_theme();
+
+    /* Le dossier de travail, avant que quoi que ce soit ne lise un chemin ni
+     * n'ouvre la base : un changement demande dans les Reglages se fait ici
+     * (le launcher vient de redemarrer seul), et un premier lancement choisit
+     * son dossier. */
+    Workspace::run_pending_with_window();
+    if (DefaultFolders::is_first_run()) {
+        const std::string chosen = Workspace::ask_first_run();
+        const std::string err = Workspace::relocate(chosen, nullptr);
+        if (!err.empty()) std::cerr << "[WORKDIR] " << err << std::endl;
+    }
+    // Le dossier Bootcade et ses sous-dossiers, une fois : avant que quoi que
+    // ce soit ne lise les chemins, pour que tous trouvent les leurs.
+    DefaultFolders::apply();
+
+    // Redirect stderr to a log file for debugging. Apres le choix du dossier de
+    // travail : ouvert avant, le journal resterait ouvert dans l'ancien dossier
+    // et Windows refuserait de le deplacer.
+    std::string log_path = AppContext::get_user_config_dir() + "/debug.log";
+    static std::ofstream debug_log(log_path, std::ios::app);
+    std::cerr.rdbuf(debug_log.rdbuf());
+    std::cerr << "\n=== Application started at " << std::time(nullptr) << " ===" << std::endl;
 
     // Créer et afficher le splash screen
     SplashScreen splash;
@@ -158,6 +189,12 @@ int main(int argc, char *argv[]) {
         std::cerr << "[ERROR] Failed to initialize database" << std::endl;
         splash.set_progress(1.0, "Database error - continuing anyway...");
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+    // Les chemins que la base garde (cache des ROMs) viennent de changer de dossier :
+    // le prochain scan les relit.
+    if (Workspace::relocated_this_run()) {
+        database->clearRomCache();
+        database->clearDirectorySnapshots();
     }
 
     /* Diagnostics du gestionnaire de ROMs, sur le modele de

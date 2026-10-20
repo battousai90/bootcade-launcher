@@ -44,6 +44,9 @@ enum class Offer { Yes, Outdated, Absent, Unknown };
 class ServerView {
 public:
     Offer check(const std::string& dat_header, const std::string& name);
+    // La date (AAAA-MM-JJ) a laquelle le DAT a change les ROMs de ce jeu, ou
+    // "" s'il n'en garde aucun changement. Sert a juger une autre source.
+    std::string changed_on(const std::string& name);
 private:
     void load();
     const std::set<std::string>& lot(const std::string& date, const std::string& dat_header);

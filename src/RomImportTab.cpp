@@ -1,4 +1,5 @@
 // src/RomImportTab.cpp
+#include "FileChooser.h"
 #include "RomImportTab.h"
 
 #include "AppContext.h"
@@ -138,7 +139,7 @@ void RomImportTab::build_options() {
     m_btn_browse = ui::button(_("Browse…"), "bc-folder.svg");
     m_btn_browse->signal_clicked().connect([this] {
         auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-        Gtk::FileChooserDialog dlg(_("Select the import folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+        BcFileChooser dlg(_("Select the import folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
         if (top) dlg.set_transient_for(*top);
         dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
         dlg.add_button(_("Select"), Gtk::RESPONSE_OK);
@@ -906,6 +907,7 @@ void RomImportTab::on_context_menu(const Gtk::TreeModel::Path& path, Gtk::TreeVi
         std::vector<std::string> missing;
         for (const auto& m : s.missing) missing.push_back(m.name);
         add(_("Copy game name"),         [copy, s] { copy(s.game_name, _("the game name")); });
+        add(_("Copy full game name"),    [copy, s] { copy(s.description, _("the full game name")); }, !s.description.empty());
         add(_("Copy file name"),         [copy, file] { copy(file, _("the file name")); });
         add(_("Copy missing filenames"), [copy, missing] { copy(join(missing, "\n"), _("the missing filenames")); }, !missing.empty());
         add(_("Copy destination path"),  [copy, s] { copy(s.dest_path, _("the destination path")); });
@@ -954,7 +956,7 @@ void RomImportTab::receive(const std::vector<std::string>& archives) {
 void RomImportTab::on_export(int format) {
     if (m_report.sets.empty()) { flash(_("Analyse first.")); return; }
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-    Gtk::FileChooserDialog dlg(_("Export missing list"), Gtk::FILE_CHOOSER_ACTION_SAVE);
+    BcFileChooser dlg(_("Export missing list"), Gtk::FILE_CHOOSER_ACTION_SAVE);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Save"),   Gtk::RESPONSE_OK);

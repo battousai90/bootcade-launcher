@@ -289,6 +289,10 @@ scrollbar slider {
   min-height: 8px;
 }
 scrollbar slider:hover { background-color: alpha(@accent, 0.60); }
+/* Sur des milliers de lignes le curseur devenait un point de 8 px : on lui garde une longueur qu'on voit et qu'on attrape.
+ * La barre reste discrete (elle apparait au survol), seule la taille minimale du curseur change. */
+.set-table scrollbar.vertical slider { min-height: 44px; }
+.set-table scrollbar.horizontal slider { min-width: 44px; }
 
 /* ═══ Grille de jaquettes ═════════════════════════════════════════════════ */
 .game-grid { background: transparent; }

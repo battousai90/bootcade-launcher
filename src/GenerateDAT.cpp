@@ -8,6 +8,7 @@
 #include "GameListSetup.h"
 #include "DatSource.h"
 #include "HostLibraries.h"
+#include "FbneoPaths.h"
 #include <atomic>
 #include <thread>
 #include <filesystem>
@@ -15,7 +16,11 @@
 #include <nlohmann/json.hpp>
 #include <unistd.h>
 #include <sys/types.h>
+#include "Platform.h"
+#include "ProcessWin.h"
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #include <iostream>
 #include <cstdlib>
 
@@ -26,6 +31,24 @@
 // application. Returns the child exit code, or -1 on error.
 static int spawn_and_wait(const std::vector<std::string>& args, Gtk::Dialog& dialog, Gtk::ProgressBar& bar) {
     if (args.empty()) return -1;
+#ifdef _WIN32
+    // Le processus tourne dans un fil, la boucle du dialogue reste vivante :
+    // meme principe que le child watch de Linux.
+    constexpr int kStillRunning = -2;
+    std::atomic<int> result{kStillRunning};
+    const int pid = WinProc::spawn(args);
+    if (pid < 0) return -1;
+    std::thread([&result, pid] { result = WinProc::wait(pid); }).detach();
+    auto pulse = Glib::signal_timeout().connect([&bar] { bar.pulse(); return true; }, 120);
+    auto poll = Glib::signal_timeout().connect([&result, &dialog] {
+        if (result != kStillRunning) { dialog.response(Gtk::RESPONSE_OK); return false; }
+        return true;
+    }, 100);
+    while (result == kStillRunning) dialog.run();
+    pulse.disconnect();
+    poll.disconnect();
+    return result;
+#else
     // Runs on the host when sandboxed : see AppContext::host_command.
     const std::vector<std::string> cmd = AppContext::host_command(args);
     pid_t pid = fork();
@@ -56,6 +79,7 @@ static int spawn_and_wait(const std::vector<std::string>& args, Gtk::Dialog& dia
     pulse.disconnect();
     watch.disconnect();
     return result;
+#endif
 }
 
 // Pins szAppDatListsPath in fbneo.ini to `path` so FBNeo is *told* where to
@@ -64,19 +88,24 @@ static int spawn_and_wait(const std::vector<std::string>& args, Gtk::Dialog& dia
 // used for szAppRomPaths). Silently does nothing if the ini can't be read;
 // -dat still runs against whatever it already had.
 static void patch_fbneo_ini_dat_path(const std::string& path) {
-    const char* home_env = std::getenv("HOME");
-    if (!home_env) return;
-    std::string config_file = std::string(home_env) + "/.local/share/fbneo/config/fbneo.ini";
+    std::string config_file = FbneoPaths::ini_path();
 
-    std::string value = path;
-    if (!value.empty() && value.back() != '/') value += "/";
+    std::string value = FbneoPaths::with_trailing_separator(path);
 
     std::vector<std::string> lines;
     {
         std::ifstream in(config_file);
-        if (!in.is_open()) return; // fbneo has never run yet : nothing to patch
-        std::string line;
-        while (std::getline(in, line)) lines.push_back(line);
+        // FinalBurn Neo n'a encore jamais tourne (installation neuve) : pas de fbneo.ini. On le cree
+        // avec cette seule consigne, que FinalBurn Neo lit au demarrage, pour qu'il ecrive ses DAT
+        // dans le dossier de Bootcade et nulle part ailleurs (il ecrivait dans son propre dossier,
+        // qui n'existait pas : rien n'etait ecrit).
+        if (in.is_open()) {
+            std::string line;
+            while (std::getline(in, line)) lines.push_back(line);
+        } else {
+            std::error_code mk;
+            std::filesystem::create_directories(std::filesystem::path(config_file).parent_path(), mk);
+        }
     }
 
     bool found = false;
@@ -154,10 +183,27 @@ bool GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executab
     content_area->pack_start(*main_box, Gtk::PACK_EXPAND_WIDGET);
     progress_dialog.show_all();
     
+    // Le dossier doit exister : FinalBurn Neo n'ecrit rien dans un dossier
+    // absent, sans le dire (constate sous Windows).
+    {
+        std::error_code mk;
+        std::filesystem::create_directories(dat_output_dir, mk);
+    }
     patch_fbneo_ini_dat_path(dat_output_dir);
 
     // Execute fbneo -dat command (no shell : safe for paths with spaces)
-    int result = spawn_and_wait({fbneo_executable, "-dat"}, progress_dialog, *progress_bar);
+    int result = 0;
+    if (FbneoPaths::is_win32_build(fbneo_executable)) {
+        // Le FBNeo officiel de Windows n'a pas de -dat : « -listinfoall
+        // <dossier> » ecrit les memes fichiers, en silence, dans un dossier qui
+        // doit deja exister.
+        std::error_code mk;
+        std::filesystem::create_directories(dat_output_dir, mk);
+        result = spawn_and_wait({fbneo_executable, "-listinfoall", dat_output_dir},
+                                progress_dialog, *progress_bar);
+    } else {
+        result = spawn_and_wait({fbneo_executable, "-dat"}, progress_dialog, *progress_bar);
+    }
     
     progress_dialog.hide();
     
@@ -165,15 +211,21 @@ bool GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executab
         // Sans fbneo.ini (FBNeo n'a encore jamais tourne), la consigne de
         // dossier ne peut pas etre posee : FBNeo ecrit alors dans le sien.
         // On les reprend la, faute de quoi le dossier configure restait vide.
-        const char* home_env = std::getenv("HOME");
-        const std::filesystem::path own = std::filesystem::path(home_env ? home_env : ".")
-                                        / ".local/share/fbneo/support/lists/dat";
+        const std::filesystem::path own = FbneoPaths::dat_lists_dir();
         std::error_code ec;
         if (DatSource::list_folder(dat_output_dir).empty()
             && !std::filesystem::equivalent(own, dat_output_dir, ec)) {
             for (const auto& f : DatSource::list_folder(own.string()))
                 std::filesystem::copy_file(own / f, std::filesystem::path(dat_output_dir) / f,
                                            std::filesystem::copy_options::overwrite_existing, ec);
+        }
+        // Reussie seulement si des DAT sont la : un FinalBurn Neo qui rend 0 sans rien ecrire ne
+        // doit pas lancer la mise a jour de la base sur un dossier vide.
+        if (DatSource::list_folder(dat_output_dir).empty()) {
+            SettingsUi::notice(parent, _("DAT generation failed"),
+                               _("FinalBurn Neo ran but wrote no DAT file in:") + std::string("\n") + dat_output_dir,
+                               "bc-error.svg");
+            return false;
         }
         if (dat_entry) dat_entry->set_text(dat_output_dir);
         if (!quiet) show_success_dialog(parent, dat_output_dir, dat_entry);

@@ -4,6 +4,8 @@
 #include "AppContext.h"
 #include "DatSource.h"
 #include "DefaultFolders.h"
+#include "EmulatorVariants.h"
+#include "FbneoUpdateCheck.h"
 
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -41,13 +43,17 @@ const char* sha_key() {
     return official() ? "fbneo_release_sha_official" : "fbneo_release_sha";
 }
 
+const char* upstream_key() {
+    return official() ? "fbneo_upstream_official" : "fbneo_upstream";
+}
+
 std::string download_url() {
     return official()
-        ? "https://github.com/finalburnneo/FBNeo/releases/download/latest/linux-sdl2-x86_64.zip"
+        ? "https://github.com/finalburnneo/FBNeo/releases/download/latest/" + FbneoUpdateCheck::asset_name()
         // finalburnneo/FBNeo stopped maintaining the SDL/Linux build (missing DAT
         // export calls for several systems, upstream declined the fix) : this fork
         // tracks their master daily and carries just that fix. See website FAQ.
-        : "https://github.com/battousai90/FBNeo/releases/download/latest/linux-sdl2-x86_64.zip";
+        : FbneoUpdateCheck::download_url();          // le zip de la plateforme
 }
 
 std::string releases_url() {
@@ -84,18 +90,24 @@ Switched switch_to(const std::string& channel, const std::string& current_execut
     auto groups = DatSource::load_groups();
     size_t official_at = DatSource::kNoGroup;
     for (size_t i = 0; i < groups.size(); ++i)
-        if (groups[i].id == official_group_id()) official_at = i;
+        if (groups[i].id == official_group_id()
+            || (groups[i].emulator == "fbneo" && groups[i].variant == "official")) { official_at = i; break; }
     if (official_at == DatSource::kNoGroup) {
         DatSource::Group g;
         g.id        = official_group_id();
-        g.name      = "FBNeo - Official";
-        g.folder    = DefaultFolders::sub("Support/DAT/FBNeo-Official");
+        g.name      = "FBNeo official";
+        g.folder    = EmulatorVariants::default_folder("fbneo", "official");
         g.source    = DatSource::Kind::Emulator;
         g.emulator  = "fbneo";
+        g.variant   = "official";
         g.active    = false;
         groups.push_back(std::move(g));
         official_at = groups.size() - 1;
     }
+    // Les autres groupes FinalBurn Neo sans version ecrite decrivent le fork.
+    for (size_t i = 0; i < groups.size(); ++i)
+        if (i != official_at && groups[i].emulator == "fbneo" && groups[i].variant.empty())
+            groups[i].variant = "bootcade";
 
     j = read_config();
     size_t keep = DatSource::kNoGroup;

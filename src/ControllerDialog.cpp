@@ -198,9 +198,11 @@ ControllerDialog::ControllerDialog(const std::map<std::string, ControllerConfig>
     }
     m_config = m_profiles[m_active_profile_name];
 
-    // Taille commune des fenetres de travail ; l'onglet defile dedans si
-    // l'ecran est trop petit, le pied reste hors du defilement.
-    SettingsUi::size_work_window(*this);
+    // La fenetre prend la taille de son contenu (jamais rognee, rien a faire
+    // defiler tant que l'ecran le permet) ; l'onglet ne defile que si meme
+    // l'ecran entier ne suffit pas, le pied reste hors du defilement.
+    SettingsUi::fit_to_content(*this, nullptr,
+                               [this](int mw, int mh) { compact_layout(mw, mh); });
     set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
 
     m_binding_labels.resize(2 * GAME_ACTION_COUNT, nullptr);
@@ -824,7 +826,7 @@ void ControllerDialog::build_player_tab(int p) {
 
         auto* btn = Gtk::make_managed<Gtk::Button>();
         btn->add(*bind_lbl);
-        btn->set_size_request(kFieldWidth, kRowHeight);
+        btn->set_size_request(m_field_w, kRowHeight);
         btn->set_valign(Gtk::ALIGN_CENTER);
         btn->set_tooltip_text(_("Click to bind, Delete to clear"));
         btn->get_style_context()->add_class("bind-cell");
@@ -932,7 +934,7 @@ void ControllerDialog::build_player_tab(int p) {
          * centre dedans, donc changer de manette ne fait plus sauter le
          * dessin d'une famille a l'autre. */
         auto* art = Gtk::make_managed<Gtk::Image>();
-        art->set_size_request(kArtWidth, kArtHeight);
+        art->set_size_request(m_art_w, m_art_h);
         art->set_halign(Gtk::ALIGN_CENTER);
         art->set_valign(Gtk::ALIGN_CENTER);
         art->set_margin_top(18);
@@ -997,7 +999,7 @@ void ControllerDialog::build_player_tab(int p) {
         panel->pack_end(*det,     Gtk::PACK_SHRINK);
         panel->get_style_context()->add_class("cc-card");
         panel->set_valign(Gtk::ALIGN_START);
-        panel->set_size_request(368, -1);
+        panel->set_size_request(m_panel_w, -1);
 
         m_device_title[p] = title;
         m_device_sub[p]   = sub;
@@ -1033,6 +1035,7 @@ void ControllerDialog::build_player_tab(int p) {
         analog_exp->set_label_widget(*ehrow);
     }
     analog_exp->set_expanded(true);
+    m_analog_exp[p] = analog_exp;
     analog_exp->add(*build_analog_section(p));
 
     auto* analog_card = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
@@ -1045,9 +1048,11 @@ void ControllerDialog::build_player_tab(int p) {
     // Le contenu peut depasser la fenetre sur un petit ecran, et un bouton
     // Save rogne est inutilisable : le pied reste hors du defilement.
     auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
-    // Les deux sens, sans propager la taille du contenu : la fenetre garde la
-    // taille commune des fenetres de travail, c'est l'onglet qui defile.
+    // La taille du contenu remonte jusqu'a la fenetre (fit_to_content), qui
+    // s'y ajuste : c'est elle qui grandit, pas l'onglet qui defile.
     scroll->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+    scroll->set_propagate_natural_width(true);
+    scroll->set_propagate_natural_height(true);
     scroll->add(*tab_box);
 
     /* Onglet avec son pictogramme, comme la maquette : deux grands
@@ -1070,6 +1075,41 @@ void ControllerDialog::build_player_tab(int p) {
  * joueur, et si elle est branchee la maintenant. Sans cette mise a jour, le
  * panneau restait sur un titre generique et un dessin, c'est-a-dire sur rien.
  */
+/* L'ecran est plus etroit que la fenetre : on resserre d'abord le panneau de
+ * la manette et son illustration (qui gardent leurs proportions), puis les
+ * champs de liaison, plutot que de laisser rogner le bord droit. Les valeurs
+ * de la maquette restent le maximum. */
+void ControllerDialog::compact_layout(int missing, int missing_height) {
+    // Trop haut pour l'ecran : les commandes analogiques (volant, pistolet...
+    // que la plupart des jeux n'utilisent pas) se replient, un clic les rouvre.
+    if (missing_height > 0)
+        for (auto* e : m_analog_exp) if (e) e->set_expanded(false);
+
+    constexpr int kPanelPadding = 368 - kArtWidth;      // marges de la carte
+    constexpr int kMinPanel = 250;
+    constexpr int kMinField = 96;
+
+    const int panel = std::max(kMinPanel, m_panel_w - missing);
+    missing -= m_panel_w - panel;
+    m_panel_w = panel;
+    m_art_w = std::max(150, panel - kPanelPadding);
+    m_art_h = kArtHeight * m_art_w / kArtWidth;
+
+    if (missing > 0) {
+        // Trois colonnes de champs : chacune cede sa part.
+        const int per_field = (missing + 2) / 3;
+        m_field_w = std::max(kMinField, m_field_w - per_field);
+    }
+
+    for (int p = 0; p < 2; ++p) {
+        if (m_device_panel[p]) m_device_panel[p]->set_size_request(m_panel_w, -1);
+        if (m_device_art[p])   m_device_art[p]->set_size_request(m_art_w, m_art_h);
+    }
+    for (auto* b : m_bind_buttons)
+        if (b) b->set_size_request(m_field_w, kRowHeight);
+    for (int p = 0; p < 2; ++p) update_device_panel(p);
+}
+
 void ControllerDialog::update_device_panel(int p) {
     if (m_closing) return;
     const std::string path = m_config.players[p].device_path;
@@ -1121,13 +1161,13 @@ void ControllerDialog::update_device_panel(int p) {
      */
     Glib::RefPtr<Gdk::Pixbuf> art =
         IconManager::load(std::string("controllers/") + shown.photo,
-                          kArtWidth, kArtHeight);
+                          m_art_w, m_art_h);
     if (!art && shown.alt)
         art = IconManager::load(std::string("controllers/") + shown.alt,
-                                kArtWidth, kArtHeight);
+                                m_art_w, m_art_h);
     if (!art)
         art = IconManager::load(std::string("icons/") + shown.svg,
-                                kArtWidth, kArtHeight);
+                                m_art_w, m_art_h);
     m_device_art[p]->set(art);
 
     /* La ligne sous le nom decrit le MATERIEL reconnu. Elle ne dit

@@ -2,8 +2,11 @@
 #include "MameControls.h"
 #include "ControllerManager.h"
 #include "AppContext.h"
+#include "Platform.h"
+#ifndef _WIN32
 #include <linux/joystick.h>
 #include <sys/ioctl.h>
+#endif
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstdio>
@@ -200,6 +203,9 @@ Pad open_pad(const PlayerConfig& player, int joy) {
     const std::string path = resolve_path(player);
     if (path.empty()) return pad;
     pad.id = sdl_id_fragment(path);
+#ifdef _WIN32
+    return pad;   // Windows : manettes a une etape suivante
+#else
     const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK);
     if (fd < 0) return pad;
     uint8_t count = 0;
@@ -208,6 +214,7 @@ Pad open_pad(const PlayerConfig& player, int joy) {
         pad.axmap.assign(map, map + count);
     close(fd);
     return pad;
+#endif
 }
 
 // Numero d'axe chez SDL, ou -1 pour un chapeau ou un axe inconnu.

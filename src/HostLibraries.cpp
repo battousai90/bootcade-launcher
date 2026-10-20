@@ -12,6 +12,9 @@ namespace HostLibraries {
 std::vector<std::string> missing(const std::string& executable) {
     std::vector<std::string> out;
     if (executable.empty()) return out;
+#ifdef _WIN32
+    return out;   // pas de ldd : les DLL d'un emulateur Windows sont a cote de l'exe
+#endif
 
     std::string stdout_text;
     int status = 0;

@@ -19,6 +19,7 @@
 #include "DatSource.h"
 #include "DatabaseManager.h"
 #include "RomAudit.h"
+#include "Pager.h"
 #include "SettingsUi.h"
 
 #include <gtkmm.h>
@@ -51,6 +52,11 @@ public:
     // The DAT groups changed (DAT tab) : the combo follows.
     void reload_groups();
     bool busy() const { return m_busy.load(); }
+    // Le dernier audit, pour l'onglet Downloads (nul tant qu'aucun n'a tourne).
+    const RomAudit::Report* report() const { return m_audit_ever_run ? &m_audit : nullptr; }
+    void start_audit() { on_audit_clicked(); }
+    std::string group_label() const { return m_group_emulator.get_text(); }
+    sigc::signal<void>& signal_audited() { return m_sig_audited; }
 
     // "Scan ROMs": the owner starts the scan with its usual confirmation.
     // Both scan signals carry the emulator of the DAT group : the library
@@ -98,21 +104,12 @@ private:
     void worker_fix();
     std::vector<Gtk::TreeModel::Row> fix_candidates() const;
     void on_export(int format);   // 0 text, 1 csv, 2 dat
-    // Download from Bootcade's ROM server, with the player's account (quota
-    // per account) : FinalBurn Neo sets that are missing or wrong and cannot
-    // be rebuilt from the library. Into the import folder, which verifies
-    // and files them as for any other ROM. On the given rows, else the
-    // ticked rows shown.
-    bool can_download(const RomAudit::GameEntry& g) const;
-    std::vector<Gtk::TreeModel::Row> download_candidates() const;
-    void on_download_clicked(std::vector<Gtk::TreeModel::Row> rows = {});
-    void worker_download();
     void update_action_buttons();
     std::vector<Gtk::TreeModel::Row> checked_rows() const;
     bool ticked_by_default(const Gtk::TreeModel::Row& row) const;
 
     // ── Worker plumbing ─────────────────────────────────────────────────────
-    enum class Job { None, Audit, Fix, Download };
+    enum class Job { None, Audit, Fix };
     RomInbox::Callbacks make_callbacks();
     void push_progress(double pct, const std::string& msg);
     void push_log(const std::string& msg);
@@ -162,9 +159,8 @@ private:
     Gtk::Label          m_status;
     Gtk::Button*        m_btn_cancel = nullptr;
     Gtk::Button*        m_btn_fix    = nullptr;
-    Gtk::Button*        m_btn_download = nullptr;
-    Gtk::Button*        m_btn_select_all = nullptr;
-    Gtk::Button*        m_btn_select_none = nullptr;
+    Gtk::Label          m_group_emulator;   // sous « DAT group » : emulateur et version
+    void                update_group_emulator();
     sigc::connection    m_flash_timer;
 
     // ── Model ───────────────────────────────────────────────────────────────
@@ -186,9 +182,7 @@ private:
         Gtk::TreeModelColumn<bool>          ignored;
         Gtk::TreeModelColumn<bool>          has_extras;
         Gtk::TreeModelColumn<bool>          actionable;  // Fix can act on it
-        // Can be ticked : Fix can act on it, or it can be downloaded. A set
-        // that is only missing has nothing for Fix, and its box refused the
-        // tick that Download from Bootcade reads.
+        // Can be ticked : Fix can act on it.
         Gtk::TreeModelColumn<bool>          checkable;
         Columns() {
             add(include); add(status); add(status_key); add(game); add(system); add(parent);
@@ -198,7 +192,11 @@ private:
     };
     Columns m_cols;
     Glib::RefPtr<Gtk::ListStore>       m_store;
-    SettingsUi::ModelStack             m_models;    // filter + sort, rebuilt on every change
+    SettingsUi::ModelStack             m_models;    // filter + sort + page, rebuilt on every change
+    SettingsUi::Pager*                 m_pager = nullptr;
+    Gtk::Box*                          m_table_box = nullptr;
+    void attach_models();   // rebuilds the stack for the current page, then tells the pager the total
+    void on_page_changed();
     Glib::ustring m_vis_system;                     // filter inputs, snapshotted per refilter
     std::string   m_vis_needle;
     Gtk::TreeModel::Row source_row(const Gtk::TreeModel::Path& sorted_path) const;
@@ -209,10 +207,6 @@ private:
 
     // ── State ───────────────────────────────────────────────────────────────
     RomAudit::Report m_audit;
-    // Sets the Bootcade server does not hold ("<dat_header>/<name>"), asked
-    // at the end of the audit : never offered for download.
-    // "<dat_header>/<name>" -> true when the server holds an older version.
-    std::map<std::string, bool> m_not_on_server;
     bool m_audit_ever_run = false;
     Paths m_job_paths;   // snapshot for the worker
 
@@ -230,14 +224,6 @@ private:
         int relocated = 0;   // misnamed archives moved out of the library to Import
     } m_fix;
 
-    // Download job : the sets asked for, what arrived, why it stopped.
-    struct DownloadJob {
-        struct Item { std::string dat_header, name; };
-        std::vector<Item> items;
-        std::vector<std::string> got;       // zips written into the import folder
-        std::vector<std::string> failed;    // "name : reason"
-        std::string stopped;                // set when the whole job stopped early
-    } m_dl;
 
     Job              m_job = Job::None;
     std::thread      m_worker;
@@ -254,4 +240,5 @@ private:
     sigc::signal<void, std::string> m_sig_scan;
     sigc::signal<void, std::vector<std::string>> m_sig_send_to_import;
     sigc::signal<void, std::string> m_sig_log;
+    sigc::signal<void> m_sig_audited;
 };

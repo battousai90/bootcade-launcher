@@ -1,13 +1,18 @@
 // src/FbneoVideo.cpp
 #include "FbneoVideo.h"
+#include "FbneoPaths.h"
 
-#include <poll.h>
+#include "Platform.h"
+#include "ProcessWin.h"
 #include <cerrno>
 #include <signal.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <fcntl.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <poll.h>
+#include <sys/wait.h>
+#endif
 
 #include <nlohmann/json.hpp>
 
@@ -34,6 +39,20 @@ namespace {
  * alors que la commande, elle, part telle quelle sur l'hote.
  */
 std::string capture(const std::string& exe, int timeout_ms) {
+#ifdef _WIN32
+    // Pas de commande « env » sous Windows : les pilotes factices passent par
+    // l'environnement du processus.
+    std::string out;
+    bool timed_out = false;
+    WinProc::run_streaming({exe, "-list-video-json"},
+                           {"SDL_VIDEODRIVER=dummy", "SDL_AUDIODRIVER=dummy"},
+                           [&out](const char* p, size_t n) {
+                               out.append(p, n);
+                               return out.size() <= (1u << 20);
+                           }, timeout_ms, &timed_out);
+    if (timed_out || out.size() > (1u << 20)) out.clear();
+    return out;
+#else
     const std::vector<std::string> cmd = AppContext::host_command(
         {"env", "SDL_VIDEODRIVER=dummy", "SDL_AUDIODRIVER=dummy", exe, "-list-video-json"});
 
@@ -81,6 +100,7 @@ std::string capture(const std::string& exe, int timeout_ms) {
     }
     waitpid(pid, nullptr, 0);
     return out;
+#endif
 }
 
 Range read_range(const nlohmann::json& ranges, const char* key, Range fallback) {
@@ -156,6 +176,9 @@ Capabilities parse(const std::string& text) {
 }
 
 Capabilities probe(const std::string& exe) {
+    // Le FBNeo officiel de Windows ne connait pas -list-video-json : lance
+    // avec, il ouvrirait sa propre fenetre. Il n'a pas ces reglages.
+    if (FbneoPaths::is_win32_build(exe)) return Capabilities{};
     static std::mutex m;
     static std::map<std::pair<std::string, long long>, Capabilities> cache;
     if (exe.empty() || ::access(exe.c_str(), X_OK) != 0) return {};

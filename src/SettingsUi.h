@@ -115,10 +115,26 @@ void refresh_fold(const Fold& f);
 bool open_uri(const std::string& uri, Gtk::Window* parent = nullptr);
 
 // Taille commune des fenetres de travail (Settings, ROM Manager, Controller
-// Configuration) : 1400 x 900, bornee a 90 % de l'ecran de `near`.
+// Configuration) : 1400 x 900, bornee a 90 % de l'ecran de `anchor`.
 inline constexpr int kWorkWindowWidth  = 1400;
 inline constexpr int kWorkWindowHeight = 900;
-void size_work_window(Gtk::Window& win, Gtk::Window* near = nullptr);
+void size_work_window(Gtk::Window& win, Gtk::Window* anchor = nullptr);
+
+// Une fenetre qui prend la taille de son contenu : a l'ouverture, celle que
+// le contenu demande, ni plus ni moins, bornee a 95 % de l'ecran. Pour les
+// fenetres dont le contenu ne doit ni etre rogne ni defiler : leurs zones
+// defilantes doivent propager leur taille naturelle (set_propagate_natural_*).
+//
+// `adapt`, s'il est donne, est appele quand le contenu est plus grand que
+// l'ecran, avec le nombre de pixels qui manquent en largeur et en hauteur :
+// c'est a la fenetre de se resserrer (illustrations plus petites, champs plus
+// etroits, sections repliees) plutot que de laisser rogner ou defiler.
+void fit_to_content(Gtk::Window& win, Gtk::Window* anchor = nullptr,
+                    std::function<void(int missing_width, int missing_height)> adapt = nullptr);
+// La taille de travail (size_work_window) au minimum, et plus grand si le
+// contenu le demande, borne a 95 % de l'ecran. Pour les fenetres dont les
+// tableaux defilent en hauteur mais ne doivent jamais etre rognes en largeur.
+void fit_work_window(Gtk::Window& win, Gtk::Window* anchor = nullptr);
 // Tant que `win` est affichee, `main` porte la classe « behind-work » : la
 // feuille de style l'assombrit quand elle n'est pas la fenetre active.
 void dim_behind(Gtk::Window& win, Gtk::Window& main);
@@ -176,8 +192,20 @@ void destroy_children(Gtk::Container& parent);
 struct ModelStack {
     Glib::RefPtr<Gtk::TreeModelFilter> filter;
     Glib::RefPtr<Gtk::TreeModelSort>   sort;
+    // La page affichee : une tranche du resultat TRIE. Le magasin garde toutes les lignes (cases
+    // cochees comprises) ; la vue n'en recoit qu'une page, ce qui la rend rapide sur 30 000 lignes.
+    Glib::RefPtr<Gtk::TreeModelFilter> page;
+    int          page_size  = 0;   // 0 : tout afficher
+    int          page_index = 0;
+    sigc::connection sort_changed;
+    std::vector<sigc::connection> header_clicks;   // le clic d'un en-tete trie le modele trie (la vue montre la page)
     int          sort_column = Gtk::TreeSortable::DEFAULT_SORT_COLUMN_ID;
     Gtk::SortType sort_order = Gtk::SORT_ASCENDING;
+
+    // Change de page (ou de taille de page) sans rebatir la pile.
+    void set_page(int index, int size);
+    // Le chemin dans le magasin d'un chemin de la vue (qui montre la page).
+    Gtk::TreeModel::Path store_path(const Gtk::TreeModel::Path& view_path) const;
 
     // Retient la colonne de tri, detache la vue, laisse tomber les deux
     // modeles. A appeler AVANT de toucher au magasin.

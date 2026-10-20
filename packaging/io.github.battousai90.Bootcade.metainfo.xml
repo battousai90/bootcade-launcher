@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="2.0.0" date="2026-10-20">
+      <description>
+        <p>Windows support, a Downloads tab in ROM Manager, a workspace folder you choose, and paged lists</p>
+      </description>
+    </release>
     <release version="1.8.3" date="2026-10-17">
       <description>
         <p>Plug-and-play controllers and the official FinalBurn Neo</p>

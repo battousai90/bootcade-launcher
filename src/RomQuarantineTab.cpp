@@ -1,5 +1,7 @@
 // src/RomQuarantineTab.cpp
+#include "FileChooser.h"
 #include "RomQuarantineTab.h"
+#include "Platform.h"
 
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
@@ -485,7 +487,7 @@ void RomQuarantineTab::apply_quarantine_path(const std::string& folder) {
 
 void RomQuarantineTab::on_browse_folder() {
     auto* top = dynamic_cast<Gtk::Window*>(get_toplevel());
-    Gtk::FileChooserDialog dlg(_("Select the quarantine folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    BcFileChooser dlg(_("Select the quarantine folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     if (top) dlg.set_transient_for(*top);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Select"), Gtk::RESPONSE_OK);

@@ -8,6 +8,7 @@
 // signal. C'est volontaire : une refonte visuelle qui reecrit au passage la
 // lecture de la configuration, le balayage des ROMs ou la connexion au compte
 // ne se debogue plus, parce qu'on ne sait plus ce qui a change.
+#include "FileChooser.h"
 #include "SettingsPanel.h"
 #include "DefaultFolders.h"
 #include "RetroAchievements.h"
@@ -20,12 +21,18 @@
 #include "AppContext.h"
 #include "ConfirmationDialog.h"
 #include "DatabaseManager.h"
+#include "DefaultFolders.h"
+#include "Workspace.h"
+#include "FileChooser.h"
 #include "DownloadDialog.h"
 #include "EmulatorRegistry.h"
 #include "GenerateDAT.h"
 #include "DatSource.h"
 #include "FbneoChannel.h"
+#include "EmulatorVariants.h"
+#include "MameOfficial.h"
 #include "FbneoUpdateCheck.h"
+#include "FbneoPaths.h"
 #include "HiscoreClient.h"
 #include "HostLibraries.h"
 #include "MameCatalog.h"
@@ -49,7 +56,10 @@
 #include <mutex>
 #include <thread>
 #include <sys/stat.h>
+#include "Platform.h"
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 
 namespace {
@@ -688,6 +698,17 @@ Gtk::Widget* SettingsPanel::build_page_general() {
     auto storage = ui::card("database.svg", _("Data & Storage"),
                             _("Manage local application data."));
     auto* sto_rows = ui::rows();
+    // Ou Bootcade range ses fichiers : config, base, DAT, images, ROMs de travail, emulateurs.
+    m_btn_workdir.set_label(AppContext::is_portable() ? _("Portable") : _("Change…"));
+    m_btn_workdir.set_sensitive(!AppContext::is_portable());
+    m_btn_workdir.signal_clicked().connect(sigc::mem_fun(*this, &SettingsPanel::on_change_workdir_clicked));
+    {
+        const Glib::ustring where = AppContext::is_portable()
+            ? Glib::ustring(_("Portable mode : everything stays next to Bootcade, in ")) + DefaultFolders::root()
+            : Glib::ustring(DefaultFolders::root());
+        auto* row = ui::row("bc-folder.svg", _("Bootcade folder"), where, &m_btn_workdir);
+        ui::add_row(sto_rows, *row);
+    }
     m_btn_clear_cache.set_label(_("Clear…"));
     m_btn_clear_cache.signal_clicked().connect(
         sigc::mem_fun(*this, &SettingsPanel::on_clear_cache_clicked));
@@ -1171,7 +1192,7 @@ Gtk::Widget* SettingsPanel::build_page_library() {
     m_btn_browse_catver.set_always_show_image(true);
     m_btn_browse_catver.set_tooltip_text(_("Browse..."));
     m_btn_browse_catver.signal_clicked().connect([this] {
-        auto chooser = Gtk::FileChooserDialog(_("Select catver.ini"),
+        auto chooser = BcFileChooser(_("Select catver.ini"),
                                               Gtk::FILE_CHOOSER_ACTION_OPEN);
         if (auto* win = dynamic_cast<Gtk::Window*>(get_toplevel()))
             chooser.set_transient_for(*win);
@@ -1495,7 +1516,7 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     m_button_browse_fbneo.set_image(*ui::image("bc-folder.svg", ui::kIconButton));
     m_button_browse_fbneo.set_always_show_image(true);
     m_button_browse_fbneo.signal_clicked().connect([this] {
-        auto dialog = Gtk::FileChooserDialog(_("Select FBNeo Executable"), Gtk::FILE_CHOOSER_ACTION_OPEN);
+        auto dialog = BcFileChooser(_("Select FBNeo Executable"), Gtk::FILE_CHOOSER_ACTION_OPEN);
         dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
         dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
 
@@ -1559,7 +1580,10 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
         // ecrit son mode d'emploi et s'arrete aussitot, sans aucune fenetre.
         Glib::Pid pid = 0;
         try {
-            Glib::spawn_async("", AppContext::host_command({path, "-menu"}),
+            Glib::spawn_async("", AppContext::host_command(
+                                  // Le FBNeo officiel de Windows ouvre son ecran sans option.
+                                  FbneoPaths::is_win32_build(path) ? std::vector<std::string>{path}
+                                                                    : std::vector<std::string>{path, "-menu"}),
                               Glib::SPAWN_SEARCH_PATH | Glib::SPAWN_DO_NOT_REAP_CHILD,
                               Glib::SlotSpawnChildSetup(), &pid);
         } catch (const Glib::Error& e) {
@@ -1684,7 +1708,7 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     m_button_browse_mame.set_image(*ui::image("bc-folder.svg", ui::kIconButton));
     m_button_browse_mame.set_always_show_image(true);
     m_button_browse_mame.signal_clicked().connect([this] {
-        auto dialog = Gtk::FileChooserDialog(_("Select MAME Executable"),
+        auto dialog = BcFileChooser(_("Select MAME Executable"),
                                              Gtk::FILE_CHOOSER_ACTION_OPEN);
         dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
         dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
@@ -2310,6 +2334,13 @@ Gtk::Widget* SettingsPanel::build_fbneo_video() {
     return box;
 }
 
+void SettingsPanel::set_fbneo_video(const FbneoVideo::Options& o) {
+    m_fbneo_video = o;
+    fbneo_video_fill();
+    refresh_sections();
+    save_to_file(AppContext::get_config_path());
+}
+
 void SettingsPanel::fbneo_video_fill() {
     m_fx_syncing = true;
     const FbneoVideo::Capabilities& caps = m_fbneo_caps;
@@ -2460,6 +2491,11 @@ void SettingsPanel::open_emulator(const std::string& emulator_id) {
     for (size_t i = 0; i < registry.size(); ++i)
         if (registry[i].id == emulator_id)
             if (auto* row = m_emu_list.get_row_at_index(static_cast<int>(i))) m_emu_list.select_row(*row);
+}
+
+void SettingsPanel::open_library(const std::string& emulator_id) {
+    if (m_tabs_buttons.size() > 1) m_tabs_buttons[1]->clicked();
+    library_show(emulator_id);   // la bibliotheque de l'emulateur dont il s'agit
 }
 
 void SettingsPanel::show_emulator_page(size_t index) {
@@ -2804,6 +2840,24 @@ void SettingsPanel::download_catver_clicked() {
 // il s'eteint quand Sooner est la et choisi, sans perdre ce qu'il contient.
 void SettingsPanel::refresh_sooner_state() {
     const bool sooner = mame_channel() == MameSooner::kChannelSooner;
+#ifdef _WIN32
+    // Sous Windows, la version publiee se telecharge aussi : MAMEdev en fait
+    // un executable Windows a chaque version. La meme ligne la propose.
+    if (!sooner) {
+        m_sooner_line.set_visible(true);
+        m_entry_mame_exe.set_sensitive(true);
+        m_button_browse_mame.set_sensitive(true);
+        const std::string tag = MameOfficial::installed_tag();
+        if (tag.empty()) {
+            m_lbl_sooner.set_text(_("Download the official MAME published by MAMEdev."));
+            m_btn_sooner.set_label(_("Download"));
+        } else {
+            m_lbl_sooner.set_text(Glib::ustring::compose(_("Official MAME %1 is installed."), tag));
+            m_btn_sooner.set_label(_("Update"));
+        }
+        return;
+    }
+#endif
     m_sooner_line.set_visible(sooner);
     const auto here = MameSooner::installed();
     const bool in_use = sooner && !here.build.empty();
@@ -2830,6 +2884,9 @@ void SettingsPanel::refresh_sooner_state() {
 void SettingsPanel::on_sooner_download() {
     auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
     if (!parent) return;
+#ifdef _WIN32
+    if (mame_channel() != MameSooner::kChannelSooner) { on_mame_official_download(); return; }
+#endif
 
     Gtk::Dialog dialog;
     dialog.set_transient_for(*parent);
@@ -2927,6 +2984,98 @@ void SettingsPanel::on_sooner_download() {
                    Glib::ustring::compose(_("Bootcade now uses MAME Sooner %1. Its catalog "
                                             "is read on the next start."), build),
                    "bc-check.svg");
+    // Ses DAT, generes par lui, dans son groupe (DatGroupSetup).
+    m_sig_mame_installed.emit("sooner");
+}
+
+/* Le MAME officiel sous Windows : la derniere release de mamedev/mame,
+ * telechargee et extraite par Bootcade, puis designee comme executable. */
+void SettingsPanel::on_mame_official_download() {
+    auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
+    if (!parent) return;
+
+    Gtk::Dialog dialog;
+    dialog.set_transient_for(*parent);
+    dialog.set_modal(true);
+    dialog.set_resizable(false);
+    dialog.set_default_size(520, -1);
+    dialog.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
+    ui::window_header(dialog, "bc-download.svg", _("MAME"),
+                      _("Downloading the official MAME from MAMEdev..."));
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 14);
+    box->set_margin_start(22);
+    box->set_margin_end(22);
+    box->set_margin_top(20);
+    box->set_margin_bottom(20);
+    auto* bar = Gtk::make_managed<Gtk::ProgressBar>();
+    bar->set_show_text(true);
+    bar->set_text(_("Reading the latest release..."));
+    box->pack_start(*bar, Gtk::PACK_SHRINK);
+    auto* cancel = ui::button(_("Cancel"), "bc-close.svg");
+    cancel->set_halign(Gtk::ALIGN_END);
+    box->pack_start(*cancel, Gtk::PACK_SHRINK);
+    dialog.get_content_area()->set_spacing(0);
+    dialog.get_content_area()->pack_start(*box, Gtk::PACK_EXPAND_WIDGET);
+    dialog.show_all();
+
+    std::atomic<bool> cancelled{false}, finished{false};
+    std::mutex mtx;
+    double fraction = 0.0;
+    std::string text, error, tag;
+    bool ok = false;
+    Glib::Dispatcher on_tick, on_done;
+    on_tick.connect([&] {
+        std::lock_guard<std::mutex> lock(mtx);
+        bar->set_fraction(fraction);
+        if (!cancelled.load()) bar->set_text(text);
+    });
+    on_done.connect([&dialog] { dialog.response(Gtk::RESPONSE_OK); });
+    cancel->signal_clicked().connect([&] {
+        cancelled = true;
+        cancel->set_sensitive(false);
+        bar->set_text(_("Cancelling..."));
+    });
+
+    std::thread worker([&] {
+        const auto rel = MameOfficial::fetch_latest();
+        std::string err;
+        bool done = false;
+        if (!rel.ok) err = rel.error;
+        else done = MameOfficial::install(rel, err,
+                [&](double f, const std::string& msg) {
+                    { std::lock_guard<std::mutex> lock(mtx); fraction = f; text = msg; }
+                    on_tick.emit();
+                },
+                [&] { return cancelled.load(); });
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            ok = done;
+            error = err;
+            tag = rel.tag;
+        }
+        finished = true;
+        on_done.emit();
+    });
+    while (!finished.load()) dialog.run();
+    worker.join();
+    dialog.hide();
+
+    if (!ok) {
+        if (!cancelled.load())
+            ui::notice(*parent, _("Download failed"), error, "bc-error.svg");
+        refresh_mame_state();
+        return;
+    }
+    m_entry_mame_exe.set_text(MameOfficial::executable());
+    save_to_file(AppContext::get_config_path());
+    refresh_emulator_pill();
+    refresh_sections();
+    refresh_mame_state();
+    ui::notice(*parent, _("MAME is ready"),
+               Glib::ustring::compose(_("Bootcade now uses the official MAME %1. Its catalog "
+                                        "is read on the next start."), tag),
+               "bc-check.svg");
+    m_sig_mame_installed.emit("release");
 }
 
 void SettingsPanel::refresh_mame_state() {
@@ -3259,12 +3408,10 @@ void SettingsPanel::refresh_emulator_state() {
 
     nlohmann::json j;
     { std::ifstream fi(AppContext::get_config_path()); if (fi) { try { fi >> j; } catch (...) {} } }
-    // « Build » : l'empreinte du commit que le lanceur a telecharge. C'est la
-    // seule identite de version que cette distribution de FBNeo expose ; en
-    // inventer un numero serait plus lisible et faux.
-    std::string sha = j.value(FbneoChannel::sha_key(), std::string());
-    m_lbl_emu_version.set_text(sha.empty() ? std::string(_("Unknown"))
-                                           : sha.substr(0, 7));
+    // « Build » : le commit de finalburnneo que ce build contient, le meme
+    // que celui du groupe de DAT. Celui du fork Bootcade n'en dit rien.
+    const std::string up = EmulatorVariants::version("fbneo", FbneoChannel::current());
+    m_lbl_emu_version.set_text(up.empty() ? std::string(_("Unknown")) : up);
     const std::string installed = file_date(exe);
     m_lbl_emu_systems.set_text(installed.empty() ? "—" : installed);
     const std::string checked = j.value("fbneo_checked_at", std::string());
@@ -3816,6 +3963,36 @@ void SettingsPanel::on_restore_defaults_clicked() {
     apply_defaults();
 }
 
+void SettingsPanel::on_change_workdir_clicked() {
+    auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
+    if (!win) return;
+    BcFileChooser chooser(*win, _("Choose the new Bootcade folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    chooser.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+    chooser.add_button(_("Select"), Gtk::RESPONSE_OK);
+    chooser.set_current_folder(DefaultFolders::root());
+    if (chooser.run() != Gtk::RESPONSE_OK) return;
+    const std::string chosen = chooser.get_filename();
+    chooser.hide();   // sinon il reste affiche derriere la question
+    if (chosen.empty()) return;
+
+    ConfirmationDialog dlg(
+        *win, _("Move Bootcade to this folder?"),
+        Glib::ustring::compose(
+            _("Your settings, game database, DAT files, artwork, emulators and working ROM folders "
+              "move to :\n\n%1\n\nBootcade closes and opens again by itself to do it. Folders "
+              "outside the Bootcade folder, such as a ROM library on another drive, are not touched."),
+            chosen),
+        "bc-folder.svg", false);
+    if (!dlg.show_and_confirm()) return;
+
+    const std::string err = Workspace::request(chosen);
+    if (!err.empty()) {
+        ui::notice(*win, _("This folder cannot be used."), err);
+        return;
+    }
+    m_sig_restart.emit();
+}
+
 void SettingsPanel::on_clear_cache_clicked() {
     auto* win = dynamic_cast<Gtk::Window*>(get_toplevel());
     if (!win) return;
@@ -3838,7 +4015,10 @@ void SettingsPanel::on_clear_cache_clicked() {
         auto size = std::filesystem::file_size(f, ec);
         if (!ec) total += size;
     }
-    if (total == 0) {
+    /* Le cache du scan des ROMs vit dans games.db : il se vide table par table,
+     * jamais en effacant le fichier (favoris et historique y sont aussi). */
+    const bool rom_cache = m_database && m_database->getRomCacheCount() > 0;
+    if (total == 0 && !rom_cache) {
         ui::notice(*win, _("Nothing to clear."),
                    _("The local cache is already empty."));
         return;
@@ -3859,9 +4039,10 @@ void SettingsPanel::on_clear_cache_clicked() {
         *win, _("Clear local cache?"),
         Glib::ustring::compose(
             _("Bootcade will delete %1 of cached filters, cached leaderboards "
-              "and the debug log.\n\nYour games, favourites, play history and "
-              "pending scores are not touched. Everything deleted here is "
-              "rebuilt automatically."),
+              "and the debug log, and forget what the last ROM scan read.\n\n"
+              "Your games, favourites, play history and pending scores are not "
+              "touched. Everything deleted here is rebuilt automatically ; run "
+              "Scan ROMs to read your ROM folders again."),
             size_text),
         "bc-clear.svg", true);
     if (!dlg.show_and_confirm()) return;
@@ -3869,6 +4050,10 @@ void SettingsPanel::on_clear_cache_clicked() {
     for (const auto& f : files) {
         std::error_code ec;
         std::filesystem::remove(f, ec);
+    }
+    if (m_database) {
+        m_database->clearRomCache();
+        m_database->clearDirectorySnapshots();
     }
     ui::notice(*win, _("Local cache cleared."),
                _("The deleted files are rebuilt automatically as you use Bootcade."),
@@ -4089,7 +4274,7 @@ void SettingsPanel::set_language(const std::string& code) {
 }
 
 void SettingsPanel::on_folder_clicked(Gtk::Entry* entry) {
-    auto dialog = Gtk::FileChooserDialog(_("Select Folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    auto dialog = BcFileChooser(_("Select Folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
 
@@ -4275,6 +4460,11 @@ void SettingsPanel::add_roms_path(const std::string& path) {
 void SettingsPanel::add_roms_path_for(const std::string& emulator, const std::string& path) {
     if (emulator == m_library_emu) { add_roms_path(path); return; }
     m_library[emulator].roms_paths.push_back(path);
+}
+
+void SettingsPanel::set_roms_paths_for(const std::string& emulator, const std::vector<std::string>& paths) {
+    if (emulator == m_library_emu) { set_roms_paths(paths); return; }
+    m_library[emulator].roms_paths = paths;
 }
 
 void SettingsPanel::remove_roms_path(int index) {
@@ -4636,7 +4826,7 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
 
 // --- New methods for ROMs path management ---
 void SettingsPanel::on_add_roms_path_clicked() {
-    auto dialog = Gtk::FileChooserDialog(_("Select ROMs Directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    auto dialog = BcFileChooser(_("Select ROMs Directory"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
     dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
 
@@ -4738,10 +4928,13 @@ void SettingsPanel::on_download_fbneo_clicked() {
         const std::string path = AppContext::get_config_path();
         { std::ifstream fi(path); if (fi) { try { fi >> j; } catch (...) { j = nlohmann::json{}; } } }
         j[FbneoChannel::sha_key()] = r.sha;
+        j[FbneoChannel::upstream_key()] = FbneoUpdateCheck::upstream_commit(r);
         std::ofstream fo(path);
         if (fo) fo << j.dump(4);
     }
     refresh_emulator_state();
+    // Installe : la note « pas encore installe » n'a plus lieu d'etre.
+    if (installed && !m_entry_fbneo.get_text().empty()) m_lbl_fbneo_channel_note.hide();
     if (installed) m_sig_fbneo_installed.emit();
 }
 

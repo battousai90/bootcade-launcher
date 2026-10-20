@@ -42,11 +42,30 @@ bool empty_list(const nlohmann::json& o, const char* key) {
 
 }  // namespace
 
-std::string root() {
+std::string default_root() {
     if (const char* isolated = std::getenv("BOOTCADE_CONFIG_DIR"); isolated && *isolated)
         return (fs::path(isolated) / "Bootcade").string();
     const char* home = std::getenv("HOME");
     return (fs::path(home ? home : ".") / "Bootcade").string();
+}
+
+// Le dossier de travail (choisi ou portable) porte aussi les dossiers de
+// donnees ; sinon ~/Bootcade, comme avant.
+std::string root() {
+    if (const std::string w = AppContext::workspace_dir(); !w.empty()) return w;
+    return default_root();
+}
+
+bool is_first_run() {
+    if (const char* force = std::getenv("BOOTCADE_ASK_WORK_DIR"); force && *force) return true;
+    if (const char* isolated = std::getenv("BOOTCADE_CONFIG_DIR"); isolated && *isolated) return false;
+    if (!AppContext::workspace_dir().empty()) return false;   // choisi, ou portable
+    nlohmann::json j;
+    { std::ifstream in(AppContext::get_config_path()); if (in) { try { in >> j; } catch (...) { return false; } } }
+    if (!j.is_object()) return false;
+    std::error_code ec;
+    if (fs::exists(AppContext::get_user_config_dir() + "/games.db", ec)) return false;   // installation existante
+    return !j.contains("default_folders");
 }
 
 std::string sub(const std::string& relative) {

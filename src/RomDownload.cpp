@@ -5,7 +5,7 @@
 #include "HiscoreClient.h"
 #include "i18n.h"
 
-#include <curl/curl.h>
+#include "CurlInit.h"
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -203,6 +203,12 @@ Presence presence(const std::string& dat_header, const std::string& name) {
     return Presence::Unknown;
 }
 
+std::string ServerView::changed_on(const std::string& name) {
+    if (!m_loaded) load();
+    auto it = m_changed.find(name);
+    return it == m_changed.end() ? std::string() : it->second;
+}
+
 void ServerView::load() {
     m_loaded = true;
     std::string body;
@@ -297,7 +303,7 @@ Result download(const std::string& dat_header, const std::string& name,
     const std::string url = roms_url() + "/roms/" + escape(curl, dat_header) + "/" + escape(curl, name) + ".zip";
 
     Sink sink;
-    sink.file = std::fopen(part_path.c_str(), "wb");
+    sink.file = std::fopen(part_path.string().c_str(), "wb");
     if (!sink.file) { curl_easy_cleanup(curl); r.reason = "cannot write " + part_path.string(); return r; }
     sink.cancelled = &cancelled;
     sink.progress = &progress;
