@@ -256,3 +256,102 @@ jobs:
           files: |
             bootcade-${{ needs.version.outputs.tag }}-x86_64.flatpak
             SHA256SUMS
+
+  # Le port Windows : un dossier portable zippe, construit en MSYS2 UCRT64 (comme windows.yml, qui ne
+  # publie rien). Apres le Flatpak, parce que tous deux republient SHA256SUMS : deux jobs en meme temps
+  # s'ecraseraient la ligne l'un de l'autre. Le Flatpak peut echouer sans retenir celui-ci.
+  windows:
+    needs: [version, package, flatpak]
+    if: ${{ always() && needs.package.result == 'success' }}
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: msys2/setup-msys2@v2.33.0
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            zip
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-gtkmm3
+            mingw-w64-ucrt-x86_64-pugixml
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-libzip
+            mingw-w64-ucrt-x86_64-libarchive
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+
+      - name: Configure and build
+        run: |
+          git config --global --add safe.directory '*'
+          cmake -S . -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-windows -j$(nproc)
+
+      - name: Assemble and zip the portable folder
+        id: zip
+        run: |
+          VERSION=$(sed -n 's/^project(bootcade VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          cmake --install build-windows --prefix "$PWD/dist-windows/Bootcade"
+          cd dist-windows/Bootcade
+
+          copy_deps() {
+            ldd "$1" | awk '/=> \/ucrt64\// {print $3}' | while read -r dll; do
+              [ -f "./$(basename "$dll")" ] || { cp "$dll" .; copy_deps "$dll"; }
+            done
+          }
+          copy_deps ./bootcade.exe
+          cp /ucrt64/bin/gspawn-win64-helper.exe /ucrt64/bin/gspawn-win64-helper-console.exe .
+
+          P=/ucrt64
+          mkdir -p share/glib-2.0 share/icons lib
+          cp -r $P/share/glib-2.0/schemas share/glib-2.0/
+          cp -r $P/share/icons/Adwaita share/icons/
+          cp -r $P/share/icons/hicolor share/icons/
+          cp -r $P/lib/gdk-pixbuf-2.0 lib/
+          mkdir -p lib/gio && cp -r $P/lib/gio/modules lib/gio/ 2>/dev/null || true
+          for d in lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dll lib/gio/modules/*.dll; do
+            [ -f "$d" ] && copy_deps "$d"
+          done
+          mkdir -p ssl/certs && cp $P/etc/ssl/certs/ca-bundle.crt ssl/certs/
+          mkdir -p etc && cp -r $P/etc/fonts etc/
+
+          cd ..
+          NAME="bootcade-${VERSION}-windows-x64"
+          mv Bootcade "$NAME"
+          zip -qr9 "$NAME.zip" "$NAME"
+          echo "zip=dist-windows/$NAME.zip" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME.zip" >> "$GITHUB_OUTPUT"
+
+      # SHA256SUMS de la release (AppImage, deb, tar.gz, et le Flatpak s'il a reussi) + la ligne du zip.
+      - name: Add the zip to SHA256SUMS
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ needs.version.outputs.tag }}" --repo "${{ github.repository }}" \
+            --pattern SHA256SUMS --output SHA256SUMS --clobber
+          ( cd dist-windows && sha256sum "${{ steps.zip.outputs.name }}" ) >> SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attach the zip to the release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          overwrite_files: true
+          files: |
+            ${{ steps.zip.outputs.zip }}
+            SHA256SUMS
