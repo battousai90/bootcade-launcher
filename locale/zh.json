@@ -1985,5 +1985,20 @@
   "A large, well organised collection of arcade and console sets, shared for free.": "一个大型、整理良好的街机和主机合集，免费分享。",
   "A community and download site for MAME and FinalBurn Neo sets. Downloads use your own RetroRoms account and its daily allowance.": "MAME 和 FinalBurn Neo 集合的社区与下载网站。下载使用您自己的 RetroRoms 账户及其每日额度。",
   "The Bootcade server provides the DAT files and the CRC database that tell which sets are valid.": "Bootcade 服务器提供 DAT 文件和 CRC 数据库，用来判断哪些集合有效。",
-  "Bootcade does not host any ROM. You are responsible for the use of what you download.": "Bootcade 不托管任何 ROM。您需对所下载内容的使用负责。"
+  "Bootcade does not host any ROM. You are responsible for the use of what you download.": "Bootcade 不托管任何 ROM。您需对所下载内容的使用负责。",
+  "Sensitivity": "灵敏度",
+  "How fast paddles, dials, trackballs and aiming react for this game. 100% is the emulator's own speed.": "此游戏中拨盘、旋钮、轨迹球和瞄准的反应速度。100% 即模拟器自身的速度。",
+  "Reset": "重置",
+  "Speed, centring and mode for this control": "此控制的速度、回中和模式",
+  "Not available while the stick is read directly. Open the settings and choose the wheel mode, or bind two inputs.": "摇杆被直接读取时不可用。请打开设置并选择转盘模式，或绑定两个输入。",
+  "Move a stick, or press a key or a button…": "请推动摇杆，或按下一个按键或按钮…",
+  "Use two separate inputs: one per direction (triggers, buttons, keys)": "使用两个独立输入：每个方向一个（扳机、按钮、按键）",
+  "Now the input for the other direction…": "现在请输入另一个方向…",
+  "Direct: the stick position is the control": "直接：摇杆位置即为控制值",
+  "Wheel: the stick turns it, it returns to centre": "转盘：摇杆带动它转动，并自动回到中间",
+  "Speed": "速度",
+  "Return to centre": "回中",
+  "Left: the control stays where you leave it. Right: it snaps back to centre.": "左：控制保持在松开的位置。右：立即回到中间。",
+  "Speed and return to centre apply to this control.": "速度和回中适用于此控制。",
+  "The stick is read directly: only the game's sensitivity (above) changes how it feels.": "摇杆被直接读取：只有游戏的灵敏度（上方）会改变手感。"
 }

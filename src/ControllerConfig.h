@@ -207,6 +207,12 @@ struct AnalogBinding {
     int  key_pos  = -1;      // KEY_PAIR : touche du sens positif
     std::string key_neg_name;   // releves sur le clavier du joueur, voir
     std::string key_pos_name;   // InputBinding::key_name
+    // KEY_PAIR avec des entrees de MANETTE : un bouton ou la moitie d'un axe
+    // (une gachette) par sens. Quand l'un est valide, il prend la place de la
+    // touche du meme sens. Le numero de manette n'est connu qu'au moment
+    // d'ecrire le .ini, d'ou une liaison et non un code.
+    InputBinding pad_neg;
+    InputBinding pad_pos;
     bool invert   = false;
     // FBNeo drives an analog input in one of two ways, and the right one
     // depends on the control being emulated:
@@ -217,7 +223,8 @@ struct AnalogBinding {
     int  speed    = 0x800;   // relative only: how fast the axis moves it
     int  center   = 10;      // relative only: how fast it recentres
     bool is_set() const {
-        if (source == AnalogSource::KEY_PAIR) return key_neg >= 0 && key_pos >= 0;
+        if (source == AnalogSource::KEY_PAIR)
+            return (key_neg >= 0 || pad_neg.valid) && (key_pos >= 0 || pad_pos.valid);
         return source != AnalogSource::NONE && index >= 0;
     }
 };
@@ -321,6 +328,14 @@ inline const std::vector<ControllerPreset>& controller_presets() {
     return presets;
 }
 
+// Les deux axes ou le prereglage range le chapeau directionnel. Sans
+// prereglage connu, ceux de presque toutes les manettes : 6 et 7.
+inline void preset_hat_axes(const std::string& name, int& axis_x, int& axis_y) {
+    axis_x = 6; axis_y = 7;
+    for (const auto& p : controller_presets())
+        if (name == p.name) { axis_x = p.axis_x; axis_y = p.axis_y; return; }
+}
+
 // Le chapeau directionnel, identique sur les quatre manettes : deux axes.
 inline InputBinding preset_direction(GameAction action, int axis_x = 6, int axis_y = 7) {
     InputBinding b;
@@ -409,5 +424,12 @@ inline void apply_preset(PlayerConfig& player, const ControllerPreset& preset) {
 // ── Full controller configuration (2 players) ─────────────────────────────
 struct ControllerConfig {
     std::vector<PlayerConfig> players;
+    // Sensibilite des commandes analogiques, en pourcent (100 = celle de
+    // l'emulateur). Le .ini d'un jeu n'en porte qu'une, pour tout le jeu.
+    // 0 = jamais reglee : on ne touche pas a ce que l'emulateur a ecrit.
+    int analog_percent = 0;
     ControllerConfig() { players.resize(2); }
 };
+
+constexpr int ANALOG_PERCENT_MIN = 10;
+constexpr int ANALOG_PERCENT_MAX = 400;

@@ -1985,5 +1985,20 @@
   "A large, well organised collection of arcade and console sets, shared for free.": "คอลเลกชันชุดอาร์เคดและคอนโซลขนาดใหญ่ที่จัดระเบียบดี แบ่งปันฟรี",
   "A community and download site for MAME and FinalBurn Neo sets. Downloads use your own RetroRoms account and its daily allowance.": "เว็บไซต์ชุมชนและดาวน์โหลดชุด MAME และ FinalBurn Neo การดาวน์โหลดใช้บัญชี RetroRoms ของคุณเองและโควต้ารายวัน",
   "The Bootcade server provides the DAT files and the CRC database that tell which sets are valid.": "เซิร์ฟเวอร์ Bootcade ให้ไฟล์ DAT และฐานข้อมูล CRC ที่บอกว่าชุดใดถูกต้อง",
-  "Bootcade does not host any ROM. You are responsible for the use of what you download.": "Bootcade ไม่ได้โฮสต์ ROM ใด ๆ คุณต้องรับผิดชอบต่อการใช้สิ่งที่ดาวน์โหลด"
+  "Bootcade does not host any ROM. You are responsible for the use of what you download.": "Bootcade ไม่ได้โฮสต์ ROM ใด ๆ คุณต้องรับผิดชอบต่อการใช้สิ่งที่ดาวน์โหลด",
+  "Sensitivity": "ความไว",
+  "How fast paddles, dials, trackballs and aiming react for this game. 100% is the emulator's own speed.": "ความเร็วในการตอบสนองของแพดเดิล ลูกบิด แทร็กบอล และการเล็งในเกมนี้ 100% คือความเร็วของอีมูเลเตอร์",
+  "Reset": "รีเซ็ต",
+  "Speed, centring and mode for this control": "ความเร็ว การกลับสู่ตรงกลาง และโหมดของตัวควบคุมนี้",
+  "Not available while the stick is read directly. Open the settings and choose the wheel mode, or bind two inputs.": "ใช้ไม่ได้ขณะที่อ่านค่าสติ๊กโดยตรง เปิดการตั้งค่าแล้วเลือกโหมดพวงมาลัย หรือกำหนดอินพุตสองตัว",
+  "Move a stick, or press a key or a button…": "ขยับสติ๊ก หรือกดปุ่มบนแป้นพิมพ์หรือบนจอย…",
+  "Use two separate inputs: one per direction (triggers, buttons, keys)": "ใช้อินพุตแยกสองตัว: หนึ่งตัวต่อหนึ่งทิศทาง (ทริกเกอร์ ปุ่ม แป้น)",
+  "Now the input for the other direction…": "ตอนนี้อินพุตของอีกทิศทางหนึ่ง…",
+  "Direct: the stick position is the control": "โดยตรง: ตำแหน่งของสติ๊กคือค่าควบคุม",
+  "Wheel: the stick turns it, it returns to centre": "พวงมาลัย: สติ๊กหมุนมัน แล้วมันกลับสู่ตรงกลาง",
+  "Speed": "ความเร็ว",
+  "Return to centre": "การกลับสู่ตรงกลาง",
+  "Left: the control stays where you leave it. Right: it snaps back to centre.": "ซ้าย: ตัวควบคุมค้างอยู่ตรงที่ปล่อย ขวา: กลับสู่ตรงกลางทันที",
+  "Speed and return to centre apply to this control.": "ความเร็วและการกลับสู่ตรงกลางใช้กับตัวควบคุมนี้",
+  "The stick is read directly: only the game's sensitivity (above) changes how it feels.": "สติ๊กถูกอ่านโดยตรง: มีเพียงความไวของเกม (ด้านบน) ที่เปลี่ยนความรู้สึก"
 }

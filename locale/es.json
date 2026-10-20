@@ -1985,5 +1985,20 @@
   "A large, well organised collection of arcade and console sets, shared for free.": "Una gran colección bien organizada de sets de arcade y consolas, compartida gratuitamente.",
   "A community and download site for MAME and FinalBurn Neo sets. Downloads use your own RetroRoms account and its daily allowance.": "Un sitio comunitario y de descargas de sets de MAME y FinalBurn Neo. Las descargas usan su propia cuenta de RetroRoms y su cupo diario.",
   "The Bootcade server provides the DAT files and the CRC database that tell which sets are valid.": "El servidor de Bootcade proporciona los archivos DAT y la base de datos de CRC que indican qué sets son válidos.",
-  "Bootcade does not host any ROM. You are responsible for the use of what you download.": "Bootcade no aloja ninguna ROM. Usted es responsable del uso de lo que descargue."
+  "Bootcade does not host any ROM. You are responsible for the use of what you download.": "Bootcade no aloja ninguna ROM. Usted es responsable del uso de lo que descargue.",
+  "Sensitivity": "Sensibilidad",
+  "How fast paddles, dials, trackballs and aiming react for this game. 100% is the emulator's own speed.": "Rapidez de reacción de las palas, ruedas, trackballs y la puntería en este juego. 100 % es la velocidad del emulador.",
+  "Reset": "Restablecer",
+  "Speed, centring and mode for this control": "Velocidad, retorno al centro y modo de este control",
+  "Not available while the stick is read directly. Open the settings and choose the wheel mode, or bind two inputs.": "No disponible mientras el stick se lee directamente. Abra los ajustes y elija el modo rueda, o asigne dos entradas.",
+  "Move a stick, or press a key or a button…": "Mueva un stick o pulse una tecla o un botón…",
+  "Use two separate inputs: one per direction (triggers, buttons, keys)": "Usar dos entradas separadas: una por sentido (gatillos, botones, teclas)",
+  "Now the input for the other direction…": "Ahora la entrada del otro sentido…",
+  "Direct: the stick position is the control": "Directo: la posición del stick es el control",
+  "Wheel: the stick turns it, it returns to centre": "Rueda: el stick la gira y vuelve al centro",
+  "Speed": "Velocidad",
+  "Return to centre": "Retorno al centro",
+  "Left: the control stays where you leave it. Right: it snaps back to centre.": "Izquierda: el control se queda donde lo deja. Derecha: vuelve de inmediato al centro.",
+  "Speed and return to centre apply to this control.": "La velocidad y el retorno al centro se aplican a este control.",
+  "The stick is read directly: only the game's sensitivity (above) changes how it feels.": "El stick se lee directamente: solo la sensibilidad del juego (arriba) cambia cómo responde."
 }

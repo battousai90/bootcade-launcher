@@ -1985,5 +1985,20 @@
   "A large, well organised collection of arcade and console sets, shared for free.": "Une grande collection bien organisée de sets d'arcade et de consoles, partagée gratuitement.",
   "A community and download site for MAME and FinalBurn Neo sets. Downloads use your own RetroRoms account and its daily allowance.": "Un site communautaire de téléchargement de sets MAME et FinalBurn Neo. Les téléchargements utilisent votre propre compte RetroRoms et son quota quotidien.",
   "The Bootcade server provides the DAT files and the CRC database that tell which sets are valid.": "Le serveur Bootcade fournit les fichiers DAT et la base de CRC qui indiquent quels sets sont valides.",
-  "Bootcade does not host any ROM. You are responsible for the use of what you download.": "Bootcade n'héberge aucune ROM. Vous êtes responsable de l'usage de ce que vous téléchargez."
+  "Bootcade does not host any ROM. You are responsible for the use of what you download.": "Bootcade n'héberge aucune ROM. Vous êtes responsable de l'usage de ce que vous téléchargez.",
+  "Sensitivity": "Sensibilité",
+  "How fast paddles, dials, trackballs and aiming react for this game. 100% is the emulator's own speed.": "Vitesse de réaction des palettes, molettes, trackballs et de la visée pour ce jeu. 100 % est la vitesse de l'émulateur.",
+  "Reset": "Réinitialiser",
+  "Speed, centring and mode for this control": "Vitesse, retour au centre et mode de cette commande",
+  "Not available while the stick is read directly. Open the settings and choose the wheel mode, or bind two inputs.": "Indisponible tant que le stick est lu directement. Ouvrez les réglages et choisissez le mode molette, ou liez deux entrées.",
+  "Move a stick, or press a key or a button…": "Bougez un stick, ou appuyez sur une touche ou un bouton…",
+  "Use two separate inputs: one per direction (triggers, buttons, keys)": "Utiliser deux entrées séparées : une par sens (gâchettes, boutons, touches)",
+  "Now the input for the other direction…": "Maintenant l'entrée de l'autre sens…",
+  "Direct: the stick position is the control": "Direct : la position du stick est la commande",
+  "Wheel: the stick turns it, it returns to centre": "Molette : le stick la fait tourner, elle revient au centre",
+  "Speed": "Vitesse",
+  "Return to centre": "Retour au centre",
+  "Left: the control stays where you leave it. Right: it snaps back to centre.": "Gauche : la commande reste où vous la laissez. Droite : elle revient aussitôt au centre.",
+  "Speed and return to centre apply to this control.": "La vitesse et le retour au centre s'appliquent à cette commande.",
+  "The stick is read directly: only the game's sensitivity (above) changes how it feels.": "Le stick est lu directement : seule la sensibilité du jeu (ci-dessus) change son comportement."
 }

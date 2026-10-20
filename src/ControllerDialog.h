@@ -191,10 +191,18 @@ private:
     struct AnalogWidgets {
         Gtk::Button*      bind   = nullptr;
         Gtk::CheckButton* invert = nullptr;
+        Gtk::Button*      tune   = nullptr;    // vitesse, retour au centre, mode
         AnalogBinding     value;               // ce qui est lie aujourd'hui
     };
     AnalogWidgets m_analog_widgets[2][ANALOG_ROLE_COUNT];
     bool          m_analog_loading = false;    // suppresses signals while filling
+    // Sensibilite de tout le jeu : une seule valeur dans le .ini, mais un
+    // curseur par onglet joueur, tenus ensemble.
+    Gtk::Scale*   m_sens_scale[2]{};
+    Gtk::Label*   m_sens_value[2]{};
+    void          sensitivity_changed(int from_player);
+    void          tune_analog(int player, AnalogRole role);
+    void          refresh_analog_row(int player, int role);
     // Built inside each player tab, not as a page of its own: these controls
     // belong to a player exactly like their buttons do, and a separate tab
     // duplicated the Player 1 / Player 2 split that already existed.
