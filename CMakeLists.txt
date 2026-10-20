@@ -281,7 +281,7 @@ set_target_properties(bootcade PROPERTIES
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Windows (MSYS2 / mingw-w64). Build a part : se configure dans un shell MSYS2
-# MINGW64, voir .github/workflows/windows.yml. Le chemin Linux n'est pas touche.
+# UCRT64, voir .github/workflows/windows.yml. Le chemin Linux n'est pas touche.
 #
 # Pas de console par defaut (sous-systeme fenetre) : stderr va deja dans
 # debug.log du dossier de configuration. BOOTCADE_WIN_CONSOLE=ON la rend, pour
