@@ -158,10 +158,12 @@ static PadFamily pad_family_for(const std::string& raw) {
 static std::string analog_label(const AnalogBinding& b) {
     if (!b.is_set()) return _("Not used");
     if (b.source == AnalogSource::KEY_PAIR) {
-        auto shown = [](int code, const std::string& name) {
+        auto shown = [](int code, const std::string& name, const InputBinding& pad) {
+            if (pad.valid) return pad.label();
             return name.empty() ? key_label(code) : name;
         };
-        return shown(b.key_neg, b.key_neg_name) + " / " + shown(b.key_pos, b.key_pos_name);
+        return shown(b.key_neg, b.key_neg_name, b.pad_neg) + " / "
+             + shown(b.key_pos, b.key_pos_name, b.pad_pos);
     }
     return Glib::ustring::compose(_("Axis %1"), b.index).raw();
 }
@@ -1474,12 +1476,12 @@ Gtk::Widget* ControllerDialog::build_analog_section(int p) {
     // Volant et accelerateur a gauche, frein et visee a droite, comme la
     // maquette. La coupure se fait apres la deuxieme ligne.
     const int split = 2;
-    const int kColStride = 5;   // 4 colonnes utiles plus le separateur
+    const int kColStride = 6;   // 5 colonnes utiles plus le separateur
 
     auto* sep = Gtk::make_managed<Gtk::Separator>(Gtk::ORIENTATION_VERTICAL);
     sep->set_margin_start(10);
     sep->set_margin_end(10);
-    grid->attach(*sep, 4, 0, 1, 3);
+    grid->attach(*sep, 5, 0, 1, 3);
 
     for (int r = 0; r < ANALOG_ROLE_COUNT; ++r) {
         auto role = static_cast<AnalogRole>(r);
@@ -1514,8 +1516,81 @@ Gtk::Widget* ControllerDialog::build_analog_section(int p) {
         w.invert->signal_toggled().connect(
             [this] { if (!m_analog_loading) analog_config_from_ui(); });
         grid->attach(*w.invert, col + 3, row, 1, 1);
+
+        // Vitesse, retour au centre et mode : ce qui ne se devine pas en
+        // bougeant un stick, rangé derriere un bouton plutot que sur chaque ligne.
+        w.tune = Gtk::make_managed<Gtk::Button>();
+        w.tune->set_image(*SettingsUi::image("bc-sliders.svg", 16));
+        w.tune->set_valign(Gtk::ALIGN_CENTER);
+        w.tune->set_tooltip_text(_("Speed, centring and mode for this control"));
+        w.tune->signal_clicked().connect(
+            [this, p, role]() { tune_analog(p, role); });
+        grid->attach(*w.tune, col + 4, row, 1, 1);
     }
-    return grid;
+
+    /* La sensibilite est une valeur de JEU, pas de commande : le .ini n'en
+     * porte qu'une, qui multiplie la vitesse de tout ce qui est relatif. C'est
+     * le reglage qui rend une palette ou un trackball jouables a la manette,
+     * ou un stick, a pleine course, va bien plus vite qu'un vrai spinner. */
+    auto* sens_row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+    sens_row->set_margin_top(14);
+    sens_row->set_margin_start(4);
+    auto* sens_name = Gtk::make_managed<Gtk::Label>(_("Sensitivity"));
+    sens_name->set_xalign(0.0f);
+    sens_name->set_tooltip_text(_("How fast paddles, dials, trackballs and aiming react "
+                                  "for this game. 100% is the emulator's own speed."));
+    m_sens_scale[p] = Gtk::make_managed<Gtk::Scale>(Gtk::ORIENTATION_HORIZONTAL);
+    m_sens_scale[p]->set_range(ANALOG_PERCENT_MIN, ANALOG_PERCENT_MAX);
+    m_sens_scale[p]->set_increments(5, 25);
+    m_sens_scale[p]->set_digits(0);
+    m_sens_scale[p]->set_draw_value(false);
+    m_sens_scale[p]->set_value(100);
+    m_sens_scale[p]->set_size_request(260, -1);
+    m_sens_scale[p]->add_mark(100, Gtk::POS_BOTTOM, "");
+    m_sens_value[p] = Gtk::make_managed<Gtk::Label>("100%");
+    m_sens_value[p]->set_width_chars(5);
+    m_sens_value[p]->set_xalign(1.0f);
+    m_sens_scale[p]->signal_value_changed().connect(
+        [this, p] { if (!m_analog_loading) sensitivity_changed(p); });
+    auto* sens_reset = Gtk::make_managed<Gtk::Button>(_("Reset"));
+    sens_reset->signal_clicked().connect(
+        [this, p] { m_sens_scale[p]->set_value(100); });
+    sens_row->pack_start(*sens_name, Gtk::PACK_SHRINK);
+    sens_row->pack_start(*m_sens_scale[p], Gtk::PACK_SHRINK);
+    sens_row->pack_start(*m_sens_value[p], Gtk::PACK_SHRINK);
+    sens_row->pack_start(*sens_reset, Gtk::PACK_SHRINK);
+
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
+    box->pack_start(*sens_row, Gtk::PACK_SHRINK);
+    box->pack_start(*grid, Gtk::PACK_SHRINK);
+    return box;
+}
+
+void ControllerDialog::sensitivity_changed(int from_player) {
+    const int percent = (int)std::lround(m_sens_scale[from_player]->get_value());
+    m_config.analog_percent = percent;
+    m_analog_loading = true;                       // l'autre onglet suit sans rebondir
+    for (int q = 0; q < 2; ++q) {
+        if (!m_sens_scale[q]) continue;
+        m_sens_scale[q]->set_value(percent);
+        m_sens_value[q]->set_text(std::to_string(percent) + "%");
+    }
+    m_analog_loading = false;
+}
+
+// Griser ce qui n'a pas d'effet pour la liaison de cette ligne. Un stick lu
+// tel quel (`joyaxis`) n'a ni sens a retourner ni vitesse : le .ini ne sait
+// que transmettre sa position. L'inversion passe par le mode « molette ».
+void ControllerDialog::refresh_analog_row(int p, int r) {
+    auto& w = m_analog_widgets[p][r];
+    if (!w.bind) return;
+    const bool direct = w.value.source == AnalogSource::JOY_AXIS && !w.value.relative;
+    w.invert->set_sensitive(w.value.is_set() && !direct);
+    w.invert->set_tooltip_text(direct
+        ? _("Not available while the stick is read directly. Open the settings "
+            "and choose the wheel mode, or bind two inputs.")
+        : _("Tick this if the control goes the wrong way."));
+    w.tune->set_sensitive(w.value.is_set() && w.value.source != AnalogSource::MOUSE_AXIS);
 }
 
 void ControllerDialog::analog_ui_from_config() {
@@ -1534,20 +1609,26 @@ void ControllerDialog::analog_ui_from_config() {
             w.value = b;
             w.bind->set_label(analog_label(b));
             w.invert->set_active(b.invert);
+            refresh_analog_row(p, r);
+        }
+        if (m_sens_scale[p]) {
+            const int percent = m_config.analog_percent > 0 ? m_config.analog_percent : 100;
+            m_sens_scale[p]->set_value(percent);
+            m_sens_value[p]->set_text(std::to_string(percent) + "%");
         }
     }
     m_analog_loading = false;
 }
 
-// Demande les deux touches d'un axe, l'une apres l'autre. Deux captures
-// separees plutot qu'une saisie libre : le joueur appuie sur la touche qu'il
-// veut vraiment, et on enregistre le code que l'emulateur attend sans lui
-// demander de le connaitre.
-
 // Lie une commande analogique en la faisant bouger, comme on lie un bouton en
-// appuyant dessus. Un axe de manette suffit ; au clavier il en faut deux, une
-// touche par sens, et l'axe doit revenir au centre quand on relache, ce que le
-// code choisit tout seul plutot que de le demander.
+// appuyant dessus. Un axe de manette suffit ; sinon il en faut deux, une
+// entree par sens (touches, boutons, ou gachettes), et l'axe doit revenir au
+// centre quand on relache, ce que le code choisit tout seul plutot que de le
+// demander.
+//
+// Une gachette et un stick sont tous deux des axes pour le pilote : rien ne les
+// distingue au moment de la capture. D'ou la case « deux entrees », qui dit si
+// un axe se lie en entier ou comme une moitie.
 void ControllerDialog::capture_analog(int player, AnalogRole role) {
     stop_binding();
     auto& w = m_analog_widgets[player][(int)role];
@@ -1561,56 +1642,90 @@ void ControllerDialog::capture_analog(int player, AnalogRole role) {
 
     Gtk::Dialog dlg(_(analog_role_name(role)), *this,
                     Gtk::DIALOG_MODAL | Gtk::DIALOG_DESTROY_WITH_PARENT);
-    dlg.set_default_size(380, 150);
+    dlg.set_default_size(420, 190);
     dlg.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
 
     auto* info = Gtk::make_managed<Gtk::Label>();
-    info->set_markup("<b>" + Glib::Markup::escape_text(
-        _("Move a stick or a trigger, or press a key…")) + "</b>");
+    const auto say = [info](const std::string& text) {
+        info->set_markup("<b>" + Glib::Markup::escape_text(text) + "</b>");
+    };
+    say(_("Move a stick, or press a key or a button…"));
     info->set_line_wrap(true);
     info->set_margin_top(20);
     info->set_margin_bottom(10);
     dlg.get_content_area()->add(*info);
+
+    auto* two = Gtk::make_managed<Gtk::CheckButton>(
+        _("Use two separate inputs: one per direction (triggers, buttons, keys)"));
+    two->set_margin_start(16);
+    two->set_margin_end(16);
+    two->set_margin_bottom(10);
+    dlg.get_content_area()->add(*two);
+
     dlg.add_button(_("Not used"), Gtk::RESPONSE_REJECT);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.show_all_children();
 
     AnalogBinding captured;
-    int first_key = -1;
-    std::string first_name;
+
+    // Un sens de la paire : une touche, ou une entree de manette.
+    struct Side {
+        bool        have = false;
+        int         key = -1;
+        std::string key_name;
+        InputBinding pad;
+        bool same(const Side& o) const {
+            if (pad.valid != o.pad.valid) return false;
+            if (!pad.valid) return key == o.key;
+            return pad.is_axis == o.pad.is_axis && pad.axis == o.pad.axis
+                && pad.axis_dir == o.pad.axis_dir && pad.button == o.pad.button;
+        }
+    };
+    Side first;
+
+    const auto add_side = [&](const Side& side) {
+        if (!first.have) {
+            first = side;
+            first.have = true;
+            say(_("Now the input for the other direction…"));
+            return;
+        }
+        if (first.same(side)) return;
+        captured.source   = AnalogSource::KEY_PAIR;
+        captured.relative = true;          // une entree ne tient pas une position
+        captured.key_neg  = first.key;  captured.key_neg_name = first.key_name;
+        captured.pad_neg  = first.pad;
+        captured.key_pos  = side.key;   captured.key_pos_name = side.key_name;
+        captured.pad_pos  = side.pad;
+        dlg.response(Gtk::RESPONSE_OK);
+    };
 
     dlg.signal_key_press_event().connect(
         [&](GdkEventKey* ev) -> bool {
             if (ev->keyval == GDK_KEY_Escape) return false;
             const int code = ControllerManager::fbneo_key_from_gtk(ev->hardware_keycode);
-            if (code < 0 || code == first_key) return true;
-            if (first_key < 0) {
-                first_key  = code;
-                first_name = key_name_from_event(ev);
-                info->set_markup("<b>" + Glib::Markup::escape_text(
-                    _("Now the key for the other direction…")) + "</b>");
-                return true;
-            }
-            captured.source   = AnalogSource::KEY_PAIR;
-            captured.relative = true;          // le clavier ne tient pas une position
-            captured.key_neg  = first_key;
-            captured.key_neg_name = first_name;
-            captured.key_pos  = code;
-            captured.key_pos_name = key_name_from_event(ev);
-            dlg.response(Gtk::RESPONSE_OK);
+            if (code < 0) return true;
+            Side side;
+            side.key = code;
+            side.key_name = key_name_from_event(ev);
+            add_side(side);
             return true;
         }, false);
 
     m_poll_conn = Glib::signal_timeout().connect([&]() -> bool {
         if (m_bind_fd < 0) return true;
         InputBinding event;
-        if (ControllerManager::poll_event(m_bind_fd, event) && event.is_axis) {
+        if (!ControllerManager::poll_event(m_bind_fd, event)) return true;
+        if (event.is_axis && !two->get_active() && !first.have) {
             captured.source   = AnalogSource::JOY_AXIS;
             captured.index    = event.axis;
             captured.relative = false;         // la position du stick EST celle du volant
             dlg.response(Gtk::RESPONSE_OK);
             return false;
         }
+        Side side;
+        side.pad = event;
+        add_side(side);
         return true;
     }, 50);
 
@@ -1620,10 +1735,134 @@ void ControllerDialog::capture_analog(int player, AnalogRole role) {
     if (answer == Gtk::RESPONSE_REJECT) captured = AnalogBinding{};
     else if (answer != Gtk::RESPONSE_OK || !captured.is_set()) return;
 
-    captured.invert = w.invert->get_active();
+    // Les reglages deja faits sur cette commande survivent a une nouvelle
+    // liaison : seul ce a quoi elle est liee change.
+    if (captured.is_set() && w.value.is_set()) {
+        captured.speed  = w.value.speed;
+        captured.center = w.value.center;
+    }
+    captured.invert = w.invert->get_active() && captured.source != AnalogSource::JOY_AXIS;
     w.value = captured;
+    w.invert->set_active(captured.invert);
     w.bind->set_label(analog_label(captured));
     analog_config_from_ui();
+    refresh_analog_row(player, (int)role);
+}
+
+/* Les reglages d'une commande qui ne se devinent pas en la bougeant.
+ *
+ * Le mode ne concerne qu'un axe de manette : lu tel quel, la position du stick
+ * est celle de la commande, ce qui convient a un volant et mal a une palette ;
+ * en « molette », le stick la fait tourner et elle revient au centre. Une
+ * paire d'entrees est toujours une molette. */
+void ControllerDialog::tune_analog(int player, AnalogRole role) {
+    auto& w = m_analog_widgets[player][(int)role];
+    if (!w.value.is_set()) return;
+
+    Gtk::Dialog dlg(_(analog_role_name(role)), *this,
+                    Gtk::DIALOG_MODAL | Gtk::DIALOG_DESTROY_WITH_PARENT);
+    dlg.set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
+    dlg.set_default_size(440, -1);
+
+    auto* grid = Gtk::make_managed<Gtk::Grid>();
+    grid->set_row_spacing(12);
+    grid->set_column_spacing(12);
+    grid->set_margin_top(16);
+    grid->set_margin_bottom(8);
+    grid->set_margin_start(16);
+    grid->set_margin_end(16);
+    dlg.get_content_area()->add(*grid);
+
+    AnalogBinding b = w.value;
+    int row = 0;
+
+    Gtk::ComboBoxText* mode = nullptr;
+    if (b.source == AnalogSource::JOY_AXIS) {
+        auto* name = Gtk::make_managed<Gtk::Label>(_("Mode"));
+        name->set_xalign(0.0f);
+        mode = Gtk::make_managed<Gtk::ComboBoxText>();
+        mode->append("direct", _("Direct: the stick position is the control"));
+        mode->append("wheel",  _("Wheel: the stick turns it, it returns to centre"));
+        mode->set_active_id(b.relative ? "wheel" : "direct");
+        mode->set_hexpand(true);
+        grid->attach(*name, 0, row, 1, 1);
+        grid->attach(*mode, 1, row, 1, 1);
+        ++row;
+    }
+
+    // Vitesse : 0x100 est un tour de roue par seconde environ a pleine
+    // deviation ; on propose de 25% a 400% de la valeur d'origine (0x800).
+    auto* speed_name = Gtk::make_managed<Gtk::Label>(_("Speed"));
+    speed_name->set_xalign(0.0f);
+    auto* speed = Gtk::make_managed<Gtk::Scale>(Gtk::ORIENTATION_HORIZONTAL);
+    speed->set_range(25, 400);
+    speed->set_increments(5, 25);
+    speed->set_digits(0);
+    speed->set_value(std::clamp(b.speed * 100 / 0x800, 25, 400));
+    speed->set_hexpand(true);
+    speed->set_value_pos(Gtk::POS_RIGHT);
+    speed->signal_format_value().connect([](double v) {
+        return Glib::ustring(std::to_string((int)std::lround(v)) + "%");
+    });
+    speed->add_mark(100, Gtk::POS_BOTTOM, "");
+    grid->attach(*speed_name, 0, row, 1, 1);
+    grid->attach(*speed, 1, row, 1, 1);
+    ++row;
+
+    // Retour au centre : 1 est immediat, plus la valeur est grande, plus il
+    // est lent. On l'affiche dans le sens que le joueur attend, du lent au vif.
+    auto* center_name = Gtk::make_managed<Gtk::Label>(_("Return to centre"));
+    center_name->set_xalign(0.0f);
+    auto* center = Gtk::make_managed<Gtk::Scale>(Gtk::ORIENTATION_HORIZONTAL);
+    center->set_range(0, 30);
+    center->set_increments(1, 5);
+    center->set_digits(0);
+    center->set_value(b.center <= 0 ? 0 : std::clamp(31 - b.center, 1, 30));   // 30 = immediat, 0 = reste
+    center->set_hexpand(true);
+    center->set_draw_value(false);
+    center->set_tooltip_text(_("Left: the control stays where you leave it. "
+                               "Right: it snaps back to centre."));
+    grid->attach(*center_name, 0, row, 1, 1);
+    grid->attach(*center, 1, row, 1, 1);
+    ++row;
+
+    auto* note = Gtk::make_managed<Gtk::Label>();
+    note->set_line_wrap(true);
+    note->set_xalign(0.0f);
+    note->get_style_context()->add_class("cc-sub");
+    grid->attach(*note, 0, row, 2, 1);
+
+    // Vitesse et retour n'existent qu'en molette ou en paire d'entrees.
+    const auto sync = [&] {
+        const bool wheel = b.source == AnalogSource::KEY_PAIR
+                        || (mode && mode->get_active_id() == "wheel");
+        speed->set_sensitive(wheel);
+        center->set_sensitive(wheel);
+        note->set_text(wheel
+            ? Glib::ustring(_("Speed and return to centre apply to this control."))
+            : Glib::ustring(_("The stick is read directly: only the game's sensitivity "
+                              "(above) changes how it feels.")));
+    };
+    if (mode) mode->signal_changed().connect(sync);
+    sync();
+
+    dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+    dlg.add_button(_("OK"), Gtk::RESPONSE_OK);
+    dlg.set_default_response(Gtk::RESPONSE_OK);
+    dlg.show_all_children();
+    if (dlg.run() != Gtk::RESPONSE_OK) return;
+
+    if (mode) b.relative = mode->get_active_id() == "wheel";
+    b.speed  = std::max(1, (int)std::lround(speed->get_value() * 0x800 / 100.0));
+    const int back = (int)std::lround(center->get_value());
+    b.center = back <= 0 ? 0 : 31 - back;                     // 0 : ne revient pas
+    if (b.source == AnalogSource::JOY_AXIS && !b.relative) b.invert = false;
+    w.value = b;
+    m_analog_loading = true;
+    w.invert->set_active(b.invert);
+    m_analog_loading = false;
+    analog_config_from_ui();
+    refresh_analog_row(player, (int)role);
 }
 
 void ControllerDialog::analog_config_from_ui() {

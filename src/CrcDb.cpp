@@ -96,8 +96,13 @@ bool Db::load(const std::string& file, std::string* error) {
             if (it->contains("c"))
                 for (const auto& c : (*it)["c"]) e.crcs.push_back(std::stoul(c.get<std::string>(), nullptr, 16));
             std::sort(e.crcs.begin(), e.crcs.end());
+            if (it->contains("z") && (*it)["z"].is_number_unsigned()) e.bytes = (*it)["z"].get<unsigned long long>();
             m_entries.emplace(it.key(), std::move(e));
         }
+        if (j.contains("chds") && j["chds"].is_object())
+            for (auto it = j["chds"].begin(); it != j["chds"].end(); ++it)
+                if (it->contains("z") && (*it)["z"].is_number_unsigned())
+                    m_chd_bytes[it.key()] = (*it)["z"].get<unsigned long long>();
     } catch (const std::exception& ex) {
         if (error) *error = std::string("crcdb : ") + ex.what();
         return false;
@@ -117,6 +122,16 @@ Verdict Db::check(const std::string& key, const std::vector<unsigned long>& crcs
         if (std::binary_search(it->second.crcs.begin(), it->second.crcs.end(), c)) ++found;
     if (have) *have = found;
     return found == (int)crcs.size() ? Verdict::Match : Verdict::Mismatch;
+}
+
+unsigned long long Db::bytes_of(const std::string& key) const {
+    auto it = m_entries.find(key);
+    return it == m_entries.end() ? 0 : it->second.bytes;
+}
+
+unsigned long long Db::chd_bytes(const std::string& name) const {
+    auto it = m_chd_bytes.find(name);
+    return it == m_chd_bytes.end() ? 0 : it->second;
 }
 
 std::string file_for(const std::string& source_kind, const std::string& emulator) {

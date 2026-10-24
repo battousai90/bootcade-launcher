@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <map>
 #include <set>
+#include <array>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -270,12 +271,26 @@ bool ControllerManager::poll_event(int fd, InputBinding& result) {
 
 bool ControllerManager::poll_raw(int fd, RawInput& out) { return win_next_event(fd, out); }
 #else
+namespace {
+// Position de repos de chaque axe, relevee sur les evenements d'etat initial
+// que le pilote envoie a l'ouverture. Une gachette repose a -32767 : sans
+// cette valeur, le premier evenement d'un appui (-30000, -20000...) etait pris
+// pour un mouvement vers le NEGATIF, et la gachette se liait « Axis N - »,
+// c'est-a-dire toujours enfoncee dans le jeu.
+std::map<int, std::array<int, 64>>& axis_rest_table() {
+    static std::map<int, std::array<int, 64>> table;
+    return table;
+}
+}  // namespace
+
 int ControllerManager::open_device(const std::string& path) {
-    return open(path.c_str(), O_RDONLY | O_NONBLOCK);
+    const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK);
+    if (fd >= 0) axis_rest_table().erase(fd);
+    return fd;
 }
 
 void ControllerManager::close_device(int fd) {
-    if (fd >= 0) close(fd);
+    if (fd >= 0) { axis_rest_table().erase(fd); close(fd); }
 }
 
 bool ControllerManager::poll_event(int fd, InputBinding& result) {
@@ -284,14 +299,24 @@ bool ControllerManager::poll_event(int fd, InputBinding& result) {
     struct js_event ev;
     while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
         const uint8_t type = ev.type & ~JS_EVENT_INIT;
+        if (type == JS_EVENT_AXIS && ev.number < 64) {
+            auto& rest = axis_rest_table()[fd];
+            if (ev.type & JS_EVENT_INIT) { rest[ev.number] = ev.value; continue; }
+        }
         if (type == JS_EVENT_BUTTON && ev.value == 1) {
             result = { true, InputSource::PAD, false, (int)ev.number, -1, 0, -1 };
             return true;
         }
-        if (type == JS_EVENT_AXIS && std::abs(ev.value) > 16000) {
-            result = { true, InputSource::PAD, true, -1, (int)ev.number,
-                       ev.value > 0 ? 1 : -1, -1 };
-            return true;
+        if (type == JS_EVENT_AXIS) {
+            const int rest = ev.number < 64 ? axis_rest_table()[fd][ev.number] : 0;
+            int dir = 0;
+            if (rest <= -16000)      { if (ev.value - rest > 24000) dir = 1;  }   // gachette
+            else if (rest >= 16000)  { if (rest - ev.value > 24000) dir = -1; }
+            else if (std::abs(ev.value) > 16000) dir = ev.value > 0 ? 1 : -1;
+            if (dir != 0) {
+                result = { true, InputSource::PAD, true, -1, (int)ev.number, dir, -1 };
+                return true;
+            }
         }
     }
     return false;
@@ -331,6 +356,27 @@ static GameAction action_from_key(const std::string& k) {
 
 // ── JSON serialization helpers ────────────────────────────────────────────
 
+// Une entree de manette (bouton ou moitie d'axe) d'une paire analogique.
+static json pad_input_to_json(const InputBinding& b) {
+    json j;
+    j["is_axis"] = b.is_axis;
+    if (b.is_axis) { j["axis"] = b.axis; j["dir"] = b.axis_dir; }
+    else           { j["button"] = b.button; }
+    return j;
+}
+
+static InputBinding pad_input_from_json(const json& j) {
+    InputBinding b;
+    if (!j.is_object()) return b;
+    b.source   = InputSource::PAD;
+    b.is_axis  = j.value("is_axis", false);
+    b.button   = j.value("button",  -1);
+    b.axis     = j.value("axis",    -1);
+    b.axis_dir = j.value("dir",      0);
+    b.valid    = b.is_axis ? (b.axis >= 0 && b.axis_dir != 0) : b.button >= 0;
+    return b;
+}
+
 static json config_to_json(const ControllerConfig& cfg) {
     json jctrl = json::array();
     for (const auto& player : cfg.players) {
@@ -369,6 +415,8 @@ static json config_to_json(const ControllerConfig& cfg) {
             jv["key_pos"]      = b.key_pos;
             jv["key_neg_name"] = b.key_neg_name;
             jv["key_pos_name"] = b.key_pos_name;
+            if (b.pad_neg.valid) jv["pad_neg"] = pad_input_to_json(b.pad_neg);
+            if (b.pad_pos.valid) jv["pad_pos"] = pad_input_to_json(b.pad_pos);
             jv["index"]    = b.index;
             jv["invert"]   = b.invert;
             jv["relative"] = b.relative;
@@ -377,6 +425,8 @@ static json config_to_json(const ControllerConfig& cfg) {
             ja[analog_role_key(role)] = jv;
         }
         jp["analog"] = ja;
+        // Une seule valeur par jeu, portee par le premier joueur.
+        if (jctrl.empty() && cfg.analog_percent > 0) jp["analog_percent"] = cfg.analog_percent;
         jctrl.push_back(jp);
     }
     return jctrl;
@@ -389,6 +439,8 @@ static ControllerConfig json_to_config(const json& jctrl) {
         cfg.players[p].device_path = jp.value("device",      "");
         cfg.players[p].device_name = jp.value("device_name", "");
         cfg.players[p].preset      = jp.value("preset",      "");
+        if (p == 0)
+            cfg.analog_percent = std::clamp(jp.value("analog_percent", 0), 0, ANALOG_PERCENT_MAX);
         if (jp.contains("bindings")) {
             for (auto& [key, val] : jp["bindings"].items()) {
                 GameAction action = action_from_key(key);
@@ -423,6 +475,8 @@ static ControllerConfig json_to_config(const json& jctrl) {
             b.key_pos  = val.value("key_pos",  -1);
             b.key_neg_name = val.value("key_neg_name", std::string());
             b.key_pos_name = val.value("key_pos_name", std::string());
+            if (val.contains("pad_neg")) b.pad_neg = pad_input_from_json(val["pad_neg"]);
+            if (val.contains("pad_pos")) b.pad_pos = pad_input_from_json(val["pad_pos"]);
             b.index    = val.value("index",    -1);
             b.invert   = val.value("invert",   false);
             b.relative = val.value("relative", false);
@@ -554,15 +608,6 @@ static std::string fbneo_action_name(GameAction a)
     }
 }
 
-// FBNeo axis direction codes for UP/DOWN/LEFT/RIGHT (in GameAction order)
-// FBNeo hardcodes: 0x00=left, 0x01=right, 0x02=up, 0x03=down
-static const uint32_t FBNEO_AXIS_CODES[4] = {
-    0x02, // UP
-    0x03, // DOWN
-    0x00, // LEFT
-    0x01, // RIGHT
-};
-
 // Update or add a key=value line in fbneo.ini (key is the token before the first space)
 static void upsert_ini_line(std::vector<std::string>& lines,
                             const std::string& key,
@@ -599,10 +644,21 @@ static uint32_t read_fbneo_burn_ver(const std::string& fbneo_ini_path)
     return 0x100000u;
 }
 
-// Code "switch" d'une liaison telle que FBNeo l'ecrit, ou false si elle n'a
+// Code « switch » d'une liaison telle que FBNeo l'ecrit, ou false si elle n'a
 // pas d'equivalent. Partage entre les defauts par joueur et le .ini par jeu :
 // les deux fichiers parlent la meme langue.
-static bool switch_code_for(const InputBinding& b, int action, uint32_t base, uint32_t& sw)
+//
+// Les codes d'axe du pilote SDL vont par paire : 2 x axe pour le sens negatif,
+// 2 x axe + 1 pour le positif, jusqu'a l'axe 7. Les quatre premiers sont aussi
+// ceux de la croix directionnelle, que SDL ne montre pas comme des axes : elle
+// se lit par les codes 0 a 3, selon son orientation et non selon l'axe de
+// l'enregistrement, qui change d'un pilote a l'autre.
+//
+// L'ancien code ecrivait toujours 0 a 3 pour un axe, quel qu'il soit : une
+// gachette liee a Gauche devenait le stick gauche dans le .ini du jeu.
+static bool switch_code_for(const InputBinding& b, uint32_t base,
+                            const std::string& preset, uint32_t& sw,
+                            const std::array<int, 64>* rest = nullptr)
 {
     if (!b.valid) return false;
     if (b.source == InputSource::KEY) {
@@ -613,12 +669,26 @@ static bool switch_code_for(const InputBinding& b, int action, uint32_t base, ui
         return true;
     }
     if (b.is_axis) {
-        // UP/DOWN/LEFT/RIGHT → FBNeo hardcoded axis direction codes.
-        // Non-directional axis binding : FBNeo doesn't support it this way.
-        if (action >= 4) return false;
-        sw = base | FBNEO_AXIS_CODES[action];
+        if (b.axis < 0 || b.axis_dir == 0) return false;
+        int hat_x = 6, hat_y = 7;
+        preset_hat_axes(preset, hat_x, hat_y);
+        int dir = b.axis_dir;
+        // Une gachette repose a -32767 : « Axis N - » serait vrai en
+        // permanence. Les profils enregistres avant la correction de la
+        // capture portent ce sens-la ; on le remet dans le sens de l'appui.
+        if (rest && b.axis < 64) {
+            const int r = (*rest)[b.axis];
+            if (r <= -16000 && dir < 0) dir = 1;
+            else if (r >= 16000 && dir > 0) dir = -1;
+        }
+        const uint32_t positive = dir > 0 ? 1u : 0u;
+        if (b.axis == hat_x)      { sw = base | (0u + positive); return true; }
+        if (b.axis == hat_y)      { sw = base | (2u + positive); return true; }
+        if (b.axis > 7)           return false;
+        sw = base | (static_cast<uint32_t>(b.axis) * 2u + positive);
         return true;
     }
+    if (b.button < 0) return false;
     sw = base | 0x80u | static_cast<uint32_t>(b.button);
     return true;
 }
@@ -631,6 +701,30 @@ static uint32_t joystick_base_for(const std::string& device_path)
     while (i > 0 && std::isdigit((unsigned char)device_path[i - 1])) --i;
     if (i < device_path.size()) joy_index = std::stoi(device_path.substr(i));
     return 0x4000u | (static_cast<uint32_t>(joy_index) << 8);
+}
+
+// Positions de repos des axes de la manette, lues sur l'etat initial que
+// joydev envoie a l'ouverture. Vide si la manette n'est pas lisible (absente,
+// ou Windows) : on n'a alors aucune raison de corriger quoi que ce soit.
+static bool read_axis_rest(const std::string& device_path, std::array<int, 64>& rest)
+{
+    rest.fill(0);
+#ifdef _WIN32
+    (void)device_path;
+    return false;
+#else
+    if (device_path.empty()) return false;
+    const int fd = open(device_path.c_str(), O_RDONLY | O_NONBLOCK);
+    if (fd < 0) return false;
+    bool any = false;
+    struct js_event ev;
+    while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+        if ((ev.type & JS_EVENT_INIT) && (ev.type & ~JS_EVENT_INIT) == JS_EVENT_AXIS
+            && ev.number < 64) { rest[ev.number] = ev.value; any = true; }
+    }
+    close(fd);
+    return any;
+#endif
 }
 
 void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
@@ -647,6 +741,8 @@ void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
         if (player.device_path.empty() || player.bindings.empty()) continue;
 
         const uint32_t base = joystick_base_for(player.device_path);
+        std::array<int, 64> rest_values{};
+        const bool has_rest = read_axis_rest(player.device_path, rest_values);
 
         // Write p(p+1)defaults.ini
         std::string ini_name = "p" + std::to_string(p + 1) + "defaults.ini";
@@ -669,7 +765,8 @@ void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
             if (it == player.bindings.end() || !it->second.valid) continue;
 
             uint32_t sw = 0;
-            if (!switch_code_for(it->second, a, base, sw)) continue;
+            if (!switch_code_for(it->second, base, player.preset, sw,
+                                 has_rest ? &rest_values : nullptr)) continue;
 
             std::ostringstream oss;
             oss << "input \"" << prefix << fbneo_action_name(action)
@@ -911,15 +1008,45 @@ AnalogRole ControllerManager::analog_role_for_input(const std::string& name) {
 
 namespace {
 
+// Code d'un des deux sens d'une paire : la touche, ou l'entree de manette si
+// le joueur en a choisi une. false si ce sens n'a rien de valide.
+bool pair_side_code(int key, const InputBinding& pad, int joy_index,
+                    const std::string& preset,
+                    const std::array<int, 64>* rest, uint32_t& code)
+{
+    if (pad.valid) {
+        const uint32_t base = 0x4000u | (static_cast<uint32_t>(joy_index) << 8);
+        return switch_code_for(pad, base, preset, code, rest);
+    }
+    if (key < 0) return false;
+    code = static_cast<uint32_t>(key);
+    return true;
+}
+
 // Rebuilds the value part of an `input "..." <value>` line for one binding.
-std::string analog_value_for(const AnalogBinding& b, int joy_index) {
-    char buf[128];
+//
+// L'inversion : un `joyaxis` n'a aucun moyen de se retourner dans le .ini, il
+// n'y a que la position du stick. Un `joyslider` porte une vitesse, et une
+// vitesse negative va dans l'autre sens ; une paire s'inverse en echangeant
+// ses deux entrees.
+std::string analog_value_for(const AnalogBinding& b, int joy_index,
+                             const std::string& preset,
+                             const std::array<int, 64>* rest)
+{
+    char buf[160];
     if (b.source == AnalogSource::KEY_PAIR) {
-        // Deux touches font tourner l'axe, qui revient au centre quand on
+        // Deux entrees font tourner l'axe, qui revient au centre quand on
         // relache : c'est la seule facon de conduire au clavier, et c'est le
-        // reglage d'origine des jeux de vol et de course.
+        // reglage d'origine des jeux de vol et de course. Les memes deux
+        // entrees peuvent etre des boutons ou des gachettes : le pilote lit
+        // une touche et un bouton de la meme facon.
+        uint32_t neg = 0, pos = 0;
+        if (!pair_side_code(b.key_neg, b.pad_neg, joy_index, preset, rest, neg)
+         || !pair_side_code(b.key_pos, b.pad_pos, joy_index, preset, rest, pos))
+            return {};
+        if (b.invert) std::swap(neg, pos);
         std::snprintf(buf, sizeof(buf), "slider 0x%x 0x%x speed 0x%x center %d",
-                      b.key_neg, b.key_pos, b.speed, b.center);
+                      neg, pos, b.speed, b.center);
         return buf;
     }
     if (b.source == AnalogSource::MOUSE_AXIS) {
@@ -927,8 +1054,8 @@ std::string analog_value_for(const AnalogBinding& b, int joy_index) {
         return buf;
     }
     if (b.relative) {
-        std::snprintf(buf, sizeof(buf), "joyslider %d %d speed 0x%x center %d",
-                      joy_index, b.index, b.speed, b.center);
+        std::snprintf(buf, sizeof(buf), "joyslider %d %d speed %s0x%x center %d",
+                      joy_index, b.index, b.invert ? "-" : "", b.speed, b.center);
         return buf;
     }
     std::snprintf(buf, sizeof(buf), "joyaxis %d %d", joy_index, b.index);
@@ -988,6 +1115,8 @@ int ControllerManager::write_game_config(const ControllerConfig& cfg,
         const auto& player = cfg.players[p];
         if (player.device_path.empty() || player.bindings.empty()) continue;
         const uint32_t base = joystick_base_for(player.device_path);
+        std::array<int, 64> rest_values{};
+        const bool has_rest = read_axis_rest(player.device_path, rest_values);
 
         int fires = 0;
         for (auto& l : lines) {
@@ -1009,7 +1138,8 @@ int ControllerManager::write_game_config(const ControllerConfig& cfg,
             auto it = player.bindings.find(static_cast<GameAction>(action));
             if (it == player.bindings.end()) continue;
             uint32_t sw = 0;
-            if (!switch_code_for(it->second, action, base, sw)) continue;
+            if (!switch_code_for(it->second, base, player.preset, sw,
+                                 has_rest ? &rest_values : nullptr)) continue;
 
             std::ostringstream oss;
             oss << "switch 0x" << std::uppercase << std::hex << sw;
@@ -1098,8 +1228,26 @@ void ControllerManager::apply_analog_bindings(const std::string& fbneo_rom_name,
     // tout cas meilleur que de ne rien lier du tout.
     if (p1.device_path.empty() && p1.device_name.empty()) return;
 
+    // Les positions de repos des deux manettes, une fois pour tout le fichier.
+    std::array<int, 64> rest_values[2]{};
+    bool has_rest[2] = {false, false};
+    for (size_t i = 0; i < 2 && i < cfg.players.size(); ++i)
+        has_rest[i] = read_axis_rest(cfg.players[i].device_path, rest_values[i]);
+
     bool changed = false;
     for (auto& line : lines) {
+        // La sensibilite : une seule valeur pour tout le jeu, en tete du .ini.
+        // Elle multiplie la vitesse de tout ce qui est relatif (molette,
+        // palette, trackball, viseur). Ligne absente du fichier : on ne
+        // l'invente pas, l'emulateur l'ecrit lui-meme a la premiere sortie.
+        if (cfg.analog_percent > 0 && line.rfind("analog", 0) == 0
+            && (line.size() == 6 || line[6] == ' ' || line[6] == '\t')) {
+            char head[32];
+            std::snprintf(head, sizeof(head), "analog  0x%04X",
+                          (unsigned)(cfg.analog_percent * 0x100 / 100));
+            if (line != head) { line = head; changed = true; }
+            continue;
+        }
         // input "<name>"  <value>
         auto q1 = line.find('"');
         if (line.find("input") == std::string::npos || q1 == std::string::npos) continue;
@@ -1128,10 +1276,15 @@ void ControllerManager::apply_analog_bindings(const std::string& fbneo_rom_name,
         AnalogBinding b = it != who->analog.end() ? it->second : default_analog_binding(role);
         if (!b.is_set()) continue;
         const int pad = fbneo_joy_index(who->device_path);
+        const size_t who_index = who - cfg.players.data();
+        const bool who_has_rest = who_index < 2 && has_rest[who_index];
 
+        const std::string value_text = analog_value_for(
+            b, pad, who->preset, who_has_rest ? &rest_values[who_index] : nullptr);
+        if (value_text.empty()) continue;
         std::string rebuilt = "input  \"" + name + "\"" +
                               std::string(name.size() < 18 ? 18 - name.size() : 1, ' ') +
-                              analog_value_for(b, pad);
+                              value_text;
         if (rebuilt != line) { line = rebuilt; changed = true; }
     }
     if (!changed) return;
@@ -1233,7 +1386,7 @@ std::string retarget_players(const std::string& text, const int target[2],
                     const auto& binds = cfg.players[p].bindings;
                     auto it = binds.find(static_cast<GameAction>(action));
                     if (it != binds.end() && it->second.valid
-                        && switch_code_for(it->second, action, base, sw)) {
+                        && switch_code_for(it->second, base, cfg.players[p].preset, sw)) {
                         // Le bouton que le profil donne a cette action, sur cette manette.
                         const size_t q2 = line.find('"', line.find('"') + 1);
                         const size_t kind = line.find_first_not_of(" \t", q2 + 1);

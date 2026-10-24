@@ -659,6 +659,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
         if (ok && m_settings_win) m_close_settings_signal.emit();
     });
     m_settings_panel.signal_mame_installed().connect([this](std::string variant) {
+        m_mame_update_infobar.hide();
         if (auto_dat_group("mame", variant, m_settings_win) && m_settings_win) m_close_settings_signal.emit();
     });
     m_settings_panel.signal_open_rom_manager().connect([this] {
@@ -1949,8 +1950,23 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
         sigc::mem_fun(*this, &MainWindow::on_fbneo_update_infobar_response));
     m_fbneo_update_infobar.hide();
 
+    m_mame_update_infobar.set_message_type(Gtk::MESSAGE_INFO);
+    m_mame_update_infobar.set_show_close_button(true);
+    m_mame_update_infobar.set_no_show_all(true);
+    dynamic_cast<Gtk::Container*>(m_mame_update_infobar.get_content_area())->add(m_mame_update_label);
+    m_mame_update_label.show();
+    m_mame_update_infobar.add_button(_("Update"), Gtk::RESPONSE_OK);
+    m_mame_update_infobar.signal_response().connect([this](int response) {
+        m_mame_update_infobar.hide();
+        if (response != Gtk::RESPONSE_OK) return;
+        if (m_mame_update_channel == MameSooner::kChannelSooner) m_settings_panel.download_sooner(*this);
+        else                                                     m_settings_panel.download_mame_official(*this);
+    });
+    m_mame_update_infobar.hide();
+
     // === Packing ===
     m_main_box.pack_start(m_fbneo_update_infobar, Gtk::PACK_SHRINK);
+    m_main_box.pack_start(m_mame_update_infobar, Gtk::PACK_SHRINK);
 
     m_app_update_infobar.set_message_type(Gtk::MESSAGE_INFO);
     m_app_update_infobar.set_show_close_button(true);
@@ -2181,6 +2197,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_scan_finished_dispatcher.connect(sigc::mem_fun(*this, &MainWindow::on_scan_finished));
 
     m_fbneo_update_dispatcher.connect(sigc::mem_fun(*this, &MainWindow::on_fbneo_update_check_result));
+    m_mame_update_dispatcher.connect(sigc::mem_fun(*this, &MainWindow::on_mame_update_check_result));
     m_app_update_dispatcher.connect(sigc::mem_fun(*this, &MainWindow::on_app_update_result));
     m_app_update_progress_dispatcher.connect([this] {
         double f;
@@ -2247,6 +2264,7 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // One GitHub API call, off-thread : never blocks startup, and stays silent
     // unless it actually finds something newer than what was downloaded here.
     check_fbneo_update_async();
+    check_mame_update_async();
 
     if (progress_callback) progress_callback(1.0, "Ready!");
     /* Selection de demarrage : UN seul appel, ici, en priorite basse.
@@ -6149,6 +6167,47 @@ void MainWindow::check_fbneo_update_async() {
         }
         m_fbneo_update_dispatcher.emit();
     }).detach();
+}
+
+void MainWindow::check_mame_update_async() {
+    const std::string channel = MameSooner::channel();
+    m_mame_update_channel = channel;
+    if (channel == MameSooner::kChannelSooner) {
+        if (MameSooner::installed().build.empty()) return;
+        std::thread([this]() {
+            const auto info = MameSooner::fetch_info();
+            if (info.ok) m_mame_update_build = info.build;
+            m_mame_update_dispatcher.emit();
+        }).detach();
+        return;
+    }
+    // La version officielle : celle que MAMEdev annonce sur mamedev.org,
+    // comparee au MAME qu'on utilise (celui de Bootcade ou de la distribution).
+    const std::string exe = EmulatorVariants::executable("mame", MameSooner::kChannelRelease);
+    if (exe.empty()) return;
+    std::thread([this, exe]() {
+        const std::string installed = MameCatalog::version_number(MameCatalog::installed_build(exe));
+        const auto latest = MameCatalog::fetch_latest_release();
+        if (latest.ok && !installed.empty() && MameCatalog::compare_versions(installed, latest.version) < 0)
+            m_mame_update_version = latest.version;
+        m_mame_update_dispatcher.emit();
+    }).detach();
+}
+
+void MainWindow::on_mame_update_check_result() {
+    if (m_mame_update_channel == MameSooner::kChannelSooner) {
+        // Serveur injoignable : rien a dire au joueur.
+        if (m_mame_update_build.empty()) return;
+        const auto here = MameSooner::installed();
+        if (here.build.empty() || here.build == m_mame_update_build) return;
+        m_mame_update_label.set_text(Glib::ustring::compose(
+            _("A new MAME Sooner version is available: %1."), m_mame_update_build));
+    } else {
+        if (m_mame_update_version.empty()) return;
+        m_mame_update_label.set_text(Glib::ustring::compose(
+            _("MAME %1 is available."), m_mame_update_version));
+    }
+    m_mame_update_infobar.show();
 }
 
 // ── Online scores ──────────────────────────────────────────────────────

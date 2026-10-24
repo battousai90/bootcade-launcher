@@ -136,6 +136,10 @@ public:
     sigc::signal<void>& signal_fbneo_installed() { return m_sig_fbneo_installed; }
     // MAME vient d'etre installe : "release" ou "sooner".
     sigc::signal<void, std::string>& signal_mame_installed() { return m_sig_mame_installed; }
+    // Telecharge ou met a jour MAME Sooner, dialogues poses sur `owner`.
+    void download_sooner(Gtk::Window& owner);
+    // Telecharge ou met a jour le MAME officiel, dialogues poses sur `owner`.
+    void download_mame_official(Gtk::Window& owner);
     // A appeler quand la fenetre s'ouvre : relit ce qui a pu changer dehors
     // (compte, emulateur present ou non) et relance la sonde reseau.
     void on_window_shown();
@@ -560,12 +564,18 @@ private:
     Gtk::ComboBoxText m_combo_fbneo_channel;
     Gtk::Label        m_lbl_fbneo_channel_note;
     Gtk::Box     m_sooner_line{Gtk::ORIENTATION_HORIZONTAL, 10};
+    // Le dossier de Sooner, a la place du champ de la version publiee quand
+    // Sooner est choisi : chaque version a son executable.
+    Gtk::Box     m_sooner_dir_line{Gtk::ORIENTATION_HORIZONTAL, 10};
+    Gtk::Entry   m_entry_sooner_dir;
+    Gtk::Button  m_button_browse_sooner;
+    Gtk::Box*    m_mame_exe_line = nullptr;
+    void         on_browse_sooner_dir();
     Gtk::Label   m_lbl_sooner;
     Gtk::Button  m_btn_sooner;
     std::string  mame_channel() const;
     void         refresh_sooner_state();
     void         on_sooner_download();
-    void         on_mame_official_download();   // Windows : la release de mamedev/mame
     // Les tuiles du bandeau d'identite, au meme endroit et dans le meme
     // dessin que la bande Build / Installed / Last checked de FinalBurn Neo :
     // deux emulateurs qui repondent aux memes questions doivent y repondre a

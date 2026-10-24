@@ -130,11 +130,45 @@ std::string channel() {
     return c == kChannelSooner ? kChannelSooner : kChannelRelease;
 }
 
-std::string install_dir() {
+std::string default_install_dir() {
     if (const char* isolated = std::getenv("BOOTCADE_CONFIG_DIR"); isolated && *isolated)
         return std::string(isolated) + "/mame-sooner";
     const char* home = std::getenv("HOME");
     return std::string(home ? home : ".") + "/.local/share/bootcade/mame-sooner";
+}
+
+std::string install_dir() {
+    const std::string chosen = read_config().value("mame_sooner_dir", std::string());
+    return chosen.empty() ? default_install_dir() : chosen;
+}
+
+bool set_install_dir(const std::string& dir, std::string& error) {
+    const std::string from = install_dir();
+    std::error_code ec;
+    if (fs::path(dir).lexically_normal() == fs::path(from).lexically_normal()) return true;
+    fs::create_directories(dir, ec);
+    if (ec) { error = ec.message(); return false; }
+    // Ce qui est deja installe suit : seulement nos trois fichiers, le reste
+    // du dossier n'est pas a nous.
+    for (const char* name : {"mame", "chdman", "installed.json"}) {
+        const fs::path src = fs::path(from) / name, dest = fs::path(dir) / name;
+        if (!fs::exists(src, ec)) continue;
+        fs::rename(src, dest, ec);
+        if (ec) {
+            // Un autre disque : copier, puis retirer l'original.
+            ec.clear();
+            fs::copy_file(src, dest, fs::copy_options::overwrite_existing, ec);
+            if (ec) { error = ec.message(); return false; }
+            fs::permissions(dest, fs::status(src).permissions(), ec);
+            fs::remove(src, ec);
+        }
+    }
+    auto j = read_config();
+    j["mame_sooner_dir"] = dir == default_install_dir() ? std::string() : dir;
+    std::ofstream fo(AppContext::get_config_path());
+    if (!fo) { error = "cannot write " + AppContext::get_config_path(); return false; }
+    fo << j.dump(4);
+    return true;
 }
 
 std::string executable() {

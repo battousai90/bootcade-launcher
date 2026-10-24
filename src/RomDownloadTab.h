@@ -135,8 +135,9 @@ private:
         Gtk::TreeModelColumn<bool>          selectable, owned;
         Gtk::TreeModelColumn<int>           cat;        // 0 disponible, 1 autre version, 2 pas verifie, 3 absent
         Gtk::TreeModelColumn<int>           crc_state;  // 0 OK, 1 KO, 2 inconnu
+        Gtk::TreeModelColumn<guint64>       bytes;      // ce que le jeu fait telecharger, 0 si inconnu
         Columns() { add(include); add(game); add(system); add(status); add(avail); add(crc); add(size); add(search);
-                    add(avail_key); add(index); add(selectable); add(owned); add(cat); add(crc_state); }
+                    add(avail_key); add(index); add(selectable); add(owned); add(cat); add(crc_state); add(bytes); }
     } m_cols;
     Glib::RefPtr<Gtk::ListStore> m_store;
     Glib::ustring m_vis_system;
@@ -147,7 +148,8 @@ private:
 
     // Ce que la source a, par jeu (cle systeme/nom), pour la source m_avail_for.
     std::map<std::string, Avail> m_avail;
-    std::map<std::string, std::string> m_size, m_check_size;   // taille sur la source
+    std::map<std::string, std::string> m_size, m_check_size;   // taille sur la source, telle que le site l'affiche
+    std::map<std::string, unsigned long long> m_bytes, m_check_bytes;   // la meme en octets, d'apres la base de CRC
     std::map<std::string, std::pair<int, int>> m_crcinfo, m_check_crcinfo;   // CRC du DAT dans le fichier : trouves / attendus
     std::string m_avail_for;
     std::thread m_check;

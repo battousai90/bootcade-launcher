@@ -47,11 +47,17 @@ Info fetch_info();
 // Le canal enregistre dans config.json : « release » par defaut.
 std::string channel();
 
-// Le dossier ou le MAME Sooner est installe : ~/.local/share/bootcade/
-// mame-sooner (sous BOOTCADE_CONFIG_DIR quand il est pose, pour qu'un build de
-// chantier n'ecrase pas l'installation du joueur). Le meme chemin vu de
+// Le dossier ou le MAME Sooner est installe : celui choisi dans Settings,
+// sinon ~/.local/share/bootcade/mame-sooner (sous BOOTCADE_CONFIG_DIR quand
+// il est pose, pour qu'un build de chantier n'ecrase pas l'installation du
+// joueur). Le meme chemin vu de
 // l'hote et du bac a sable Flatpak : c'est l'hote qui lance MAME.
 std::string install_dir();
+// Le dossier quand le joueur n'en a pas choisi (mame_sooner_dir vide).
+std::string default_install_dir();
+// Choisit le dossier de Sooner (mame_sooner_dir) et y deplace ce qui est
+// deja installe. False et `error` si le deplacement echoue.
+bool set_install_dir(const std::string& dir, std::string& error);
 
 // L'executable installe, ou "" s'il n'y en a pas.
 std::string executable();
