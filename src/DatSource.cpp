@@ -186,6 +186,45 @@ std::vector<std::string> list_folder(const std::string& folder) {
     return out;
 }
 
+namespace {
+// Deux ecritures du meme dossier (barre finale, « .. ») sont le meme dossier.
+std::string same_folder_key(const std::string& folder) {
+    if (folder.empty()) return {};
+    std::string s = fs::path(folder).lexically_normal().string();
+    while (s.size() > 1 && (s.back() == '/' || s.back() == '\\')) s.pop_back();
+    return s;
+}
+}
+
+std::string stable_variant(const Group& g) {
+    if (!g.variant.empty()) return g.variant;
+    return g.emulator == "fbneo" ? std::string("bootcade") : std::string();
+}
+
+std::string folder_shared_with(const std::vector<Group>& groups, size_t at) {
+    if (at >= groups.size()) return {};
+    const std::string mine = same_folder_key(groups[at].folder);
+    if (mine.empty()) return {};
+    for (size_t i = 0; i < groups.size(); ++i) {
+        if (i == at || same_folder_key(groups[i].folder) != mine) continue;
+        if (groups[i].emulator != groups[at].emulator || stable_variant(groups[i]) != stable_variant(groups[at]))
+            return groups[i].name;
+    }
+    return {};
+}
+
+std::string free_folder(const std::vector<Group>& groups, const std::string& wanted, size_t at) {
+    auto taken = [&](const std::string& folder) {
+        const std::string k = same_folder_key(folder);
+        for (size_t i = 0; i < groups.size(); ++i)
+            if (i != at && same_folder_key(groups[i].folder) == k) return true;
+        return false;
+    };
+    std::string out = wanted;
+    for (int n = 2; taken(out); ++n) out = wanted + " " + std::to_string(n);
+    return out;
+}
+
 std::string make_id(const std::string& name, const std::vector<Group>& taken) {
     std::string base;
     for (unsigned char c : lower(name)) {

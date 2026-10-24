@@ -142,6 +142,18 @@ bool               save_groups(const std::vector<Group>& groups);
 // A new id from a name, unique among `taken`.
 std::string        make_id(const std::string& name, const std::vector<Group>& taken);
 
+// La version qu'un groupe decrit sans dependre des reglages : la sienne,
+// "bootcade" pour un groupe FinalBurn Neo ancien. Un groupe MAME ancien n'en
+// a pas ("") : le canal choisi dans Settings change, ses DAT non.
+std::string stable_variant(const Group& g);
+// Le nom d'un autre groupe qui a le meme dossier mais decrit un autre
+// emulateur ou une autre version, "" s'il n'y en a pas. Generer dans ce
+// dossier ecraserait ses DAT.
+std::string folder_shared_with(const std::vector<Group>& groups, size_t at);
+// `wanted`, ou « wanted 2 », « wanted 3 »… : un dossier qu'aucun autre groupe
+// que celui a `at` n'utilise.
+std::string free_folder(const std::vector<Group>& groups, const std::string& wanted, size_t at = kNoGroup);
+
 // The DAT files present in a folder (*.dat, sorted by name).
 std::vector<std::string> list_folder(const std::string& folder);
 

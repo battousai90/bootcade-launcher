@@ -1688,7 +1688,29 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
     m_btn_sooner.show();
     mame_exe.body->pack_start(m_sooner_line, Gtk::PACK_SHRINK);
 
+    // Ou Sooner s'installe : son dossier a lui, choisi ici.
+    auto* sooner_dir_label = ui::title_label(_("Folder"));
+    sooner_dir_label->set_valign(Gtk::ALIGN_CENTER);
+    m_entry_sooner_dir.set_hexpand(true);
+    m_entry_sooner_dir.set_editable(false);
+    m_entry_sooner_dir.set_tooltip_text(_("The folder MAME Sooner is downloaded and updated in."));
+    m_button_browse_sooner.set_label(_("Browse..."));
+    m_button_browse_sooner.set_image(*ui::image("bc-folder.svg", ui::kIconButton));
+    m_button_browse_sooner.set_always_show_image(true);
+    m_button_browse_sooner.signal_clicked().connect(sigc::mem_fun(*this, &SettingsPanel::on_browse_sooner_dir));
+    m_sooner_dir_line.pack_start(*sooner_dir_label, Gtk::PACK_SHRINK);
+    m_sooner_dir_line.pack_start(m_entry_sooner_dir, Gtk::PACK_EXPAND_WIDGET);
+    m_sooner_dir_line.pack_start(m_button_browse_sooner, Gtk::PACK_SHRINK);
+    m_sooner_dir_line.set_margin_top(10);
+    m_sooner_dir_line.set_no_show_all(true);
+    sooner_dir_label->show();
+    m_entry_sooner_dir.show();
+    m_button_browse_sooner.show();
+    mame_exe.body->pack_start(m_sooner_dir_line, Gtk::PACK_SHRINK);
+
     auto* mame_exe_line = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+    m_mame_exe_line = mame_exe_line;
+    mame_exe_line->set_no_show_all(true);
     mame_exe_line->set_margin_top(10);
     m_entry_mame_exe.set_hexpand(true);
     m_entry_mame_exe.set_placeholder_text(_("Leave empty to let Bootcade find MAME"));
@@ -1729,6 +1751,8 @@ Gtk::Widget* SettingsPanel::build_page_emulator() {
         }
     });
     mame_exe_line->pack_start(m_button_browse_mame, Gtk::PACK_SHRINK);
+    m_entry_mame_exe.show();
+    m_button_browse_mame.show();
     mame_exe.body->pack_start(*mame_exe_line, Gtk::PACK_SHRINK);
 
     // Ce que la detection a trouve : la reponse a « et si je laisse vide ? ».
@@ -2840,11 +2864,13 @@ void SettingsPanel::download_catver_clicked() {
 // il s'eteint quand Sooner est la et choisi, sans perdre ce qu'il contient.
 void SettingsPanel::refresh_sooner_state() {
     const bool sooner = mame_channel() == MameSooner::kChannelSooner;
-#ifdef _WIN32
-    // Sous Windows, la version publiee se telecharge aussi : MAMEdev en fait
-    // un executable Windows a chaque version. La meme ligne la propose.
+    // La version publiee se telecharge aussi : l'executable Windows de
+    // MAMEdev, ou sous Linux celui que leur CI construit pour la version
+    // (MameOfficial.h). La meme ligne la propose.
     if (!sooner) {
         m_sooner_line.set_visible(true);
+        m_sooner_dir_line.set_visible(false);
+        if (m_mame_exe_line) m_mame_exe_line->set_visible(true);
         m_entry_mame_exe.set_sensitive(true);
         m_button_browse_mame.set_sensitive(true);
         const std::string tag = MameOfficial::installed_tag();
@@ -2852,17 +2878,21 @@ void SettingsPanel::refresh_sooner_state() {
             m_lbl_sooner.set_text(_("Download the official MAME published by MAMEdev."));
             m_btn_sooner.set_label(_("Download"));
         } else {
-            m_lbl_sooner.set_text(Glib::ustring::compose(_("Official MAME %1 is installed."), tag));
+            m_lbl_sooner.set_text(Glib::ustring::compose(_("Official MAME %1 is installed."),
+                                                         MameOfficial::version_of(tag)));
             m_btn_sooner.set_label(_("Update"));
         }
         return;
     }
-#endif
     m_sooner_line.set_visible(sooner);
+    // Chaque version a son executable : celui de la version publiee pour
+    // elle, le dossier de Sooner pour Sooner, jamais l'un grise sous l'autre.
+    m_sooner_dir_line.set_visible(sooner);
+    if (m_mame_exe_line) m_mame_exe_line->set_visible(!sooner);
+    m_entry_mame_exe.set_sensitive(true);
+    m_button_browse_mame.set_sensitive(true);
+    m_entry_sooner_dir.set_text(MameSooner::install_dir());
     const auto here = MameSooner::installed();
-    const bool in_use = sooner && !here.build.empty();
-    m_entry_mame_exe.set_sensitive(!in_use);
-    m_button_browse_mame.set_sensitive(!in_use);
     if (!sooner) return;
     if (here.build.empty()) {
         m_lbl_sooner.set_text(_("MAME Sooner is not downloaded yet. Until it is, Bootcade "
@@ -2875,6 +2905,28 @@ void SettingsPanel::refresh_sooner_state() {
     }
 }
 
+// Un autre dossier pour Sooner : ce qui est deja installe y est deplace, et
+// les mises a jour iront la.
+void SettingsPanel::on_browse_sooner_dir() {
+    auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
+    BcFileChooser dialog(_("Select the MAME Sooner folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+    dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+    dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
+    dialog.set_filename(MameSooner::install_dir());
+    if (dialog.run() != Gtk::RESPONSE_OK) return;
+    const std::string dir = dialog.get_filename();
+    dialog.hide();
+    std::string error;
+    if (!MameSooner::set_install_dir(dir, error)) {
+        if (parent)
+            ui::notice(*parent, _("MAME Sooner was not moved"),
+                       Glib::ustring::compose(_("Bootcade could not move MAME Sooner to %1 : %2"), dir, error));
+        return;
+    }
+    refresh_mame_state();
+    refresh_emulator_pill();
+}
+
 /* Telecharge le MAME Sooner publie par le serveur Bootcade.
  *
  * 130 Mo : un fil a cote, une barre qui avance et un bouton qui annule,
@@ -2884,10 +2936,14 @@ void SettingsPanel::refresh_sooner_state() {
 void SettingsPanel::on_sooner_download() {
     auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
     if (!parent) return;
-#ifdef _WIN32
-    if (mame_channel() != MameSooner::kChannelSooner) { on_mame_official_download(); return; }
-#endif
+    if (mame_channel() != MameSooner::kChannelSooner) { download_mame_official(*parent); return; }
+    download_sooner(*parent);
+}
 
+// Aussi appele par le bandeau « nouvelle version » de la fenetre principale,
+// Settings fermee : la fenetre qui porte les dialogues est donc passee.
+void SettingsPanel::download_sooner(Gtk::Window& owner) {
+    auto* parent = &owner;
     Gtk::Dialog dialog;
     dialog.set_transient_for(*parent);
     dialog.set_modal(true);
@@ -2988,11 +3044,11 @@ void SettingsPanel::on_sooner_download() {
     m_sig_mame_installed.emit("sooner");
 }
 
-/* Le MAME officiel sous Windows : la derniere release de mamedev/mame,
- * telechargee et extraite par Bootcade, puis designee comme executable. */
-void SettingsPanel::on_mame_official_download() {
-    auto* parent = dynamic_cast<Gtk::Window*>(get_toplevel());
-    if (!parent) return;
+/* Le MAME officiel : la derniere release de mamedev/mame, telechargee et
+ * extraite par Bootcade, puis designee comme executable. Aussi appele par le
+ * bandeau « nouvelle version » de la fenetre principale. */
+void SettingsPanel::download_mame_official(Gtk::Window& owner) {
+    auto* parent = &owner;
 
     Gtk::Dialog dialog;
     dialog.set_transient_for(*parent);
@@ -3061,7 +3117,16 @@ void SettingsPanel::on_mame_official_download() {
     dialog.hide();
 
     if (!ok) {
-        if (!cancelled.load())
+        // Linux : l'artefact de la CI n'existe plus (90 jours) ou pas encore.
+        if (!cancelled.load() && error.rfind("no Linux build", 0) == 0 && !tag.empty())
+            ui::notice(*parent, _("No download for this version"),
+                       Glib::ustring::compose(
+                           _("MAMEdev has published MAME %1, but no Linux build of it can be "
+                             "downloaded. Update MAME with your package manager: Bootcade "
+                             "picks it up, and its DAT files, on its next start."),
+                           MameOfficial::version_of(tag)),
+                       "bc-info.svg");
+        else if (!cancelled.load())
             ui::notice(*parent, _("Download failed"), error, "bc-error.svg");
         refresh_mame_state();
         return;
@@ -3071,9 +3136,21 @@ void SettingsPanel::on_mame_official_download() {
     refresh_emulator_pill();
     refresh_sections();
     refresh_mame_state();
+#ifndef _WIN32
+    // Le binaire est la ; reste a savoir s'il demarrera sur cette machine.
+    const std::string missing = MameSooner::missing_libraries(MameOfficial::executable());
+    if (!missing.empty())
+        ui::notice(*parent, _("MAME needs more libraries"),
+                   Glib::ustring::compose(
+                       _("MAME %1 is downloaded, but this system lacks libraries it needs to "
+                         "start: %2\n\nInstall them with your package manager (usually the "
+                         "Qt 6 and SDL2 packages)."), MameOfficial::version_of(tag), missing),
+                   "bc-info.svg");
+    else
+#endif
     ui::notice(*parent, _("MAME is ready"),
                Glib::ustring::compose(_("Bootcade now uses the official MAME %1. Its catalog "
-                                        "is read on the next start."), tag),
+                                        "is read on the next start."), MameOfficial::version_of(tag)),
                "bc-check.svg");
     m_sig_mame_installed.emit("release");
 }
@@ -3089,7 +3166,7 @@ void SettingsPanel::refresh_mame_state() {
                             && mame_channel() == MameSooner::kChannelSooner;
     if (sooner_in_use)
         m_lbl_mame_exe.set_text(
-            _("Sooner is in use. The field above is used with the official release."));
+            _("Sooner is in use. The official release keeps its own executable, shown when it is the chosen version."));
     else if (chosen)
         m_lbl_mame_exe.set_text(
             _("Clear this field to let Bootcade detect MAME again."));
@@ -3323,7 +3400,7 @@ void SettingsPanel::check_mame_update_async() {
                 m_emu_update_tone = "muted";
             } else if (MameCatalog::compare_versions(installed, r.version) < 0) {
                 m_emu_update_msg  = Glib::ustring::compose(
-                    _("MAME %1 is out. Update it with your package manager, or build it from mamedev.org: there is no official Linux download."),
+                    _("MAME %1 is out. Download it with the button of the Executable section."),
                     r.version);
                 m_emu_update_tone = "warn";
             } else {

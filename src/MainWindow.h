@@ -522,6 +522,18 @@ private:
     std::string   m_fbneo_update_tag;
     std::string   m_fbneo_update_upstream;   // commit finalburnneo du build publie
     std::string   m_fbneo_update_published_at;
+    // === MAME update banner ===
+    // Meme principe, pour la version de MAME choisie dans Settings : Sooner,
+    // la fiche du serveur Bootcade comparee au Sooner installe ; la version
+    // officielle, la page des sorties de mamedev.org comparee au MAME utilise.
+    // Rien tant qu'aucun MAME n'est la : le premier se telecharge dans Settings.
+    Gtk::InfoBar  m_mame_update_infobar;
+    Gtk::Label    m_mame_update_label;
+    Glib::Dispatcher m_mame_update_dispatcher;
+    // Written by the worker thread, read after dispatch.
+    std::string   m_mame_update_channel;
+    std::string   m_mame_update_build;     // Sooner : le build publie
+    std::string   m_mame_update_version;   // officiel : « 0.290 », vide si a jour
     // ── Sorting ────────────────────────────────────────────────────────
     // Applied to the filtered vector before the model is filled, so all three
     // views (table, list, grid) inherit the same order. Sorting the TreeView's
@@ -712,6 +724,8 @@ private:
     void check_fbneo_update_async();
     void on_fbneo_update_check_result();
     void on_fbneo_update_infobar_response(int response_id);
+    void check_mame_update_async();
+    void on_mame_update_check_result();
 
     // Screenshot-as-artwork: the watcher thread queues a batch here and wakes
     // the UI thread; on_screenshot_batch_found() drains it, one dialog at a time.

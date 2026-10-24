@@ -59,6 +59,7 @@ RomDownloadTab::RomDownloadTab(Env env)
         m_checking = false;
         m_avail = std::move(m_check_result);
         m_size = std::move(m_check_size);
+        m_bytes = std::move(m_check_bytes);
         m_crcinfo = std::move(m_check_crcinfo);
         m_avail_for = m_check_for;
         set_loading(true, _("Building the list…"));
@@ -539,6 +540,7 @@ void RomDownloadTab::start_availability_check() {
     m_check = std::thread([this, src, sets, gen] {
         std::map<std::string, Avail> out;
         std::map<std::string, std::string> sizes;
+        std::map<std::string, unsigned long long> bytes;
         std::map<std::string, std::pair<int, int>> crcinfo;
         RomDownload::ServerView changes;
         if (src.kind == "bootcade") {
@@ -577,6 +579,9 @@ void RomDownloadTab::start_availability_check() {
                     std::string folder;
                     if (src.kind == "lolroms") folder = LolRoms::folder_for(s.emulator, s.system);
                     else if (s.emulator == "fbneo") folder = fs::path(RetroRoms::folder_for(s.emulator, s.system)).filename().string();
+                    // La taille de ce qui sera telecharge : RetroRoms n'affiche rien pour un dossier CHD.
+                    if (const auto z = s.is_chd ? db->chd_bytes(s.name) : db->bytes_of(CrcDb::key_for(src.kind, folder, s.name)))
+                        bytes[key_of(s.system, s.name)] = z;
                     int have = 0;
                     const auto v = db->check(CrcDb::key_for(src.kind, folder, s.name), s.crcs, &have);
                     if (v == CrcDb::Verdict::Match || v == CrcDb::Verdict::Mismatch) crcinfo[key_of(s.system, s.name)] = {have, (int)s.crcs.size()};
@@ -602,6 +607,7 @@ void RomDownloadTab::start_availability_check() {
         if (!m_check_cancel) {
             m_check_result = std::move(out);
             m_check_size = std::move(sizes);
+            m_check_bytes = std::move(bytes);
             m_check_crcinfo = std::move(crcinfo);
             m_check_for = src.id;
         }
@@ -693,8 +699,15 @@ void RomDownloadTab::populate() {
         row[m_cols.avail]      = text;
         row[m_cols.crc]        = crc;
         {
+            // Une seule ecriture pour toutes les sources (LolRoms ecrit « MB », RetroRoms « MiB ») ;
+            // la taille du site telle quelle si la base ne la connait pas.
+            auto b = m_bytes.find(key);
             auto z = m_size.find(key);
-            row[m_cols.size] = z != m_size.end() && m_avail_for == src.id ? z->second : std::string();
+            const bool here = m_avail_for == src.id;
+            const guint64 n = here && b != m_bytes.end() ? b->second : 0;
+            row[m_cols.bytes] = n;
+            row[m_cols.size]  = n ? Glib::format_size(n, Glib::FORMAT_SIZE_IEC_UNITS)
+                              : here && z != m_size.end() && z->second != "-" ? Glib::ustring(z->second) : Glib::ustring();
         }
         row[m_cols.avail_key]  = ok ? (int)a : -1;
         row[m_cols.index]      = (unsigned int)i;
@@ -785,14 +798,26 @@ void RomDownloadTab::set_all(bool on) {
 
 void RomDownloadTab::update_buttons() {
     if (m_table) m_table->refresh_header_check();
-    int n = 0;
-    for (const auto& row : m_store->children()) if (row[m_cols.include]) ++n;
+    int n = 0, unknown = 0;
+    guint64 total = 0;
+    for (const auto& row : m_store->children()) {
+        if (!row[m_cols.include]) continue;
+        ++n;
+        const guint64 z = row[m_cols.bytes];
+        total += z;
+        if (!z) ++unknown;
+    }
     const auto src = current_source();
-    m_btn_download->set_label(n ? Glib::ustring::compose(_("Download from %1 (%2)"), src.name, n)
-                                : Glib::ustring::compose(_("Download from %1"), src.name.empty() ? "…" : src.name));
+    // Ce que le joueur va recevoir, avant de cliquer : « + » si la taille de certains jeux est inconnue.
+    const Glib::ustring weight = total ? Glib::format_size(total, Glib::FORMAT_SIZE_IEC_UNITS) + (unknown ? "+" : "") : Glib::ustring();
+    m_btn_download->set_label(!n ? Glib::ustring::compose(_("Download from %1"), src.name.empty() ? "…" : src.name)
+                            : weight.empty() ? Glib::ustring::compose(_("Download from %1 (%2)"), src.name, n)
+                            : Glib::ustring::compose(_("Download from %1 (%2 · %3)"), src.name, n, weight));
     m_btn_download->set_sensitive(n > 0 && n <= kMaxAtOnce && !src.id.empty());
     m_btn_download->set_tooltip_text(n > kMaxAtOnce
         ? Glib::ustring::compose(_("%1 sets are ticked : download at most %2 at a time. Untick some first."), n, kMaxAtOnce)
+        : unknown && total ? Glib::ustring::compose(_("Adds the ticked sets to the downloads below. The size of %1 of them is not known : "
+                                                      "%2 is the size of the others."), unknown, weight.substr(0, weight.size() - 1))
         : Glib::ustring(_("Adds the ticked sets to the downloads below.")));
 }
 

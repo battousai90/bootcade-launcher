@@ -7,9 +7,7 @@
 #include "MameCatalog.h"
 #include "MameSooner.h"
 #include "Platform.h"
-#ifdef _WIN32
 #include "MameOfficial.h"
-#endif
 
 #include <filesystem>
 #include <fstream>
@@ -127,9 +125,7 @@ std::string executable(const std::string& emulator, const std::string& variant_i
         if (variant == "sooner") return MameSooner::executable();
         std::string exe = MameSooner::resolve_executable(MameSooner::kChannelRelease,
                                                          j.value("mame_executable", std::string()));
-#ifdef _WIN32
         if (exe.empty()) exe = MameOfficial::executable();
-#endif
         return MameCatalog::is_runnable(exe) ? exe : std::string();
     }
     return {};

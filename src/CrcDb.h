@@ -10,9 +10,13 @@
 // Contrat v1 : crcdb-manifest.json (sha256 de chaque fichier de la base), puis
 // <source>.json :
 //   { "schema_version": 1, "files": { "<cle>": { "d": "2026-05-28",
-//       "b": "full" | "read" | "pending", "c": ["crc", ...] } } }
+//       "b": "full" | "read" | "pending", "c": ["crc", ...], "z": 211968 } },
+//     "chds": { "<jeu>": { "z": 3328599654, "f": { "<disque>.chd": 3328599654 } } } }
 // b = « full » : CRC deduits du DAT de la version complete ; « read » : lus
 // dans le fichier ; « pending » : modifie depuis, pas encore lu (jamais propose).
+// z = taille du fichier du site en octets (d'apres la taille affichee, arrondie) ;
+// « chds » : la taille de ce qu'un CHD fait telecharger (tous les disques du
+// dossier du jeu), que RetroRoms n'affiche pas. Les deux sont facultatifs.
 //
 // Appels bloquants (reseau) : hors du fil GTK.
 #pragma once
@@ -41,11 +45,15 @@ public:
     // `have` recoit le nombre de ces CRC que le fichier contient.
     Verdict check(const std::string& key, const std::vector<unsigned long>& crcs, int* have = nullptr) const;
     size_t size() const { return m_entries.size(); }
+    // Ce que le joueur va telecharger, en octets ; 0 si la base ne le sait pas.
+    unsigned long long bytes_of(const std::string& key) const;
+    unsigned long long chd_bytes(const std::string& name) const;
     std::string generated() const { return m_generated; }
 
 private:
-    struct Entry { char basis = 'p'; std::vector<unsigned long> crcs; };   // trie
+    struct Entry { char basis = 'p'; std::vector<unsigned long> crcs; unsigned long long bytes = 0; };   // crcs trie
     std::unordered_map<std::string, Entry> m_entries;
+    std::unordered_map<std::string, unsigned long long> m_chd_bytes;
     std::string m_generated;
     bool m_loaded = false;
 };

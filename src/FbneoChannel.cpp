@@ -96,7 +96,7 @@ Switched switch_to(const std::string& channel, const std::string& current_execut
         DatSource::Group g;
         g.id        = official_group_id();
         g.name      = "FBNeo official";
-        g.folder    = EmulatorVariants::default_folder("fbneo", "official");
+        g.folder    = DatSource::free_folder(groups, EmulatorVariants::default_folder("fbneo", "official"));
         g.source    = DatSource::Kind::Emulator;
         g.emulator  = "fbneo";
         g.variant   = "official";

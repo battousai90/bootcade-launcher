@@ -275,6 +275,11 @@ void RomDatTab::build_group_card() {
     // Chaque version de chaque emulateur : c'est elle qui genere les DAT.
     for (const auto& v : EmulatorVariants::all())
         m_combo_emulator.append(EmulatorVariants::key(v.emulator, v.variant), v.label);
+    // Le libelle le plus long (« FinalBurn Neo — Nightly (Bootcade, rebuilt
+    // every day) ») fixait la largeur minimale de la carte, et avec elle celle
+    // de l'onglet : plus large que la fenetre, il etait coupe a droite.
+    for (auto* cell : m_combo_emulator.get_cells())
+        if (auto* text = dynamic_cast<Gtk::CellRendererText*>(cell)) text->property_ellipsize() = Pango::ELLIPSIZE_END;
     m_combo_emulator.set_tooltip_text(_("Which emulator this group describes. It says what generates its DAT files and which catalogue the audit judges."));
     m_combo_emulator.signal_changed().connect([this] {
         std::string emu, var;
@@ -403,6 +408,8 @@ void RomDatTab::build_source_card() {
     site_label->set_line_wrap(false);
     site_label->set_valign(Gtk::ALIGN_CENTER);
     m_combo_site.set_hexpand(true);
+    for (auto* cell : m_combo_site.get_cells())
+        if (auto* text = dynamic_cast<Gtk::CellRendererText*>(cell)) text->property_ellipsize() = Pango::ELLIPSIZE_END;
     m_combo_site.signal_changed().connect([this] {
         if (m_source_filling || group().id != m_url_group) return;
         const std::string id = m_combo_site.get_active_id().raw();
@@ -422,7 +429,9 @@ void RomDatTab::build_source_card() {
     m_source_hint.get_style_context()->add_class("set-sub");
     body->pack_start(m_source_hint, Gtk::PACK_SHRINK);
     card.body->pack_start(*body, Gtk::PACK_SHRINK);
-    card.frame->set_size_request(440, -1);
+    // Ses phrases passent a la ligne : un minimum plus bas laisse l'onglet
+    // tenir dans la fenetre, la carte s'elargit quand il y a la place.
+    card.frame->set_size_request(360, -1);
     m_top.pack_start(*card.frame, Gtk::PACK_EXPAND_WIDGET);
 }
 
@@ -1125,6 +1134,15 @@ void RomDatTab::on_add_files() {
 }
 
 void RomDatTab::on_primary_action() {
+    // Generer ou telecharger ecrit dans le dossier : partage avec un groupe
+    // d'une autre version, ses DAT seraient remplaces par ceux-ci.
+    const std::string other = DatSource::folder_shared_with(m_groups, m_current);
+    if (group().source != DatSource::Kind::Folder && !other.empty()) {
+        if (auto* top = dynamic_cast<Gtk::Window*>(get_toplevel()))
+            ui::notice(*top, _("Folder used by another group"),
+                       Glib::ustring::compose(_("The group \"%1\" keeps the DAT files of another version in this folder, and they would be overwritten. Choose a folder of its own for this group first."), other));
+        return;
+    }
     switch (group().source) {
         // Quoi lancer se lit dans l'emulateur du groupe, jamais dans le type
         // de source : la table des backends porte le geste de chacun.
