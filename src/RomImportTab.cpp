@@ -169,8 +169,11 @@ void RomImportTab::build_options() {
     m_check_use_library.set_tooltip_text(_("Borrow missing pieces from the archives your library already holds (never modified)."));
     m_check_rebuild_correct.set_label(_("Rebuild already-correct sets too"));
     m_check_rebuild_correct.set_tooltip_text(_("Rewrite even a perfect archive: DAT entry names, deflate, nothing the DAT does not list."));
+    m_check_rebuild_incomplete.set_label(_("Rebuild incomplete sets with the ROMs found"));
+    m_check_rebuild_incomplete.set_tooltip_text(_("Write a set even when some of its ROMs are found nowhere : it stays incomplete until the rest turns up."));
     rep_body->pack_start(m_check_use_library, Gtk::PACK_SHRINK);
     rep_body->pack_start(m_check_rebuild_correct, Gtk::PACK_SHRINK);
+    rep_body->pack_start(m_check_rebuild_incomplete, Gtk::PACK_SHRINK);
 
     // How each set is laid out is its DAT's rule (ROM Manager › DAT) : one
     // DAT split, another non-merged, each set follows its own.
@@ -205,7 +208,7 @@ void RomImportTab::build_options() {
 
     // Any change persists : these are the user's habits, not one-shot inputs.
     for (auto* c : {&m_check_recursive, &m_check_archives, &m_check_loose, &m_check_use_library,
-                    &m_check_rebuild_correct, &m_check_quarantine_rejects})
+                    &m_check_rebuild_correct, &m_check_rebuild_incomplete, &m_check_quarantine_rejects})
         c->signal_toggled().connect([this] { save_settings(); });
     // Whether Fix has anything to do depends on that option too.
     m_check_quarantine_rejects.signal_toggled().connect([this] { if (m_btn_fix) update_action_buttons(); });
@@ -379,6 +382,7 @@ void RomImportTab::reload_settings() {
     m_check_loose.set_active(flag("import_include_loose", true));
     m_check_use_library.set_active(flag("import_use_library", true));
     m_check_rebuild_correct.set_active(flag("import_rebuild_correct", false));
+    m_check_rebuild_incomplete.set_active(flag("import_rebuild_incomplete", false));
     std::string processed = str("import_processed", "subfolder");
     if (processed == "delete")    m_radio_delete.set_active(true);
     else if (processed == "keep") m_radio_keep.set_active(true);
@@ -398,6 +402,7 @@ void RomImportTab::save_settings() const {
     rm["import_include_loose"]      = m_check_loose.get_active();
     rm["import_use_library"]        = m_check_use_library.get_active();
     rm["import_rebuild_correct"]    = m_check_rebuild_correct.get_active();
+    rm["import_rebuild_incomplete"] = m_check_rebuild_incomplete.get_active();
     rm.erase("import_style");   // the merge mode is each DAT's now
     rm["import_processed"]          = m_radio_delete.get_active() ? "delete" : m_radio_keep.get_active() ? "keep" : "subfolder";
     rm["import_quarantine_rejects"] = m_check_quarantine_rejects.get_active();
@@ -412,6 +417,7 @@ RomInbox::Options RomImportTab::options_from_ui() const {
     o.include_loose    = m_check_loose.get_active();
     o.use_library      = m_check_use_library.get_active();
     o.rebuild_correct  = m_check_rebuild_correct.get_active();
+    o.rebuild_incomplete = m_check_rebuild_incomplete.get_active();
     Paths p = m_paths();
     o.processed = m_radio_delete.get_active() ? RomInbox::Options::Processed::Delete
                 : m_radio_keep.get_active()   ? RomInbox::Options::Processed::Keep
@@ -593,6 +599,8 @@ void RomImportTab::populate() {
         switch (s.action) {
             case RomInbox::Action::Move:    bits.push_back(_("matches the DAT, relocated as-is")); break;
             case RomInbox::Action::Rebuild:
+                if (s.partial) bits.push_back(Glib::ustring::compose(_("incomplete : %1 ROM(s) still missing"), (int)s.missing.size()).raw());
+                if (s.repaired_entries) bits.push_back(Glib::ustring::compose(_("%1 repaired"), s.repaired_entries).raw());
                 if (from_library) bits.push_back(Glib::ustring::compose(_("%1 piece(s) from the library"), from_library).raw());
                 if (s.renamed_entries) bits.push_back(Glib::ustring::compose(_("%1 renamed"), s.renamed_entries).raw());
                 if (!s.extra_entries.empty()) bits.push_back(Glib::ustring::compose(_("%1 extra entry(ies) left out"), (int)s.extra_entries.size()).raw());
@@ -737,8 +745,11 @@ Gtk::TreeModel::Row RomImportTab::source_row(const Gtk::TreeModel::Path& sorted_
 
 namespace {
 struct PieceCols : public Gtk::TreeModel::ColumnRecord {
-    Gtk::TreeModelColumn<Glib::ustring> action, expected, found_as, crc, size, source;
-    PieceCols() { add(action); add(expected); add(found_as); add(crc); add(size); add(source); }
+    Gtk::TreeModelColumn<Glib::ustring> action, expected, found_as, crc, crc_found, size, source;
+    // The found CRC against the expected one : 1 the same, 0 another, 2
+    // another that a checksum repair turns into it, -1 nothing to compare.
+    Gtk::TreeModelColumn<int> crc_state;
+    PieceCols() { add(action); add(expected); add(found_as); add(crc); add(crc_found); add(crc_state); add(size); add(source); }
 };
 }
 
@@ -762,7 +773,21 @@ void RomImportTab::on_selection_changed() {
     for (const auto& p : s.pieces) {
         auto rr = *(store->append());
         Glib::ustring action, source;
-        if (!p.resolved) {
+        rr[cols.crc_found] = "-";
+        rr[cols.crc_state] = -1;
+        if (p.resolved && !p.repair.empty()) {
+            // Another build, turned into the DAT's dump : its own CRC, and how.
+            action = _("Repair");
+            source = fs::path(p.src.container).filename().string() + _(" (import)") + "  ·  " + _(RomInbox::repair_label(p.repair));
+            rr[cols.crc_found] = crc_hex(p.wrong_crc);
+            rr[cols.crc_state] = 2;
+        } else if (!p.resolved && p.wrong) {
+            // Its name, another content : both CRCs side by side.
+            action = _("Wrong CRC");
+            source = fs::path(p.wrong_src.container).filename().string() + _(" (import)");
+            rr[cols.crc_found] = crc_hex(p.wrong_crc);
+            rr[cols.crc_state] = 0;
+        } else if (!p.resolved) {
             action = _("Missing");
             source = _("found nowhere");
         } else {
@@ -771,15 +796,25 @@ void RomImportTab::on_selection_changed() {
             else if (p.src.container == s.trigger_archive)                            action = _("Rename");
             else                                                                       action = p.src.from_inbox ? _("From import") : _("From library");
             source = where;
+            // Resolved means found by its CRC : the very one asked for.
+            rr[cols.crc_found] = p.sha1.empty() ? crc_hex(p.crc) : p.sha1;
+            rr[cols.crc_state] = 1;
         }
         rr[cols.action]   = action;
         rr[cols.expected] = p.target_name;
-        rr[cols.found_as] = (p.resolved && p.src.entry != p.target_name) ? Glib::ustring(p.src.entry) : Glib::ustring();
+        rr[cols.found_as] = (p.resolved && (p.src.entry != p.target_name || !p.repair.empty())) ? Glib::ustring(p.src.entry)
+                          : (!p.resolved && p.wrong)                    ? Glib::ustring(p.wrong_src.entry)
+                                                                        : Glib::ustring();
         rr[cols.crc]      = p.sha1.empty() ? crc_hex(p.crc) : p.sha1;
         rr[cols.size]     = human_size(p.size);
         rr[cols.source]   = source;
     }
     for (const auto& x : s.extra_entries) {
+        // Already on its piece's row, as its wrong build.
+        bool shown = false;
+        for (const auto& p : s.pieces)
+            if (p.wrong && p.wrong_src.container == s.trigger_archive && p.wrong_src.entry == x.name) { shown = true; break; }
+        if (shown) continue;
         auto rr = *(store->append());
         // Same name as a missing piece : the player HAS the file they were
         // after, in another build. That is a mismatch to fix, not a surplus,
@@ -796,20 +831,25 @@ void RomImportTab::on_selection_changed() {
             for (const auto& p : s.pieces)
                 if (!p.resolved && p.size == x.size && x.size > 0
                     && lower(fs::path(p.target_name).extension().string()) == lower(fs::path(x.name).extension().string())) { likely = &p; break; }
-        rr[cols.found_as] = x.name;
-        rr[cols.crc]      = crc_hex(x.crc);
-        rr[cols.size]     = human_size(x.size);
+        rr[cols.found_as]  = x.name;
+        rr[cols.crc_found] = crc_hex(x.crc);
+        rr[cols.size]      = human_size(x.size);
         if (wanted) {
-            rr[cols.action]   = _("Wrong CRC");
-            rr[cols.expected] = wanted->target_name;
-            rr[cols.source]   = Glib::ustring::compose(_("expected %1 : another build of the same file"), crc_hex(wanted->crc));
+            rr[cols.action]    = _("Wrong CRC");
+            rr[cols.expected]  = wanted->target_name;
+            rr[cols.crc]       = crc_hex(wanted->crc);
+            rr[cols.crc_state] = 0;
+            rr[cols.source]    = _("another build of the same file");
         } else if (likely) {
-            rr[cols.action]   = _("Wrong CRC");
-            rr[cols.expected] = likely->target_name;
-            rr[cols.source]   = Glib::ustring::compose(_("expected %1 : same size, other content, probably another build"), crc_hex(likely->crc));
+            rr[cols.action]    = _("Wrong CRC");
+            rr[cols.expected]  = likely->target_name;
+            rr[cols.crc]       = crc_hex(likely->crc);
+            rr[cols.crc_state] = 0;
+            rr[cols.source]    = _("same size, other content, probably another build");
         } else {
-            rr[cols.action]   = _("Left out");
-            rr[cols.source]   = _("not needed by the DAT");
+            rr[cols.action]    = _("Left out");
+            rr[cols.crc_state] = -1;
+            rr[cols.source]    = _("not needed by the DAT");
         }
     }
     auto* t = Gtk::make_managed<ui::Table>(Gtk::SELECTION_SINGLE);
@@ -826,14 +866,27 @@ void RomImportTab::on_selection_changed() {
             Gdk::RGBA colour = m_colours.muted;
             if (a == _("Keep")) colour = m_colours.ok;
             else if (a == _("Missing") || a == _("Wrong CRC")) colour = m_colours.err;
-            else if (a == _("Rename") || a == _("From import") || a == _("From library")) colour = m_colours.accent;
+            else if (a == _("Rename") || a == _("From import") || a == _("From library") || a == _("Repair")) colour = m_colours.accent;
             renderer->property_foreground_rgba() = colour;
         });
         t->view().append_column(*col);
     }
     { ui::ColumnOptions o; o.mono = true; o.expand = true; t->add_text_column(_("Expected name"), cols.expected, o); }
     { ui::ColumnOptions o; o.mono = true; o.expand = true; t->add_text_column(_("Found as"), cols.found_as, o); }
-    { ui::ColumnOptions o; o.mono = true; t->add_text_column(s.disk ? _("SHA1") : _("CRC"), cols.crc, o); }
+    { ui::ColumnOptions o; o.mono = true; t->add_text_column(s.disk ? _("SHA1 expected") : _("CRC expected"), cols.crc, o); }
+    {
+        ui::ColumnOptions o; o.mono = true;
+        auto* col = t->add_text_column(s.disk ? _("SHA1 found") : _("CRC found"), cols.crc_found, o);
+        auto* renderer = static_cast<Gtk::CellRendererText*>(col->get_first_cell());
+        col->set_cell_data_func(*renderer, [this, renderer](Gtk::CellRenderer*, const Gtk::TreeModel::iterator& it) {
+            ensure_colours();
+            if (!m_colours.ready) return;
+            static PieceCols c;
+            const int st = (*it)[c.crc_state];
+            renderer->property_foreground_rgba() = st == 1 ? m_colours.ok : st == 0 ? m_colours.err
+                                                 : st == 2 ? m_colours.accent : m_colours.muted;
+        });
+    }
     { ui::ColumnOptions o; o.xalign = 1.0f; t->add_text_column(_("Size"), cols.size, o); }
     { ui::ColumnOptions o; o.expand = true; t->add_text_column(_("Source"), cols.source, o); }
     m_detail->set_content(t);
@@ -1096,7 +1149,8 @@ void RomImportTab::set_busy(bool busy) {
     m_entry_inbox.set_sensitive(!busy);
     m_btn_select_all->set_sensitive(!busy);
     m_btn_select_none->set_sensitive(!busy);
-    for (auto* c : {&m_check_recursive, &m_check_archives, &m_check_loose, &m_check_use_library, &m_check_rebuild_correct})
+    for (auto* c : {&m_check_recursive, &m_check_archives, &m_check_loose, &m_check_use_library, &m_check_rebuild_correct,
+                    &m_check_rebuild_incomplete})
         c->set_sensitive(!busy);
     if (busy) { m_progress.set_fraction(0.0); m_progress.show(); m_progress_label.show(); m_btn_cancel->show(); }
     else      { m_progress.hide(); m_progress_label.hide(); m_btn_cancel->hide(); }
