@@ -3026,6 +3026,8 @@ void SettingsPanel::download_sooner(Gtk::Window& owner) {
                        "bc-error.svg");
         return;
     }
+    // Sous Windows la fiche n'a pas de build : c'est l'installation qui l'a lu.
+    build = MameSooner::installed().build;
     // Le binaire est la ; reste a savoir s'il demarrera sur cette machine.
     const std::string missing = MameSooner::missing_libraries(MameSooner::executable());
     if (!missing.empty())

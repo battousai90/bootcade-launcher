@@ -4,6 +4,7 @@
 
 #include "AppContext.h"
 #include "DatSource.h"
+#include "DefaultFolders.h"
 #include "MameCatalog.h"
 
 #include "CurlInit.h"
@@ -25,6 +26,13 @@ namespace MameSooner {
 namespace {
 
 constexpr const char* kUserAgent = "Bootcade (MAME Sooner)";
+#ifdef _WIN32
+constexpr const char* kExe = "mame.exe";
+constexpr const char* kChdman = "chdman.exe";
+#else
+constexpr const char* kExe = "mame";
+constexpr const char* kChdman = "chdman";
+#endif
 
 size_t to_string(char* p, size_t size, size_t n, void* out) {
     static_cast<std::string*>(out)->append(p, size * n);
@@ -60,6 +68,8 @@ nlohmann::json read_config() {
 
 // L'URL du zip : a cote de la fiche, sous le nom qu'elle donne.
 std::string zip_url(const Info& info) {
+    // Sous Windows, la fiche donne l'adresse entiere (nightly.link).
+    if (info.file.rfind("https://", 0) == 0) return info.file;
     std::string base = info_url();
     base = base.substr(0, base.rfind('/') + 1);
     return base + (info.file.empty() ? std::string("mame-sooner.zip") : info.file);
@@ -84,9 +94,73 @@ bool extract(zip_t* za, const char* name, const std::string& dest) {
     return true;
 }
 
+#ifdef _WIN32
+// GET sur l'API GitHub (sans jeton : 60 appels par heure, bien assez).
+bool get_json(const std::string& url, nlohmann::json& out, std::string& error) {
+    CURL* curl = curl_easy_init();
+    if (!curl) { error = "curl"; return false; }
+    std::string body;
+    struct curl_slist* headers = curl_slist_append(nullptr, "Accept: application/vnd.github+json");
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, to_string);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 20L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
+    const CURLcode rc = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    if (rc != CURLE_OK) { error = curl_easy_strerror(rc); return false; }
+    if (status != 200)  { error = "HTTP " + std::to_string(status); return false; }
+    try { out = nlohmann::json::parse(body); } catch (const std::exception& e) { error = e.what(); return false; }
+    return true;
+}
+
+/* Le serveur Bootcade ne republie que le Sooner Linux. Sous Windows, on prend
+ * directement le dernier passage reussi de la CI Windows de MAMEdev (branche
+ * master) : son artefact mame-windows-gcc-x64 est un MAME complet, sans DLL,
+ * que nightly.link sert sans jeton. Ni taille ni SHA-256 connus d'avance :
+ * l'executable extrait doit repondre a -version pour etre garde. */
+Info fetch_windows_build() {
+    Info info;
+    constexpr const char* api = "https://api.github.com/repos/mamedev/mame";
+    nlohmann::json runs, arts;
+    if (!get_json(std::string(api) + "/actions/workflows/ci-windows.yml/runs?branch=master&event=push&per_page=30",
+                  runs, info.error))
+        return info;
+    // Le plus recent qui a reussi, choisi ici : le filtre status=success de
+    // l'API n'est pas fiable.
+    nlohmann::json best;
+    for (const auto& r : runs.value("workflow_runs", nlohmann::json::array()))
+        if (r.value("status", "") == "completed" && r.value("conclusion", "") == "success"
+            && (best.is_null() || r.value("created_at", "") > best.value("created_at", "")))
+            best = r;
+    if (best.is_null()) { info.error = "no successful Windows build"; return info; }
+    const std::string run_id = std::to_string(best.value("id", (std::uint64_t)0));
+    if (!get_json(std::string(api) + "/actions/runs/" + run_id + "/artifacts", arts, info.error)) return info;
+    for (const auto& a : arts.value("artifacts", nlohmann::json::array())) {
+        const std::string name = a.value("name", std::string());
+        if (name.rfind("mame-windows-gcc-x64-", 0) != 0 || a.value("expired", true)) continue;
+        info.commit = best.value("head_sha", std::string());
+        info.date   = best.value("created_at", std::string());
+        info.file   = "https://nightly.link/mamedev/mame/actions/runs/" + run_id + "/" + name + ".zip";
+        info.ok     = !info.commit.empty();
+        return info;
+    }
+    info.error = "no Windows build in the latest MAME CI run";
+    return info;
+}
+#endif
+
 } // namespace
 
 Info fetch_info() {
+#ifdef _WIN32
+    return fetch_windows_build();
+#endif
     Info info;
     CURL* curl = curl_easy_init();
     if (!curl) { info.error = "curl"; return info; }
@@ -131,6 +205,11 @@ std::string channel() {
 }
 
 std::string default_install_dir() {
+    // A cote de FinalBurn Neo (Emulators/FBNeo), dans le dossier Bootcade.
+    return DefaultFolders::sub("Emulators/MAME Sooner");
+}
+
+std::string legacy_install_dir() {
     if (const char* isolated = std::getenv("BOOTCADE_CONFIG_DIR"); isolated && *isolated)
         return std::string(isolated) + "/mame-sooner";
     const char* home = std::getenv("HOME");
@@ -139,7 +218,12 @@ std::string default_install_dir() {
 
 std::string install_dir() {
     const std::string chosen = read_config().value("mame_sooner_dir", std::string());
-    return chosen.empty() ? default_install_dir() : chosen;
+    if (!chosen.empty()) return chosen;
+    // Un Sooner installe avant ce dossier par defaut reste ou il est : le
+    // joueur n'a rien a refaire.
+    std::error_code ec;
+    if (fs::is_regular_file(legacy_install_dir() + "/" + kExe, ec)) return legacy_install_dir();
+    return default_install_dir();
 }
 
 bool set_install_dir(const std::string& dir, std::string& error) {
@@ -150,7 +234,7 @@ bool set_install_dir(const std::string& dir, std::string& error) {
     if (ec) { error = ec.message(); return false; }
     // Ce qui est deja installe suit : seulement nos trois fichiers, le reste
     // du dossier n'est pas a nous.
-    for (const char* name : {"mame", "chdman", "installed.json"}) {
+    for (const char* name : {kExe, kChdman, "installed.json"}) {
         const fs::path src = fs::path(from) / name, dest = fs::path(dir) / name;
         if (!fs::exists(src, ec)) continue;
         fs::rename(src, dest, ec);
@@ -172,7 +256,7 @@ bool set_install_dir(const std::string& dir, std::string& error) {
 }
 
 std::string executable() {
-    const std::string exe = install_dir() + "/mame";
+    const std::string exe = install_dir() + "/" + kExe;
     std::error_code ec;
     return fs::is_regular_file(exe, ec) ? exe : std::string();
 }
@@ -231,8 +315,8 @@ bool install(const Info& info, std::string& error,
     if (rc != CURLE_OK) return fail(curl_easy_strerror(rc));
 
     if (progress) progress(0.92, "SHA-256");
-    if (fs::file_size(zip_path, ec) != info.size) return fail("size mismatch");
-    if (DatSource::sha256_of(zip_path) != info.sha256) return fail("SHA-256 mismatch");
+    if (info.size && fs::file_size(zip_path, ec) != info.size) return fail("size mismatch");
+    if (!info.sha256.empty() && DatSource::sha256_of(zip_path) != info.sha256) return fail("SHA-256 mismatch");
 
     if (progress) progress(0.95, "unzip");
     int zerr = 0;
@@ -241,15 +325,22 @@ bool install(const Info& info, std::string& error,
     const std::string fresh = dir + "/.new";
     fs::remove_all(fresh, ec);
     fs::create_directories(fresh, ec);
-    const bool ok = extract(za, "mame", fresh + "/mame");
+    const bool ok = extract(za, kExe, fresh + "/" + kExe);
     // chdman n'est pas indispensable : son absence n'empeche pas de jouer.
-    extract(za, "chdman", fresh + "/chdman");
+    extract(za, kChdman, fresh + "/" + kChdman);
     zip_close(za);
     if (!ok) return fail("no mame executable in the archive");
 
-    nlohmann::json note = {{"build", info.build}, {"commit", info.commit}, {"date", info.date}};
+    // Sans fiche (Windows), le build se lit sur l'executable lui-meme : un
+    // fichier qui ne repond pas n'est pas un MAME.
+    std::string build = info.build;
+    if (build.empty()) {
+        build = MameCatalog::installed_build(fresh + "/" + kExe);
+        if (build.empty()) return fail("the downloaded MAME does not start");
+    }
+    nlohmann::json note = {{"build", build}, {"commit", info.commit}, {"date", info.date}};
     { std::ofstream o(fresh + "/installed.json"); o << note.dump(2) << "\n"; }
-    for (const char* name : {"mame", "chdman", "installed.json"}) {
+    for (const char* name : {kExe, kChdman, "installed.json"}) {
         if (!fs::exists(fresh + "/" + name, ec)) continue;
         fs::rename(fresh + "/" + name, dir + "/" + name, ec);
         if (ec) return fail(ec.message());

@@ -532,7 +532,8 @@ private:
     Glib::Dispatcher m_mame_update_dispatcher;
     // Written by the worker thread, read after dispatch.
     std::string   m_mame_update_channel;
-    std::string   m_mame_update_build;     // Sooner : le build publie
+    std::string   m_mame_update_build;     // Sooner : le build publie (vide sous Windows)
+    std::string   m_mame_update_commit;    // Sooner : son commit, ce qu'on compare
     std::string   m_mame_update_version;   // officiel : « 0.290 », vide si a jour
     // ── Sorting ────────────────────────────────────────────────────────
     // Applied to the filtered vector before the model is filled, so all three
