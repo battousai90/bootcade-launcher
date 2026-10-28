@@ -886,6 +886,8 @@ bool DatabaseManager::createTables() {
         // exactly. Without it every CRC lookup scans all ~225k ROM rows, which the
         // ROM manager does thousands of times per analysis.
         "CREATE INDEX IF NOT EXISTS idx_roms_crc_lower ON roms(LOWER(crc));",
+        // Le pendant par nom, pour getGamesByRomName.
+        "CREATE INDEX IF NOT EXISTS idx_roms_name_lower ON roms(LOWER(name));",
         "CREATE INDEX IF NOT EXISTS idx_dat_files_filename ON dat_files(filename);",
         "CREATE INDEX IF NOT EXISTS idx_rom_cache_filename ON rom_cache(filename);",
         "CREATE INDEX IF NOT EXISTS idx_rom_cache_rom_id ON rom_cache(rom_id);",
@@ -3520,6 +3522,34 @@ std::vector<Game> DatabaseManager::getGamesByRomCrc(unsigned long crc, const std
     return results;
 }
 
+std::vector<Game> DatabaseManager::getGamesByRomName(const std::string& rom_name, const std::string& emulator) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::vector<Game> results;
+    const char* sql = "SELECT g.name, g.system, g.emulator FROM roms r JOIN games g ON r.game_id = g.id WHERE LOWER(r.name) = ? AND (? = '' OR g.emulator = ?);";
+    sqlite3_stmt* stmt;
+    if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return results;
+
+    std::string name = rom_name;
+    for (auto& c : name) c = static_cast<char>(std::tolower((unsigned char)c));
+    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, emulator.c_str(), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 3, emulator.c_str(), -1, SQLITE_STATIC);
+
+    std::set<std::tuple<std::string,std::string,std::string>> seen;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        std::string gname = safe_column_text(stmt, 0);
+        std::string system = safe_column_text(stmt, 1);
+        std::string emu = safe_column_text(stmt, 2);
+        if (emu.empty()) emu = "fbneo";
+        if (seen.insert({gname, system, emu}).second) {
+            Game g = getGame(gname, system, emu);
+            if (!g.name.empty()) results.push_back(g);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
 bool DatabaseManager::getDirectorySnapshot(const std::string& path, int& file_count, time_t& last_modified) {
     const char* sql = "SELECT file_count, last_modified FROM directory_snapshots WHERE path = ?;";
     sqlite3_stmt* stmt;
@@ -3658,8 +3688,15 @@ void DatabaseManager::beginMameCatalogRebuild() {
     // jour) ne change rien aux fichiers de la collection, et sans cela toute
     // la bibliotheque MAME retombait a « missing » jusqu'au prochain scan.
     sqlite3_exec(m_db, "DROP TABLE IF EXISTS temp.mame_status_keep;", nullptr, nullptr, nullptr);
+    // Indexee par le nom : commitMameCatalogRebuild y cherche chaque machine.
+    // Sans cle, c'etait un parcours complet par machine : 34 s sur 50 000
+    // machines, fenetre figee (« ne repond pas ») au demarrage qui suit une
+    // mise a jour de MAME.
     sqlite3_exec(m_db,
-        "CREATE TEMP TABLE mame_status_keep AS "
+        "CREATE TEMP TABLE mame_status_keep (name TEXT PRIMARY KEY, status TEXT);",
+        nullptr, nullptr, nullptr);
+    sqlite3_exec(m_db,
+        "INSERT OR IGNORE INTO temp.mame_status_keep "
         "SELECT name, status FROM mame_catalog WHERE status IS NOT NULL AND status <> 'missing';",
         nullptr, nullptr, nullptr);
     sqlite3_exec(m_db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);

@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -44,6 +45,28 @@ bool get(const std::string& url, std::string& body, long timeout) {
     return rc == CURLE_OK && status == 200;
 }
 
+// Encode un morceau d'adresse comme le homelab l'attend (tout sauf A-Z a-z 0-9 - _ . ~).
+std::string url_part(const std::string& s) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string out;
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += (char)c;
+        else { out += '%'; out += hex[c >> 4]; out += hex[c & 15]; }
+    }
+    return out;
+}
+
+// Un modele d'adresse de la base, ses {champs} remplaces (encodes).
+std::string fill(std::string tpl, const std::vector<std::pair<std::string, std::string>>& fields) {
+    for (const auto& f : fields)
+        for (size_t p = tpl.find(f.first); p != std::string::npos; p = tpl.find(f.first, p)) {
+            const std::string v = url_part(f.second);
+            tpl.replace(p, f.first.size(), v);
+            p += v.size();
+        }
+    return tpl;
+}
+
 std::string cache_path(const std::string& file) {
     const fs::path dir = fs::path(AppContext::get_user_config_dir()) / "crcdb";
     std::error_code ec;
@@ -55,6 +78,11 @@ std::string cache_path(const std::string& file) {
 
 bool Db::load(const std::string& file, std::string* error) {
     m_entries.clear();
+    m_chd_bytes.clear();
+    m_chd_disks.clear();
+    m_systems.clear();
+    m_urls.clear();
+    m_chd_url.clear();
     m_loaded = false;
     const std::string local = cache_path(file);
 
@@ -97,12 +125,25 @@ bool Db::load(const std::string& file, std::string* error) {
                 for (const auto& c : (*it)["c"]) e.crcs.push_back(std::stoul(c.get<std::string>(), nullptr, 16));
             std::sort(e.crcs.begin(), e.crcs.end());
             if (it->contains("z") && (*it)["z"].is_number_unsigned()) e.bytes = (*it)["z"].get<unsigned long long>();
+            e.date = it->value("d", std::string());
             m_entries.emplace(it.key(), std::move(e));
         }
         if (j.contains("chds") && j["chds"].is_object())
-            for (auto it = j["chds"].begin(); it != j["chds"].end(); ++it)
+            for (auto it = j["chds"].begin(); it != j["chds"].end(); ++it) {
                 if (it->contains("z") && (*it)["z"].is_number_unsigned())
                     m_chd_bytes[it.key()] = (*it)["z"].get<unsigned long long>();
+                if (it->contains("f") && (*it)["f"].is_object())
+                    for (auto d = (*it)["f"].begin(); d != (*it)["f"].end(); ++d) m_chd_disks[it.key()].push_back(d.key());
+            }
+        if (j.contains("systems") && j["systems"].is_object())
+            for (auto e = j["systems"].begin(); e != j["systems"].end(); ++e)
+                if (e->is_object())
+                    for (auto s = e->begin(); s != e->end(); ++s)
+                        if (s->is_string()) m_systems[e.key()][s.key()] = s->get<std::string>();
+        if (j.contains("urls") && j["urls"].is_object())
+            for (auto u = j["urls"].begin(); u != j["urls"].end(); ++u)
+                if (u->is_string()) m_urls[u.key()] = u->get<std::string>();
+        m_chd_url = j.value("chd_url", std::string());
     } catch (const std::exception& ex) {
         if (error) *error = std::string("crcdb : ") + ex.what();
         return false;
@@ -132,6 +173,40 @@ unsigned long long Db::bytes_of(const std::string& key) const {
 unsigned long long Db::chd_bytes(const std::string& name) const {
     auto it = m_chd_bytes.find(name);
     return it == m_chd_bytes.end() ? 0 : it->second;
+}
+
+std::string Db::key_for(const std::string& emulator, const std::string& system, const std::string& name) const {
+    auto e = m_systems.find(emulator);
+    if (e == m_systems.end()) return {};
+    auto s = e->second.find(system);
+    if (s == e->second.end()) s = e->second.find("*");
+    if (s == e->second.end()) return {};
+    return s->second.empty() ? name : s->second + "/" + name;
+}
+
+bool Db::has(const std::string& key, std::string* date) const {
+    auto it = m_entries.find(key);
+    if (it == m_entries.end()) return false;
+    if (date) *date = it->second.date;
+    return true;
+}
+
+std::string Db::url_for(const std::string& key) const {
+    // Le prefixe est tout ce qui precede le nom du jeu : « Arcade/FBNeo/megadrive/sonic ».
+    const size_t slash = key.rfind('/');
+    const std::string prefix = slash == std::string::npos ? std::string() : key.substr(0, slash);
+    const std::string name = slash == std::string::npos ? key : key.substr(slash + 1);
+    auto u = m_urls.find(prefix);
+    if (u == m_urls.end()) return {};
+    return fill(u->second, {{"{name}", name}});
+}
+
+std::vector<std::pair<std::string, std::string>> Db::chd_files(const std::string& name) const {
+    std::vector<std::pair<std::string, std::string>> out;
+    auto it = m_chd_disks.find(name);
+    if (it == m_chd_disks.end() || m_chd_url.empty()) return out;
+    for (const auto& disk : it->second) out.emplace_back(fill(m_chd_url, {{"{name}", name}, {"{disk}", disk}}), disk);
+    return out;
 }
 
 std::string file_for(const std::string& source_kind, const std::string& emulator) {

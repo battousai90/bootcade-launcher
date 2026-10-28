@@ -20,6 +20,8 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace RomInbox {
@@ -43,6 +45,18 @@ struct PiecePlan {
     std::string   owner;
     // A CHD's identity : the SHA1 its header declares (no CRC applies).
     std::string   sha1;
+    // Not resolved, but a file of the import folder carries its name with
+    // another content : another build of this very ROM. `wrong_crc` is what
+    // that file holds, `wrong_src` where it is ; the player compares it with
+    // `crc`, the one the DAT asks for.
+    bool          wrong = false;
+    unsigned long wrong_crc = 0;
+    PieceSource   wrong_src;
+    // That other build turns into the DAT's very dump once transformed, the
+    // way clrmamepro's ROM checksum analysis repairs a file : the transform
+    // (repair_label() names it), applied by apply() and checked against
+    // `crc` before the file is written. `src` is then `wrong_src`.
+    std::string   repair;
 };
 
 // A DAT ROM that could be found neither in the inbox nor in the library. Carries
@@ -88,6 +102,11 @@ struct SetPlan {
     // that disk or not.
     bool disk = false;
     int  pieces_from_library = 0;            // how many pieces come from roms_paths
+    int  repaired_entries    = 0;            // pieces rewritten by a checksum repair
+    // Rebuilt with the pieces found, some still missing (Options::
+    // rebuild_incomplete) : RomVault's partial fix. The set is written, and
+    // stays incomplete until the rest turns up.
+    bool partial = false;
     int  renamed_entries     = 0;            // pieces whose source entry name differs
     bool selected = true;                    // UI checkbox
 };
@@ -105,6 +124,10 @@ struct Options {
     // Rebuild even a set that is already perfect as it sits : normalises the
     // archive (DAT names, deflate, nothing extra) instead of relocating it.
     bool rebuild_correct  = false;
+    // Write a set even when some of its ROMs are found nowhere, with what
+    // there is (RomVault fixes partial sets the same way). Off, an
+    // incomplete set is only reported.
+    bool rebuild_incomplete = false;
     // What becomes of an inbox file once every piece it held has been used.
     enum class Processed { Subfolder, Delete, Keep };
     Processed processed   = Processed::Subfolder;
@@ -145,6 +168,12 @@ struct Report {
     // game the library already has complete and correct elsewhere : a pure
     // duplicate with nothing left to do, not an unrecognized file.
     std::vector<std::string> already_have;
+    // What each import file holds (entry, CRC), and every CRC the library
+    // already has : after a Fix, a file all of whose entries were used or
+    // already sit in the library has nothing left to give (RomVault deletes
+    // such a file the same way). A copy Library › Fix sent over is one.
+    std::unordered_map<std::string, std::vector<std::pair<std::string, unsigned long>>> inbox_contents;
+    std::unordered_set<unsigned long> library_crcs;
     int complete = 0, fixable = 0, incomplete = 0, already = 0;
     bool cancelled = false;
     // True when the library pool was empty, which makes "Incomplete" verdicts
@@ -176,5 +205,8 @@ struct ApplyResult {
 ApplyResult apply(const Report& report, const Callbacks& cb);
 
 const char* action_label(Action a);
+
+// What a checksum repair did to the file, for the player ("" for none).
+const char* repair_label(const std::string& repair);
 
 } // namespace RomInbox
