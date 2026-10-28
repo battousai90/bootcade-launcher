@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="2.0.2" date="2026-10-28">
+      <description>
+        <p>Repair ROMs on import, rebuild incomplete sets and install MAME Sooner on Windows</p>
+      </description>
+    </release>
     <release version="2.0.1" date="2026-10-24">
       <description>
         <p>Bootcade 2.0.1: MAME update notifications, separate MAME versions, analog controls on triggers</p>
