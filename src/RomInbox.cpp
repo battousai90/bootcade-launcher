@@ -391,7 +391,7 @@ bool rebuild_set(const SetPlan& plan, const Relocations& relocated, std::string&
             o.write(reinterpret_cast<const char*>(fixed.data()), (std::streamsize)fixed.size());
             o.close();
             if (!o) { error = "cannot write " + file.string(); zip_discard(out); fs::remove(tmp_path, ec); return false; }
-            zs = zip_source_file(out, file.c_str(), 0, -1);
+            zs = zip_source_file(out, file.string().c_str(), 0, -1);
         } else if (RomArchive::is_zip(container)) {
             zip_t* src = nullptr;
             zip_int64_t src_idx = 0;
