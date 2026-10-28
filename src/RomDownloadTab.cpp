@@ -425,8 +425,9 @@ DownloadSources::Source RomDownloadTab::current_source() const {
 bool RomDownloadTab::eligible(const Set& s, const DownloadSources::Source& src) const {
     if (src.id.empty()) return false;
     if (src.kind == "bootcade")  return s.emulator == "fbneo" && !s.is_chd && !s.dat_header.empty();
-    if (src.kind == "lolroms")   return !LolRoms::folder_for(s.emulator, s.system).empty();
-    if (src.kind == "retroroms") return !RetroRoms::folder_for(s.emulator, s.system).empty();
+    // Ce que LolRoms et RetroRoms proposent, c'est la base du homelab qui le dit (verification
+    // de disponibilite) : un jeu qu'ils n'ont pas disparait alors de la liste.
+    if (src.kind == "lolroms" || src.kind == "retroroms") return s.emulator == "mame" || s.emulator == "fbneo";
     return src.serves(s.emulator) && !s.is_chd;
 }
 
@@ -567,23 +568,34 @@ void RomDownloadTab::start_availability_check() {
             };
             for (const auto& s : sets) {
                 if (m_check_cancel) break;
-                bool known = false;
-                std::string day, size;
-                const bool has = src.kind == "lolroms" ? lol.has(s.emulator, s.system, s.name, s.is_chd, known, &day, &size)
-                                                       : retro.has(s.emulator, s.system, s.name, s.is_chd, known, &day, &size);
+                bool known = false, has = false;
+                std::string day, size, dbkey;
+                const CrcDb::Db* db = db_for(s);
+                if (db && db->routed()) {
+                    // La base du homelab sait ce que le site a : le site ne se lit plus.
+                    known = true;
+                    dbkey = db->key_for(s.emulator, s.system, s.name);
+                    has = !dbkey.empty() && (s.is_chd ? !db->chd_files(s.name).empty() : db->has(dbkey, &day));
+                } else {
+                    has = src.kind == "lolroms" ? lol.has(s.emulator, s.system, s.name, s.is_chd, known, &day, &size)
+                                                : retro.has(s.emulator, s.system, s.name, s.is_chd, known, &day, &size);
+                    if (db) {
+                        std::string folder;
+                        if (src.kind == "lolroms") folder = LolRoms::folder_for(s.emulator, s.system);
+                        else if (s.emulator == "fbneo") folder = fs::path(RetroRoms::folder_for(s.emulator, s.system)).filename().string();
+                        dbkey = CrcDb::key_for(src.kind, folder, s.name);
+                    }
+                }
                 if (!known) continue;
                 if (!has) { out[key_of(s.system, s.name)] = Avail::No; continue; }
                 sizes[key_of(s.system, s.name)] = size;
                 // Les CRC du fichier, connus : ils disent tout, sans date a deviner.
-                if (const CrcDb::Db* db = db_for(s)) {
-                    std::string folder;
-                    if (src.kind == "lolroms") folder = LolRoms::folder_for(s.emulator, s.system);
-                    else if (s.emulator == "fbneo") folder = fs::path(RetroRoms::folder_for(s.emulator, s.system)).filename().string();
+                if (db) {
                     // La taille de ce qui sera telecharge : RetroRoms n'affiche rien pour un dossier CHD.
-                    if (const auto z = s.is_chd ? db->chd_bytes(s.name) : db->bytes_of(CrcDb::key_for(src.kind, folder, s.name)))
+                    if (const auto z = s.is_chd ? db->chd_bytes(s.name) : db->bytes_of(dbkey))
                         bytes[key_of(s.system, s.name)] = z;
                     int have = 0;
-                    const auto v = db->check(CrcDb::key_for(src.kind, folder, s.name), s.crcs, &have);
+                    const auto v = db->check(dbkey, s.crcs, &have);
                     if (v == CrcDb::Verdict::Match || v == CrcDb::Verdict::Mismatch) crcinfo[key_of(s.system, s.name)] = {have, (int)s.crcs.size()};
                     if (v == CrcDb::Verdict::Match)    { out[key_of(s.system, s.name)] = Avail::Verified; continue; }
                     if (v == CrcDb::Verdict::Mismatch) { out[key_of(s.system, s.name)] = Avail::Outdated; continue; }
@@ -948,6 +960,42 @@ void RomDownloadTab::start_worker() {
 void RomDownloadTab::worker() {
     std::map<std::string, int> bootcade_left;   // compte -> telechargements restants
     bool bootcade_asked = false, retro_checked = false;
+    // Les bases du homelab, lues une fois par file : elles disent ou telecharger.
+    std::map<std::string, CrcDb::Db> dbs;
+    auto routes_for = [&](const Set& set, const std::string& kind) -> const CrcDb::Db* {
+        const std::string f = CrcDb::file_for(kind, set.emulator);
+        if (f.empty()) return nullptr;
+        auto it = dbs.find(f);
+        if (it == dbs.end()) { CrcDb::Db d; d.load(f); it = dbs.emplace(f, std::move(d)).first; }
+        return it->second.loaded() && it->second.routed() ? &it->second : nullptr;
+    };
+    // Un jeu a l'adresse que donne la base : <jeu>.7z / <jeu>.zip, ou <jeu>/<disque>.chd.
+    auto fetch_routed = [&](const CrcDb::Db& db, const Set& set, const std::string& dest, const DownloadSources::Fetch& opt,
+                            const std::function<void(double)>& progress) {
+        DownloadSources::Result res;
+        if (set.is_chd) {
+            const auto disks = db.chd_files(set.name);
+            if (disks.empty()) { res.reason = _("not available on this source"); return res; }
+            const std::string out_dir = (fs::path(dest) / set.name).string();
+            std::error_code ec;
+            fs::create_directories(out_dir, ec);
+            for (size_t i = 0; i < disks.size(); ++i) {
+                DownloadSources::Result one;
+                if (!DownloadSources::fetch_file(disks[i].first, (fs::path(out_dir) / disks[i].second).string(), opt, m_cancel_current,
+                                                 [&](double f) { progress((i + f) / disks.size()); }, one))
+                    return one;
+            }
+            res.ok = true;
+            res.path = out_dir;
+            return res;
+        }
+        const std::string key = db.key_for(set.emulator, set.system, set.name);
+        const std::string url = key.empty() ? std::string() : db.url_for(key);
+        if (url.empty()) { res.reason = _("not available on this source"); return res; }
+        const std::string ext = url.size() > 4 && url.compare(url.size() - 4, 4, ".zip") == 0 ? ".zip" : ".7z";
+        DownloadSources::fetch_file(url, (fs::path(dest) / (set.name + ext)).string(), opt, m_cancel_current, progress, res);
+        return res;
+    };
     for (;;) {
         std::shared_ptr<Item> item;
         {
@@ -1005,11 +1053,21 @@ void RomDownloadTab::worker() {
                     }
                 }
             } else if (src.kind == "lolroms") {
-                auto res = LolRoms::download(s.emulator, s.system, s.name, s.is_chd, item->dest, m_cancel_current, progress);
-                r.ok = res.ok; r.path = res.path; r.reason = res.reason; r.site_fault = res.site_fault;
+                if (const CrcDb::Db* db = routes_for(s, src.kind)) {
+                    r = fetch_routed(*db, s, item->dest, {}, progress);
+                } else {
+                    auto res = LolRoms::download(s.emulator, s.system, s.name, s.is_chd, item->dest, m_cancel_current, progress);
+                    r.ok = res.ok; r.path = res.path; r.reason = res.reason; r.site_fault = res.site_fault;
+                }
             } else if (src.kind == "retroroms") {
                 if (!retro_checked) { retro_checked = true; RetroRoms::status(); }   // rouvre la session si elle a expire
-                r = RetroRoms::download(s.emulator, s.system, s.name, s.is_chd, item->dest, m_cancel_current, progress);
+                if (const CrcDb::Db* db = routes_for(s, src.kind)) {
+                    DownloadSources::Fetch opt;
+                    opt.cookie_jar = RetroRoms::session_file();
+                    r = fetch_routed(*db, s, item->dest, opt, progress);
+                } else {
+                    r = RetroRoms::download(s.emulator, s.system, s.name, s.is_chd, item->dest, m_cancel_current, progress);
+                }
                 if (!r.ok && r.http_status == 403) {
                     // Pas connecte, ou quota du site atteint : les suivants auraient le meme sort.
                     const auto st = RetroRoms::status();
@@ -1030,7 +1088,8 @@ void RomDownloadTab::worker() {
                 r.reason = _("other version than the DAT on this source (CRC differ) : will not be offered again");
                 std::string day;
                 bool known = false;
-                if (src.kind == "lolroms") { LolRoms::Catalog c; c.has(s.emulator, s.system, s.name, s.is_chd, known, &day); }
+                if (const CrcDb::Db* db = routes_for(s, src.kind)) db->has(db->key_for(s.emulator, s.system, s.name), &day);
+                else if (src.kind == "lolroms") { LolRoms::Catalog c; c.has(s.emulator, s.system, s.name, s.is_chd, known, &day); }
                 else if (src.kind == "retroroms") { RetroRoms::Catalog c; c.has(s.emulator, s.system, s.name, s.is_chd, known, &day); }
                 DownloadSources::remember_wrong(src.id, key_of(s.system, s.name), day);
                 wrong = true;

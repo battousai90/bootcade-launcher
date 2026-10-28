@@ -41,6 +41,8 @@ Status status();
 // `why` dit ce qui a coince.
 bool sign_in(const std::string& id, const std::string& password, std::string& why);
 void sign_out();
+// Le fichier de session (cookies) a donner a un telechargement par adresse.
+std::string session_file();
 
 std::string folder_for(const std::string& emulator, const std::string& system);
 

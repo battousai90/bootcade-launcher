@@ -297,6 +297,8 @@ bool sign_in(const std::string& id, const std::string& password, std::string& wh
     return false;
 }
 
+std::string session_file() { return jar_path(); }
+
 void sign_out() {
     std::error_code ec;
     fs::remove(jar_path(), ec);
