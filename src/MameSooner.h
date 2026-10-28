@@ -30,7 +30,9 @@ namespace MameSooner {
 constexpr const char* kChannelRelease = "release";
 constexpr const char* kChannelSooner  = "sooner";
 
-// La fiche publiee par le serveur Bootcade.
+// La fiche publiee par le serveur Bootcade. Sous Windows, le serveur ne
+// publiant que le Sooner Linux, elle se construit depuis la CI Windows de
+// MAMEdev (file = adresse entiere, ni taille ni SHA-256, build lu a l'installation).
 constexpr const char* kInfoUrl =
     "https://files.bootcade.duckdns.org/emulators/mame/sooner/mame-sooner.json";
 
@@ -48,13 +50,15 @@ Info fetch_info();
 std::string channel();
 
 // Le dossier ou le MAME Sooner est installe : celui choisi dans Settings,
-// sinon ~/.local/share/bootcade/mame-sooner (sous BOOTCADE_CONFIG_DIR quand
-// il est pose, pour qu'un build de chantier n'ecrase pas l'installation du
-// joueur). Le meme chemin vu de
+// sinon <dossier Bootcade>/Emulators/MAME Sooner, a cote de FinalBurn Neo.
+// Un Sooner deja installe dans l'ancien dossier (~/.local/share/bootcade/
+// mame-sooner) y reste. Le meme chemin vu de
 // l'hote et du bac a sable Flatpak : c'est l'hote qui lance MAME.
 std::string install_dir();
 // Le dossier quand le joueur n'en a pas choisi (mame_sooner_dir vide).
 std::string default_install_dir();
+// L'ancien dossier par defaut, garde pour les installations deja faites.
+std::string legacy_install_dir();
 // Choisit le dossier de Sooner (mame_sooner_dir) et y deplace ce qui est
 // deja installe. False et `error` si le deplacement echoue.
 bool set_install_dir(const std::string& dir, std::string& error);

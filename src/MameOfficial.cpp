@@ -2,6 +2,7 @@
 #include "MameOfficial.h"
 
 #include "DatSource.h"
+#include "DefaultFolders.h"
 #include "MameSooner.h"
 
 #include <archive.h>
@@ -190,8 +191,14 @@ Release fetch_latest() {
 }
 
 std::string install_dir() {
-    // A cote du MAME Sooner : meme racine, meme isolement d'un build de chantier.
-    return (fs::path(MameSooner::install_dir()).parent_path() / "mame-official").string();
+    // Avant, a cote du dossier du Sooner : une installation faite la reste
+    // ou elle est. Sinon Emulators/MAME Official, dans le dossier Bootcade.
+    std::error_code ec;
+    for (const std::string& old : {MameSooner::install_dir(), MameSooner::legacy_install_dir()}) {
+        const std::string dir = (fs::path(old).parent_path() / "mame-official").string();
+        if (fs::is_regular_file(dir + "/current/" + kExe, ec)) return dir;
+    }
+    return DefaultFolders::sub("Emulators/MAME Official");
 }
 
 std::string executable() {

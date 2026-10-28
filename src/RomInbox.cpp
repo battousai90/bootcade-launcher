@@ -78,6 +78,90 @@ bool compute_file_crc(const std::string& path, unsigned long& crc, uint64_t& siz
     return true;
 }
 
+// ── Checksum repair ─────────────────────────────────────────────────────────
+// clrmamepro's "ROM checksum analysis" : a file that is not the DAT's dump
+// may still hold it, in the wrong byte order, doubled, split or padded. Each
+// transform is tried, and kept only when its result has exactly the size and
+// the CRC the DAT asks for : a repair is never a guess.
+using Bytes = std::vector<unsigned char>;
+
+const char* const kRepairs[] = {
+    "swap16", "swap32", "halves", "first_half", "second_half",
+    "even", "odd", "mirror", "pad00", "padff", "trim",
+};
+
+bool transform(const std::string& kind, const Bytes& in, uint64_t size, Bytes& out) {
+    const uint64_t n = in.size();
+    out.clear();
+    if (kind == "swap16" || kind == "swap32") {
+        const uint64_t w = kind == "swap16" ? 2 : 4;
+        if (n != size || n % w) return false;
+        out = in;
+        for (uint64_t i = 0; i < n; i += w) std::reverse(out.begin() + i, out.begin() + i + w);
+    } else if (kind == "halves") {
+        if (n != size || n % 2) return false;
+        out.insert(out.end(), in.begin() + n / 2, in.end());
+        out.insert(out.end(), in.begin(), in.begin() + n / 2);
+    } else if (kind == "first_half" || kind == "second_half") {
+        if (n != 2 * size) return false;
+        auto from = in.begin() + (kind == "first_half" ? 0 : size);
+        out.assign(from, from + size);
+    } else if (kind == "even" || kind == "odd") {
+        if (n != 2 * size) return false;
+        out.reserve(size);
+        for (uint64_t i = kind == "even" ? 0 : 1; i < n; i += 2) out.push_back(in[i]);
+    } else if (kind == "mirror") {
+        if (2 * n != size) return false;
+        out = in;
+        out.insert(out.end(), in.begin(), in.end());
+    } else if (kind == "pad00" || kind == "padff") {
+        if (n == 0 || n >= size) return false;
+        out = in;
+        out.resize(size, kind == "pad00" ? 0x00 : 0xFF);
+    } else if (kind == "trim") {
+        if (n <= size) return false;
+        out.assign(in.begin(), in.begin() + size);
+    } else {
+        return false;
+    }
+    return out.size() == size;
+}
+
+unsigned long crc_of(const Bytes& b) {
+    return crc32(crc32(0L, Z_NULL, 0), b.data(), (uInt)b.size());
+}
+
+// The transform that turns `data` into the dump of that CRC and size, or "".
+std::string find_repair(const Bytes& data, unsigned long crc, uint64_t size) {
+    Bytes out;
+    for (const char* k : kRepairs)
+        if (transform(k, data, size, out) && crc_of(out) == crc) return k;
+    return {};
+}
+
+// One entry's bytes, whatever holds it : a loose file, or any archive.
+bool read_bytes(const std::string& container, const std::string& entry, Bytes& out, std::string& error) {
+    std::string file = container;
+    fs::path tmp;
+    if (RomArchive::looks_like_archive(container)) {
+        tmp = fs::temp_directory_path() / ("bootcade-repair-" + std::to_string(std::hash<std::string>{}(container + entry)));
+        std::unordered_map<std::string, std::string> files;
+        if (!RomArchive::extract(container, {entry}, tmp.string(), files, error)) {
+            std::error_code ec; fs::remove_all(tmp, ec);
+            return false;
+        }
+        auto it = files.find(entry);
+        if (it == files.end()) { error = "no " + entry + " in " + container; std::error_code ec; fs::remove_all(tmp, ec); return false; }
+        file = it->second;
+    }
+    std::ifstream f(file, std::ios::binary);
+    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    const bool ok = (bool)f || f.eof();
+    if (!tmp.empty()) { std::error_code ec; fs::remove_all(tmp, ec); }
+    if (!ok) error = "cannot read " + file;
+    return ok;
+}
+
 // Replace anything that would escape the intended directory. DAT headers and game
 // names are tame in practice, but they end up as filesystem paths so they get
 // sanitized rather than trusted.
@@ -175,6 +259,8 @@ bool verify_against_plan(const std::string& zip_path, const SetPlan& plan, std::
     for (const auto& e : produced) by_name[e.name] = &e;
 
     for (const auto& p : plan.pieces) {
+        // A partial set holds only what was found : the rest is not written.
+        if (!p.resolved && plan.partial) continue;
         auto it = by_name.find(p.target_name);
         if (it == by_name.end()) {
             error = "missing entry after rebuild: " + p.target_name;
@@ -189,7 +275,9 @@ bool verify_against_plan(const std::string& zip_path, const SetPlan& plan, std::
             return false;
         }
     }
-    if (produced.size() != plan.pieces.size()) {
+    const size_t expected = (size_t)std::count_if(plan.pieces.begin(), plan.pieces.end(),
+        [&](const PiecePlan& p) { return p.resolved || !plan.partial; });
+    if (produced.size() != expected) {
         error = "unexpected entry count after rebuild";
         return false;
     }
@@ -250,7 +338,7 @@ bool rebuild_set(const SetPlan& plan, const Relocations& relocated, std::string&
     {
         std::unordered_map<std::string, std::vector<std::string>> by_container;
         for (const auto& p : plan.pieces) {
-            if (!wanted(p)) continue;
+            if (!wanted(p) || !p.repair.empty()) continue;
             std::string c = container_of(p);
             // A loose file needs no extraction step at all : it *is* its own
             // one and only piece, read straight off disk further down.
@@ -280,12 +368,31 @@ bool rebuild_set(const SetPlan& plan, const Relocations& relocated, std::string&
         return false;
     }
 
+    size_t repaired_slot = 0;
     for (const auto& p : plan.pieces) {
         if (!wanted(p)) continue;
         const std::string container = container_of(p);
         zip_source_t* zs = nullptr;
 
-        if (RomArchive::is_zip(container)) {
+        if (!p.repair.empty()) {
+            // Transformed, then checked once more : only the DAT's dump is
+            // ever written under its name.
+            Bytes data, fixed;
+            if (!read_bytes(container, p.src.entry, data, error)) {
+                zip_discard(out); fs::remove(tmp_path, ec); return false;
+            }
+            if (!transform(p.repair, data, p.size, fixed) || crc_of(fixed) != p.crc) {
+                error = "checksum repair of " + p.src.entry + " no longer gives the DAT's CRC";
+                zip_discard(out); fs::remove(tmp_path, ec); return false;
+            }
+            fs::create_directories(staging.dir, ec);
+            const fs::path file = staging.dir / ("repaired-" + std::to_string(repaired_slot++));
+            std::ofstream o(file, std::ios::binary);
+            o.write(reinterpret_cast<const char*>(fixed.data()), (std::streamsize)fixed.size());
+            o.close();
+            if (!o) { error = "cannot write " + file.string(); zip_discard(out); fs::remove(tmp_path, ec); return false; }
+            zs = zip_source_file(out, file.c_str(), 0, -1);
+        } else if (RomArchive::is_zip(container)) {
             zip_t* src = nullptr;
             zip_int64_t src_idx = 0;
             if (!sources.locate(container, p.src.entry, src, src_idx)) {
@@ -376,6 +483,21 @@ bool move_file(const std::string& from, const std::string& to, std::string& erro
 
 // ── Public helpers ───────────────────────────────────────────────────────────
 
+const char* repair_label(const std::string& repair) {
+    if (repair == "swap16")      return N_("byte order swapped (16-bit)");
+    if (repair == "swap32")      return N_("byte order swapped (32-bit)");
+    if (repair == "halves")      return N_("halves swapped");
+    if (repair == "first_half")  return N_("first half kept");
+    if (repair == "second_half") return N_("second half kept");
+    if (repair == "even")        return N_("even bytes kept");
+    if (repair == "odd")         return N_("odd bytes kept");
+    if (repair == "mirror")      return N_("mirrored to full size");
+    if (repair == "pad00")       return N_("padded with 0x00");
+    if (repair == "padff")       return N_("padded with 0xFF");
+    if (repair == "trim")        return N_("trimmed to size");
+    return "";
+}
+
 const char* action_label(Action a) {
     switch (a) {
         case Action::Move:             return "Complete";
@@ -459,6 +581,13 @@ Report analyze(const std::string& inbox_dir,
     // ── 2. Index the inbox ───────────────────────────────────────────────────
     std::vector<InboxArchive> archives;
     PoolIndex inbox_pool;
+    // Every entry of the import folder by its file name, lowercased : a DAT
+    // ROM found nowhere by CRC may still sit there under its own name, in
+    // another build.
+    struct InboxNamed { PieceSource src; unsigned long crc; };
+    std::unordered_multimap<std::string, InboxNamed> inbox_by_name;
+    // Checksum repairs already tried : "container\x1fentry\x1fcrc" → transform.
+    std::unordered_map<std::string, std::string> repairs_tried;
     archives.reserve(zip_paths.size());
     for (size_t i = 0; i < zip_paths.size(); ++i) {
         if (is_cancelled(cb)) { rep.cancelled = true; return rep; }
@@ -488,8 +617,12 @@ Report analyze(const std::string& inbox_dir,
             }
             a.entries.push_back({fs::path(a.path).filename().string(), crc, size});
         }
-        for (const auto& e : a.entries)
+        for (const auto& e : a.entries) {
             inbox_pool.emplace(e.crc, PieceSource{a.path, e.name, true});
+            inbox_by_name.emplace(lower(fs::path(e.name).filename().string()), InboxNamed{{a.path, e.name, true}, e.crc});
+        }
+        auto& held = rep.inbox_contents[a.path];
+        for (const auto& e : a.entries) held.emplace_back(e.name, e.crc);
         archives.push_back(std::move(a));
     }
 
@@ -521,8 +654,10 @@ Report analyze(const std::string& inbox_dir,
                 }
                 it = usable.emplace(r.filepath, ok).first;
             }
-            if (it->second)
+            if (it->second) {
                 lib_pool.emplace(r.crc, PieceSource{r.filepath, r.entry_name, false});
+                rep.library_crcs.insert(r.crc);
+            }
         }
     }
     rep.library_pool_empty = options.use_library && lib_pool.empty();
@@ -544,6 +679,17 @@ Report analyze(const std::string& inbox_dir,
     if (options.use_library) lib_index = std::make_unique<RomResolve::CacheIndex>(db, options.roms_paths);
 
     std::unordered_map<std::string, SetPlan> best;  // "name\x1fsystem" → best plan
+
+    // An incomplete set written with the pieces found, when the player asked
+    // for it : at least one piece, or there is nothing to write.
+    auto make_partial = [&](SetPlan& plan) {
+        if (!options.rebuild_incomplete || plan.action != Action::Incomplete) return;
+        bool any = false;
+        for (const auto& pc : plan.pieces) if (pc.resolved) { any = true; break; }
+        if (!any) return;
+        plan.action  = Action::Rebuild;
+        plan.partial = true;
+    };
 
     // Memo for the content-discovery axis: shared BIOS and PROM dumps make the same
     // CRC come up for archive after archive, and each miss would otherwise be a
@@ -589,11 +735,12 @@ Report analyze(const std::string& inbox_dir,
         }
 
         // Candidate sets, along two axes.
-        struct Candidate { std::string name, system; bool by_name; };
+        // `by_rom` : found by a ROM's name alone (axis 3), never by content.
+        struct Candidate { std::string name, system; bool by_name; bool by_rom = false; };
         std::vector<Candidate> candidates;
         std::unordered_set<std::string> seen;
-        auto add_candidate = [&](const std::string& n, const std::string& s, bool by_name) {
-            if (seen.insert(n + '\x1f' + s).second) candidates.push_back({n, s, by_name});
+        auto add_candidate = [&](const std::string& n, const std::string& s, bool by_name, bool by_rom = false) {
+            if (seen.insert(n + '\x1f' + s).second) candidates.push_back({n, s, by_name, by_rom});
         };
 
         // Axis 1 : the archive's own name.
@@ -623,6 +770,28 @@ Report analyze(const std::string& inbox_dir,
             }
         }
 
+        // Axis 3 : neither its name nor its content, but its entries' names
+        // and sizes are those of a DAT ROM. Another build of that ROM (a
+        // loose 29lv160.u3 that is not the dump the DAT lists) : the set it
+        // belongs to is shown incomplete, with both CRCs, rather than the
+        // file as unknown. Only when nothing else matched, and only names
+        // that point at a handful of sets, since "1.bin" points at hundreds.
+        if (candidates.empty()) {
+            constexpr size_t kMaxGamesPerRomName = 32;
+            for (const auto& e : arc.entries) {
+                if (is_cancelled(cb)) { rep.cancelled = true; return rep; }
+                const std::string fname = lower(fs::path(e.name).filename().string());
+                const auto games = db->getGamesByRomName(fname, options.emulator);
+                if (games.size() > kMaxGamesPerRomName) continue;
+                for (const auto& g : games) {
+                    bool same_size = false;
+                    for (const auto& r : g.roms)
+                        if (lower(fs::path(r.name).filename().string()) == fname && (uint64_t)r.size == e.size) { same_size = true; break; }
+                    if (same_size) add_candidate(g.name, g.system, false, true);
+                }
+            }
+        }
+
         if (candidates.empty()) {
             {
                 std::unordered_set<unsigned long> distinct_crcs;
@@ -649,9 +818,13 @@ Report analyze(const std::string& inbox_dir,
 
         bool produced_any = false;
         bool saw_already_in_library = false; // a content-only match that turned out redundant
+        // Content-only matches left incomplete : set aside, and reported only
+        // if the archive matched nothing better. A file that belongs to a set
+        // still short of a ROM is that set's piece, not an unknown file.
+        std::vector<SetPlan> incomplete_only;
         std::string dbg_trace; // built only when this archive ends up unrecognized
 
-        for (const auto& [cand_name, cand_system, by_name] : candidates) {
+        for (const auto& [cand_name, cand_system, by_name, by_rom] : candidates) {
             const Game* found = book.game(cand_name, cand_system);
             std::string folder;
             const DatLayout::Archive* layout = found ? book.archive_for(*found, &folder) : nullptr;
@@ -724,6 +897,46 @@ Report analyze(const std::string& inbox_dir,
                     }
                 }
                 if (!piece.resolved) {
+                    // Found nowhere by its CRC : a file of the import folder
+                    // under its name is another build of it, worth both CRCs.
+                    // The trigger archive's own entry first.
+                    if (byname != arc_by_name.end()) {
+                        piece.wrong     = true;
+                        piece.wrong_crc = byname->second->crc;
+                        piece.wrong_src = {arc.path, byname->second->name, true};
+                    } else {
+                        auto range = inbox_by_name.equal_range(lower(fs::path(entry.name).filename().string()));
+                        if (range.first != range.second) {
+                            piece.wrong     = true;
+                            piece.wrong_crc = range.first->second.crc;
+                            piece.wrong_src = range.first->second.src;
+                        }
+                    }
+                }
+                // That other build may be the dump itself, transformed.
+                if (!piece.resolved && piece.wrong) {
+                    char hex[16]; snprintf(hex, sizeof(hex), "%08lx", entry.crc);
+                    const std::string key = piece.wrong_src.container + '\x1f' + piece.wrong_src.entry + '\x1f' + hex;
+                    auto tried = repairs_tried.find(key);
+                    if (tried == repairs_tried.end()) {
+                        Bytes data; std::string err;
+                        std::string found = read_bytes(piece.wrong_src.container, piece.wrong_src.entry, data, err)
+                                          ? find_repair(data, entry.crc, entry.size) : std::string();
+                        if (!err.empty()) log(cb, "  checksum repair : " + err);
+                        if (!found.empty())
+                            log(cb, "  " + piece.wrong_src.entry + " → " + entry.name + " : repaired by " + repair_label(found));
+                        tried = repairs_tried.emplace(key, found).first;
+                    }
+                    if (!tried->second.empty()) {
+                        piece.repair   = tried->second;
+                        piece.src      = piece.wrong_src;
+                        piece.resolved = true;
+                        plan.repaired_entries++;
+                        all_from_trigger = false;
+                        if (piece.src.container == arc.path) used_from_trigger.insert(piece.src.entry);
+                    }
+                }
+                if (!piece.resolved) {
                     all_resolved = false;
                     plan.missing.push_back({entry.name, entry.crc, entry.size});
                 }
@@ -776,13 +989,22 @@ Report analyze(const std::string& inbox_dir,
             // with "already in library" noise about games the user never asked
             // about. Sets matched by filename are always reported, since that is
             // the archive the user deliberately downloaded.
+            // RomVault's partial fix : what was found is written all the same.
+            // Only for the set the archive is named after ; a content match
+            // left incomplete waits below, so a shared PROM does not write
+            // dozens of sets it is a sliver of.
+            if (by_name) make_partial(plan);
             bool actionable = (plan.action == Action::Move || plan.action == Action::Rebuild);
             if (!by_name && !actionable) {
                 const char* an = plan.action == Action::AlreadyInLibrary ? "AlreadyInLibrary"
                                 : plan.action == Action::Incomplete       ? "Incomplete" : "?";
                 dbg_trace += " | candidate " + cand_name + "/" + cand_system +
                              " -> action=" + an + " by_name=0, skipped as non-actionable content-only match";
-                if (plan.action == Action::AlreadyInLibrary) saw_already_in_library = true;
+                // A duplicate only when the content says so : a ROM name is
+                // shared by several boards (29lv160.u3), and another set
+                // complete in the library proves nothing about this file.
+                if (plan.action == Action::AlreadyInLibrary && !by_rom) saw_already_in_library = true;
+                if (plan.action == Action::Incomplete) incomplete_only.push_back(std::move(plan));
                 continue;
             }
 
@@ -797,12 +1019,36 @@ Report analyze(const std::string& inbox_dir,
                 best[key] = std::move(plan);
         }
 
+        if (!produced_any && !saw_already_in_library && !incomplete_only.empty()) {
+            // The sets this archive gives the most of, from the import folder :
+            // a shared PROM also feeds sets it is a sliver of. A piece found
+            // by its CRC outweighs any number found by name only : a ROM name
+            // like 29lv160.u3 is shared by several boards, the dumps are not.
+            auto from_inbox = [](const SetPlan& p) {
+                int n = 0;
+                for (const auto& pc : p.pieces) n += (pc.resolved && pc.src.from_inbox) ? 1000 : pc.wrong ? 1 : 0;
+                return n;
+            };
+            int top = 0;
+            for (const auto& p : incomplete_only) top = std::max(top, from_inbox(p));
+            for (auto& plan : incomplete_only) {
+                if (from_inbox(plan) < top) continue;
+                make_partial(plan);
+                plan.dest_path = (fs::path(outbox_dir) / plan.dat_header /
+                                  (sanitize_component(plan.game_name) + ".zip")).string();
+                plan.selected = plan.partial;
+                std::string key = plan.game_name + '\x1f' + plan.system;
+                if (!best.count(key)) best[key] = std::move(plan);
+                produced_any = true;
+            }
+        }
+
         if (!produced_any) {
             if (saw_already_in_library) {
                 rep.already_have.push_back(arc.path);
             } else {
                 std::string cand_list;
-                for (const auto& [n, s, bn] : candidates)
+                for (const auto& [n, s, bn, br] : candidates)
                     cand_list += " " + n + "/" + s + (bn ? "(name)" : "(crc)");
                 log(cb, "[INBOX-DEBUG] unrecognized " + fs::path(arc.path).filename().string() +
                         " stem=\"" + stem + "\" candidates:" + cand_list + dbg_trace);
@@ -929,6 +1175,10 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
     // once every single one of its entries has landed somewhere. Anything holding
     // unclaimed data is left alone.
     std::unordered_set<std::string> consumed_entries;
+    // The content those sets now hold : an identical copy elsewhere in the
+    // import folder (the same zip downloaded twice, then unpacked) has
+    // nothing left to give either.
+    std::unordered_set<unsigned long> written_crcs;
     std::unordered_set<std::string> moved_archives;
     Relocations relocated;
 
@@ -969,6 +1219,11 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
             }
             if (plan.renamed_entries)
                 e.details.push_back(std::to_string(plan.renamed_entries) + " entry(ies) renamed to the DAT name");
+            for (const auto& p : plan.pieces)
+                if (!p.repair.empty())
+                    e.details.push_back(p.target_name + ": repaired (" + repair_label(p.repair) + ")");
+            if (plan.partial)
+                e.details.push_back("incomplete : " + std::to_string(plan.missing.size()) + " ROM(s) still missing");
             if (!plan.extra_entries.empty()) {
                 // A left-out entry named like a missing piece is a WRONG BUILD,
                 // not a surplus : said so, with both numbers, or the player
@@ -1025,6 +1280,7 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
             if (ok) {
                 res.moved++;
                 moved_archives.insert(plan.trigger_archive);
+                for (const auto& p : plan.pieces) if (p.resolved) written_crcs.insert(p.crc);
                 if (already == relocated.end()) relocated[plan.trigger_archive] = plan.dest_path;
                 describe(plan, RomManifest::action::Moved);
                 log(cb, "moved   " + plan.game_name + " → " + plan.dat_header);
@@ -1040,7 +1296,10 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
                 // Every piece the plan resolved counts as used.
                 for (const auto& p : plan.pieces)
                     if (p.resolved)
+                    {
                         consumed_entries.insert(p.src.container + '\x1f' + p.src.entry);
+                        written_crcs.insert(p.crc);
+                    }
                 std::string extra = plan.pieces_from_library
                                         ? " (" + std::to_string(plan.pieces_from_library) + " from library)"
                                         : "";
@@ -1088,20 +1347,69 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
     if (!res.cancelled) {
         report(cb, 99.0, _("Cleaning up the inbox…"));
         std::unordered_map<std::string, std::vector<std::string>> inbox_entries;
-        for (const auto& s : report_in.sets) {
-            if (moved_archives.count(s.trigger_archive)) continue;
-            if (inbox_entries.count(s.trigger_archive)) continue;
+        auto candidate = [&](const std::string& archive) {
+            if (moved_archives.count(archive) || inbox_entries.count(archive)) return;
             std::vector<std::string> names;
-            if (!RomArchive::looks_like_archive(s.trigger_archive))
-                names.push_back(fs::path(s.trigger_archive).filename().string());
-            else if (!RomArchive::list_names(s.trigger_archive, names))
-                continue;
-            inbox_entries[s.trigger_archive] = std::move(names);
+            if (!RomArchive::looks_like_archive(archive))
+                names.push_back(fs::path(archive).filename().string());
+            else if (!RomArchive::list_names(archive, names))
+                return;
+            inbox_entries[archive] = std::move(names);
+        };
+        // An entry the library already holds, or this run just wrote, by content.
+        auto in_library = [&](const std::string& archive, const std::string& entry) {
+            auto it = report_in.inbox_contents.find(archive);
+            if (it == report_in.inbox_contents.end()) return false;
+            for (const auto& [name, crc] : it->second)
+                if (name == entry) return report_in.library_crcs.count(crc) > 0 || written_crcs.count(crc) > 0;
+            return false;
+        };
+        // Every other import file that copies what was just written : the
+        // file the analysis listed is one of them, the others got no row of
+        // their own. One written entry at least, so a file the library
+        // merely already holds stays a duplicate for the quarantine below.
+        {
+            std::unordered_set<std::string> rejected(report_in.already_have.begin(), report_in.already_have.end());
+            rejected.insert(report_in.unrecognized.begin(), report_in.unrecognized.end());
+            for (const auto& [archive, held] : report_in.inbox_contents) {
+                if (rejected.count(archive)) continue;
+                bool wrote_any = false;
+                for (const auto& e : held) if (written_crcs.count(e.second)) { wrote_any = true; break; }
+                if (wrote_any) candidate(archive);
+            }
         }
+        // The archive that surfaced each set, and every import file a rebuilt
+        // set took a piece from : a loose ROM that completed a set is as used
+        // as the archive named after it.
+        std::unordered_set<std::string> applied;
+        for (const SetPlan* s : todo) applied.insert(s->game_name + '\x1f' + s->system);
+        // A file another set still draws on stays, whatever this run took
+        // from it : that set was left unselected, incomplete or failed.
+        std::unordered_set<std::string> still_needed;
+        for (const auto& s : report_in.sets) {
+            // A set the library already has asks nothing of any file.
+            if (s.action == Action::AlreadyInLibrary) continue;
+            const bool done = applied.count(s.game_name + '\x1f' + s.system) &&
+                              std::none_of(res.errors.begin(), res.errors.end(), [&](const std::string& e) {
+                                  return e.rfind(s.game_name + ": ", 0) == 0; });
+            for (const auto& p : s.pieces) {
+                const bool from_inbox = p.resolved && p.src.from_inbox;
+                if (done) { if (from_inbox) candidate(p.src.container); continue; }
+                if (from_inbox) still_needed.insert(p.src.container);
+                if (p.wrong && p.wrong_src.from_inbox) still_needed.insert(p.wrong_src.container);
+            }
+            if (!done) { still_needed.insert(s.trigger_archive); continue; }
+            candidate(s.trigger_archive);
+        }
+        for (const auto& n : still_needed) inbox_entries.erase(n);
         for (const auto& [archive, names] : inbox_entries) {
+            // Every entry used, or already in the library : what is left of
+            // the file is a copy of something the collection holds.
             bool fully_consumed = !names.empty();
             for (const auto& n : names) {
-                if (!consumed_entries.count(archive + '\x1f' + n)) { fully_consumed = false; break; }
+                if (consumed_entries.count(archive + '\x1f' + n) || in_library(archive, n)) continue;
+                fully_consumed = false;
+                break;
             }
             if (!fully_consumed) continue;
             if (retire_source(archive, "consumed")) res.consumed_archives++;

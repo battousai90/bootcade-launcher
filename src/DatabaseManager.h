@@ -274,6 +274,10 @@ public:
     // Find candidate games that reference a ROM with the given CRC (crc as uLong)
     // Un emulateur vide cherche dans les deux catalogues.
     std::vector<Game> getGamesByRomCrc(unsigned long crc, const std::string& emulator = "fbneo");
+    // Les jeux dont une ROM porte ce nom (sans tenir compte de la casse) : un
+    // fichier au bon nom mais d'un autre contenu est une autre version de
+    // cette ROM, qu'aucune recherche par CRC ne retrouve.
+    std::vector<Game> getGamesByRomName(const std::string& rom_name, const std::string& emulator = "fbneo");
     // Directory snapshot helpers (used for light pre-scan to detect folder changes)
     bool getDirectorySnapshot(const std::string& path, int& file_count, time_t& last_modified);
     bool updateDirectorySnapshot(const std::string& path, int file_count, time_t last_modified);

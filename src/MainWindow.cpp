@@ -6176,7 +6176,10 @@ void MainWindow::check_mame_update_async() {
         if (MameSooner::installed().build.empty()) return;
         std::thread([this]() {
             const auto info = MameSooner::fetch_info();
-            if (info.ok) m_mame_update_build = info.build;
+            if (info.ok) {
+                m_mame_update_commit = info.commit;
+                m_mame_update_build  = info.build.empty() ? info.commit.substr(0, 11) : info.build;
+            }
             m_mame_update_dispatcher.emit();
         }).detach();
         return;
@@ -6197,9 +6200,9 @@ void MainWindow::check_mame_update_async() {
 void MainWindow::on_mame_update_check_result() {
     if (m_mame_update_channel == MameSooner::kChannelSooner) {
         // Serveur injoignable : rien a dire au joueur.
-        if (m_mame_update_build.empty()) return;
+        if (m_mame_update_commit.empty()) return;
         const auto here = MameSooner::installed();
-        if (here.build.empty() || here.build == m_mame_update_build) return;
+        if (here.build.empty() || here.commit == m_mame_update_commit) return;
         m_mame_update_label.set_text(Glib::ustring::compose(
             _("A new MAME Sooner version is available: %1."), m_mame_update_build));
     } else {
