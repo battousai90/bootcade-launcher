@@ -216,7 +216,9 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     m_pages.set_hhomogeneous(false);
     m_pages.set_vhomogeneous(false);
     auto* pages_scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
-    pages_scroll->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+    // Jamais en largeur : un onglet trop large debordait, coupe a droite. Ses
+    // textes retrecissent a la place (let_shrink, plus bas).
+    pages_scroll->set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
     pages_scroll->set_shadow_type(Gtk::SHADOW_NONE);
     pages_scroll->add(m_pages);
     // La fenetre a la taille de Library, une fois pour toutes : aucun onglet ne
@@ -231,6 +233,7 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
 
     reload_settings();
     show_all_children();
+    ui::let_shrink(m_pages);
     show_tab("library");
 }
 

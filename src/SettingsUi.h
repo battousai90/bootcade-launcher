@@ -135,6 +135,11 @@ void fit_to_content(Gtk::Window& win, Gtk::Window* anchor = nullptr,
 // contenu le demande, borne a 95 % de l'ecran. Pour les fenetres dont les
 // tableaux defilent en hauteur mais ne doivent jamais etre rognes en largeur.
 void fit_work_window(Gtk::Window& win, Gtk::Window* anchor = nullptr);
+// Plus rien sous `root` n'impose sa largeur : un texte d'une ligne finit par
+// « … » faute de place, une liste deroulante aussi. Pose sur un contenu qui
+// ne defile pas en largeur, il garantit que rien ne depasse de la fenetre.
+// A rappeler apres avoir ajoute des widgets.
+void let_shrink(Gtk::Widget& root);
 // Tant que `win` est affichee, `main` porte la classe « behind-work » : la
 // feuille de style l'assombrit quand elle n'est pas la fenetre active.
 void dim_behind(Gtk::Window& win, Gtk::Window& main);

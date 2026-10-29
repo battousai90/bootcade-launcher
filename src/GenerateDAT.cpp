@@ -238,7 +238,7 @@ bool GenerateDAT::execute(Gtk::Window& parent, const std::string& fbneo_executab
 }
 
 void GenerateDAT::execute_mame(Gtk::Window& parent, const std::string& mame_executable,
-                               const std::string& dat_path, Gtk::Entry* dat_entry) {
+                               const std::string& dat_path, Gtk::Entry* dat_entry, bool quiet) {
     if (mame_executable.empty()) {
         SettingsUi::notice(parent, _("MAME executable missing"),
                            _("MAME was not found on this system. Install it, then try again."),
@@ -336,7 +336,8 @@ void GenerateDAT::execute_mame(Gtk::Window& parent, const std::string& mame_exec
     progress_dialog.hide();
 
     if (result > 0) {
-        show_success_dialog(parent, dat_path, dat_entry);
+        if (!quiet) show_success_dialog(parent, dat_path, dat_entry);
+        else if (dat_entry) dat_entry->set_text(dat_path);
     } else if (cancelled.load()) {
         SettingsUi::notice(parent, _("DAT generation cancelled"),
                            _("The DAT files were not written."),

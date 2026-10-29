@@ -3030,6 +3030,8 @@ void SettingsPanel::download_sooner(Gtk::Window& owner) {
     build = MameSooner::installed().build;
     // Le binaire est la ; reste a savoir s'il demarrera sur cette machine.
     const std::string missing = MameSooner::missing_libraries(MameSooner::executable());
+    // Pret : la suite (DAT, chargement, scan) s'enchaine sans un clic, comme
+    // pour FinalBurn Neo. Seul ce qui empeche MAME de demarrer se dit.
     if (!missing.empty())
         ui::notice(*parent, _("MAME Sooner needs more libraries"),
                    Glib::ustring::compose(
@@ -3037,11 +3039,6 @@ void SettingsPanel::download_sooner(Gtk::Window& owner) {
                          "needs to start: %2\n\nInstall them with your package manager "
                          "(usually the Qt 6 and SDL2 packages)."), build, missing),
                    "bc-info.svg");
-    else
-        ui::notice(*parent, _("MAME Sooner is ready"),
-                   Glib::ustring::compose(_("Bootcade now uses MAME Sooner %1. Its catalog "
-                                            "is read on the next start."), build),
-                   "bc-check.svg");
     // Ses DAT, generes par lui, dans son groupe (DatGroupSetup).
     m_sig_mame_installed.emit("sooner");
 }
@@ -3148,12 +3145,7 @@ void SettingsPanel::download_mame_official(Gtk::Window& owner) {
                          "start: %2\n\nInstall them with your package manager (usually the "
                          "Qt 6 and SDL2 packages)."), MameOfficial::version_of(tag), missing),
                    "bc-info.svg");
-    else
 #endif
-    ui::notice(*parent, _("MAME is ready"),
-               Glib::ustring::compose(_("Bootcade now uses the official MAME %1. Its catalog "
-                                        "is read on the next start."), MameOfficial::version_of(tag)),
-               "bc-check.svg");
     m_sig_mame_installed.emit("release");
 }
 

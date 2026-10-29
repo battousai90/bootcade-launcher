@@ -65,7 +65,7 @@ bool install_and_generate(Gtk::Window& parent, const std::string& emulator, cons
     if (emulator == "fbneo") {
         ok = GenerateDAT::execute(parent, exe, folder, nullptr, /*quiet=*/true);
     } else {
-        GenerateDAT::execute_mame(parent, exe, folder, nullptr);
+        GenerateDAT::execute_mame(parent, exe, folder, nullptr, /*quiet=*/true);
         ok = !DatSource::list_folder(folder).empty();
     }
     // Relu : la generation a pu toucher config.json (dossier de DAT de FBNeo).
