@@ -199,6 +199,7 @@ add_executable(bootcade
     src/RomResolve.cpp
     src/DatLayout.cpp
     src/RomManifest.cpp
+    src/TorrentZip.cpp
     src/RomLibraryTab.cpp
     src/RomImportTab.cpp
     src/RomOutboxTab.cpp

@@ -4,6 +4,7 @@
 #include "i18n.h"
 #include "RomArchive.h"
 #include "RomManifest.h"
+#include "TorrentZip.h"
 #include "RomScanner.h"
 
 #include <zip.h>
@@ -314,6 +315,21 @@ struct Staging {
     Staging& operator=(const Staging&) = delete;
 };
 
+// Remplace `zip_path` par sa version TorrentZip, verifiee contre le plan.
+// Faux, `zip_path` est intact.
+bool to_torrentzip(const std::string& zip_path, const SetPlan& plan) {
+    const std::string tz_path = zip_path + ".tz";
+    std::string err;
+    std::error_code ec;
+    if (!TorrentZip::rezip(zip_path, tz_path, err) || !verify_against_plan(tz_path, plan, err)) {
+        fs::remove(tz_path, ec);
+        return false;
+    }
+    fs::rename(tz_path, zip_path, ec);
+    if (ec) { fs::remove(tz_path, ec); return false; }
+    return true;
+}
+
 bool rebuild_set(const SetPlan& plan, const Relocations& relocated, std::string& error) {
     const std::string tmp_path = plan.dest_path + ".tmp";
     // A piece nobody could supply has nothing to write.
@@ -443,6 +459,10 @@ bool rebuild_set(const SetPlan& plan, const Relocations& relocated, std::string&
         fs::remove(tmp_path, ec);
         return false;
     }
+    // Au format TorrentZip, celui de RomVault et clrmamepro, qui sinon
+    // recompressaient chaque zip produit ici. Un zip qui ne s'y prete pas
+    // (4 Go ou plus) reste tel que libzip l'a ecrit.
+    to_torrentzip(tmp_path, plan);
 
     // Only now is the real destination touched.
     fs::rename(tmp_path, plan.dest_path, ec);
@@ -1274,6 +1294,22 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
                 copy_file_robust(already->second, plan.dest_path, true, cec);
                 ok = !cec;
                 if (!ok) error = "cannot copy from " + already->second + ": " + cec.message();
+            } else if (!TorrentZip::is_torrentzip(plan.trigger_archive)
+                       && RomArchive::is_zip(plan.trigger_archive)) {
+                // Deja complet, mais pas au format TorrentZip : ecrit a sa
+                // place dans ce format, puis l'original part comme un Move.
+                const std::string tmp = plan.dest_path + ".tmp";
+                std::error_code tec;
+                fs::copy_file(plan.trigger_archive, tmp, fs::copy_options::overwrite_existing, tec);
+                if (!tec && to_torrentzip(tmp, plan)) {
+                    fs::rename(tmp, plan.dest_path, tec);
+                    if (!tec) fs::remove(plan.trigger_archive, tec);
+                    ok = !tec;
+                    if (!ok) error = "cannot move the archive into place: " + tec.message();
+                } else {
+                    fs::remove(tmp, tec);
+                    ok = move_file(plan.trigger_archive, plan.dest_path, error);
+                }
             } else {
                 ok = move_file(plan.trigger_archive, plan.dest_path, error);
             }
