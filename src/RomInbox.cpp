@@ -1425,9 +1425,17 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
         fs::create_directories(dest_dir, ec);
         auto reject = [&](const std::string& path, const char* reason, const char* why) {
             fs::path src(path);
-            fs::path dest = dest_dir / src.filename();
-            if (fs::exists(dest, ec)) {
-                log(cb, "quarantine already holds " + src.filename().string() + " : left in the import folder");
+            // Deja en quarantaine sous ce nom : le meme fichier n'a plus a
+            // rester dans l'import, un autre prend un nom libre a cote.
+            bool same = false;
+            fs::path dest = RomManifest::free_destination(dest_dir.string(), src.string(), same);
+            if (same) {
+                std::error_code rec;
+                fs::remove(src, rec);
+                if (!rec) {
+                    res.quarantined++;
+                    log(cb, src.filename().string() + " : the same file is already in quarantine, copy removed");
+                }
                 return;
             }
             std::string err;

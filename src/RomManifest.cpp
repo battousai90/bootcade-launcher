@@ -4,11 +4,13 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -212,6 +214,38 @@ std::string Manifest::relative(const std::string& absolute_path) const {
 
 std::string Manifest::absolute(const std::string& rel_file) const {
     return (fs::path(m_root) / fs::path(rel_file)).string();
+}
+
+namespace {
+
+bool same_bytes(const fs::path& a, const fs::path& b) {
+    std::error_code ec;
+    if (fs::file_size(a, ec) != fs::file_size(b, ec) || ec) return false;
+    std::ifstream fa(a, std::ios::binary), fb(b, std::ios::binary);
+    if (!fa || !fb) return false;
+    std::vector<char> ba(1 << 16), bb(1 << 16);
+    while (fa && fb) {
+        fa.read(ba.data(), (std::streamsize)ba.size());
+        fb.read(bb.data(), (std::streamsize)bb.size());
+        if (fa.gcount() != fb.gcount() || !std::equal(ba.begin(), ba.begin() + fa.gcount(), bb.begin()))
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+std::string free_destination(const std::string& dir, const std::string& src, bool& same) {
+    same = false;
+    const fs::path from(src);
+    const std::string stem = from.stem().string(), ext = from.extension().string();
+    std::error_code ec;
+    for (int n = 1;; ++n) {
+        const fs::path dest = fs::path(dir) / (n == 1 ? from.filename().string()
+                                                       : stem + " (" + std::to_string(n) + ")" + ext);
+        if (!fs::exists(dest, ec)) return dest.string();
+        if (same_bytes(from, dest)) { same = true; return dest.string(); }
+    }
 }
 
 } // namespace RomManifest
