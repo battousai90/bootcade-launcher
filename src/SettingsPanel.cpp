@@ -867,6 +867,88 @@ Gtk::Widget* SettingsPanel::build_page_library() {
      * des 18 px de marge : imbriquee, elle se lit comme une precision de la
      * barre du dessus et non comme une seconde navigation.
      */
+    /* ── Source Folders ───────────────────────────────────────────────────
+     *
+     * AVANT les onglets d'emulateur : ces dossiers servent a tous. Des
+     * fichiers gardes hors de toute bibliotheque, ou le gestionnaire de ROMs
+     * prend les pieces qui reparent un set (le ToSort de RomVault). Lus
+     * seulement, jamais audites.
+     */
+    auto sources = ui::card("bc-folder.svg", _("Source Folders"),
+                            _("Files kept outside your libraries, like RomVault's ToSort. The ROM Manager "
+                              "takes the pieces that repair a set from them, for every emulator. "
+                              "Read only: never audited, never modified."));
+    m_button_add_sources.set_label(_("Add Folder"));
+    m_button_add_sources.set_image(*ui::image("bc-folder-plus.svg", ui::kIconButton));
+    m_button_add_sources.set_always_show_image(true);
+    m_button_add_sources.get_style_context()->add_class("accent-button");
+    m_button_add_sources.signal_clicked().connect([this] {
+        auto dialog = BcFileChooser(_("Select a source folder"), Gtk::FILE_CHOOSER_ACTION_SELECT_FOLDER);
+        dialog.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
+        dialog.add_button(_("Select"), Gtk::RESPONSE_OK);
+        if (dialog.run() != Gtk::RESPONSE_OK) return;
+        const std::string path = dialog.get_filename();
+        if (std::find(m_source_paths.begin(), m_source_paths.end(), path) == m_source_paths.end())
+            m_source_paths.push_back(path);
+        refresh_sources_list();
+    });
+    m_button_remove_sources.set_label(_("Remove"));
+    m_button_remove_sources.set_image(*ui::image("bc-trash-red.svg", ui::kIconButton));
+    m_button_remove_sources.set_always_show_image(true);
+    m_button_remove_sources.get_style_context()->add_class("set-danger");
+    m_button_remove_sources.signal_clicked().connect([this] {
+        auto iter = m_treeview_sources.get_selection()->get_selected();
+        if (!iter) return;
+        const int index = m_model_sources->get_path(iter)[0];
+        if (index >= 0 && index < (int)m_source_paths.size()) m_source_paths.erase(m_source_paths.begin() + index);
+        refresh_sources_list();
+    });
+    auto* sources_actions = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
+    sources_actions->set_valign(Gtk::ALIGN_CENTER);
+    sources_actions->pack_start(m_button_add_sources,    Gtk::PACK_SHRINK);
+    sources_actions->pack_start(m_button_remove_sources, Gtk::PACK_SHRINK);
+    sources.head->pack_end(*sources_actions, Gtk::PACK_SHRINK);
+
+    m_model_sources = Gtk::ListStore::create(m_cols_roms);
+    m_treeview_sources.set_model(m_model_sources);
+    m_treeview_sources.set_headers_visible(false);
+    m_treeview_sources.get_style_context()->add_class("set-romlist");
+    m_treeview_sources.append_column("", m_cols_roms.icon);
+    m_treeview_sources.append_column("", m_cols_roms.path);
+    if (auto* col = m_treeview_sources.get_column(1)) col->set_expand(true);
+    {
+        auto* cell = Gtk::manage(new Gtk::CellRendererText());
+        cell->property_xalign() = 1.0f;
+        auto* col = Gtk::manage(new Gtk::TreeViewColumn("", *cell));
+        col->add_attribute(cell->property_markup(), m_cols_roms.status);
+        m_treeview_sources.append_column(*col);
+    }
+    m_scrolled_sources.add(m_treeview_sources);
+    m_scrolled_sources.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+    m_scrolled_sources.set_propagate_natural_height(false);
+    m_scrolled_sources.set_min_content_height(m_sources_list_height);
+    m_scrolled_sources.set_max_content_height(m_sources_list_height);
+    m_scrolled_sources.get_style_context()->add_class("set-rows");
+    sources.body->pack_start(m_scrolled_sources, Gtk::PACK_SHRINK);
+
+    // La meme poignee que sous les dossiers de ROMs.
+    m_sources_grip.add(*ui::image("bc-grip.svg", 20));
+    m_sources_grip.get_style_context()->add_class("set-grip");
+    m_sources_grip.set_halign(Gtk::ALIGN_CENTER);
+    m_sources_grip.set_tooltip_text(_("Drag to resize the list"));
+    m_sources_grip.add_events(Gdk::BUTTON_PRESS_MASK | Gdk::BUTTON_RELEASE_MASK | Gdk::BUTTON1_MOTION_MASK);
+    m_sources_grip.signal_realize().connect([this] {
+        if (auto win = m_sources_grip.get_window())
+            win->set_cursor(Gdk::Cursor::create(m_sources_grip.get_display(), "ns-resize"));
+    });
+    m_sources_drag = Gtk::GestureDrag::create(m_sources_grip);
+    m_sources_drag->signal_drag_begin().connect([this](double, double) { m_sources_grip_start = m_sources_list_height; });
+    m_sources_drag->signal_drag_update().connect([this](double, double offset_y) {
+        set_sources_list_height(m_sources_grip_start + static_cast<int>(offset_y));
+    });
+    sources.body->pack_start(m_sources_grip, Gtk::PACK_SHRINK);
+    page->pack_start(*sources.frame, Gtk::PACK_SHRINK);
+
     auto* emu_bar = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
     emu_bar->get_style_context()->add_class("set-tabbar");
     for (const auto& entry : emulator_registry()) {
@@ -3443,6 +3525,16 @@ void SettingsPanel::set_roms_list_height(int height) {
     apply_roms_list_height();
 }
 
+// Comme set_roms_list_height : relacher le minimum avant de poser les bornes.
+void SettingsPanel::set_sources_list_height(int height) {
+    height = std::max(80, std::min(height, 900));
+    if (height == m_sources_list_height) return;
+    m_sources_list_height = height;
+    m_scrolled_sources.set_min_content_height(-1);
+    m_scrolled_sources.set_max_content_height(height);
+    m_scrolled_sources.set_min_content_height(height);
+}
+
 void SettingsPanel::refresh_emulator_state() {
     const std::string exe = get_fbneo_executable();
     const bool executable = !exe.empty() && ::access(exe.c_str(), X_OK) == 0;
@@ -3962,6 +4054,7 @@ void SettingsPanel::on_window_shown() {
     refresh_account_row();
     refresh_emulator_state();
     refresh_roms_list();
+    refresh_sources_list();
     refresh_profile_stats();
     m_btn_test_net.set_sensitive(true);
     probe_network_async();
@@ -4574,6 +4667,7 @@ bool SettingsPanel::load_from_file(const std::string& filename) {
             if (rm.contains("outbox_path") && rm["outbox_path"].is_string())         set_outbox_path(rm["outbox_path"]);
             if (rm.contains("quarantine_path") && rm["quarantine_path"].is_string()) set_quarantine_path(rm["quarantine_path"]);
         }
+        m_source_paths = DatSource::source_paths();
 
         /* ── La bibliotheque : les cles a plat deviennent celles de FBNeo ──
          *
@@ -4767,6 +4861,7 @@ bool SettingsPanel::load_from_file(const std::string& filename) {
 
     refresh_emulator_state();
     refresh_roms_list();
+    refresh_sources_list();
     return true;
 }
 
@@ -4819,6 +4914,7 @@ bool SettingsPanel::save_to_file(const std::string& filename) {
     j["scan_recursive"]   = fbneo.scan_recursive;
     j["scan_loose_files"] = fbneo.scan_loose_files;
 
+    j["rom_manager"]["source_paths"] = m_source_paths;
     j["dat_path"] = get_dat_path();
     // Les dossiers Outbox et Quarantaine appartiennent aux onglets de ROM
     // Manager, qui les ecrivent eux-memes au moment ou on les change. Ce
@@ -4936,6 +5032,23 @@ void SettingsPanel::refresh_roms_list() {
         std::error_code ec;
         const bool present = std::filesystem::is_directory(path, ec);
         auto row = *m_model_roms->append();
+        row[m_cols_roms.icon]   = folder;
+        row[m_cols_roms.path]   = path;
+        row[m_cols_roms.status] = present
+            ? Glib::ustring("<span foreground='" + SettingsUi::tone_hex(*this, "success") + "'>● ") + _("Active") + "</span>"
+            : Glib::ustring("<span foreground='" + SettingsUi::tone_hex(*this, "error") + "'>● ") + _("Missing") + "</span>";
+    }
+}
+
+void SettingsPanel::refresh_sources_list() {
+    if (!m_model_sources) return;
+    m_model_sources->clear();
+    auto folder = IconManager::load_tinted("icons/bc-folder.svg", 18, 18,
+                                           SettingsUi::probe_color(*this, "set-sub"));
+    for (const auto& path : m_source_paths) {
+        std::error_code ec;
+        const bool present = std::filesystem::is_directory(path, ec);
+        auto row = *m_model_sources->append();
         row[m_cols_roms.icon]   = folder;
         row[m_cols_roms.path]   = path;
         row[m_cols_roms.status] = present

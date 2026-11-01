@@ -52,6 +52,7 @@ private:
     // Threading
     void worker_thread();
     void worker_cache_scan();   // every emulator but FinalBurn Neo
+    void scan_sources();        // the ROM Manager's source folders, into the archive cache
     void on_progress_update();
     void on_scan_finished();
     

@@ -268,7 +268,7 @@ void RomLibraryTab::build_summary() {
     m_pill_ignored   = Gtk::make_managed<ui::Pill>(_("Ignored"),   ui::PillTone::Neutral, true);
     m_pill_incorrect->set_tooltip_text(_("Wrong data (bad CRC) and no good copy anywhere in the library : cannot be repaired, Fix moves them to quarantine."));
     m_pill_misnamed->set_tooltip_text(_("Right data under the wrong entry names : Fix sends them to Import, which rebuilds them."));
-    m_pill_fixable->set_tooltip_text(_("Absent or wrong pieces that exist elsewhere in the library : Fix sends them to Import, which rebuilds them."));
+    m_pill_fixable->set_tooltip_text(_("Absent or wrong pieces that exist elsewhere, in a library or a source folder : Fix sends them to Import, which rebuilds them."));
     m_pill_extra->set_tooltip_text(_("Files in the archive the DAT does not need : Fix moves them to quarantine. A set still lacking a ROM is Missing afterwards."));
     m_pill_orphan->set_tooltip_text(_("Archives no set of the DAT group claims : Fix moves them to quarantine."));
     for (auto* p : {m_pill_total, m_pill_correct, m_pill_missing, m_pill_incorrect, m_pill_misnamed,

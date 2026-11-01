@@ -87,8 +87,36 @@ int compare(const std::u32string& a, const std::u32string& b) {
 
 void put16(std::vector<unsigned char>& b, uint16_t v) { b.push_back(v & 0xFF); b.push_back(v >> 8); }
 void put32(std::vector<unsigned char>& b, uint32_t v) { for (int i = 0; i < 4; ++i) b.push_back((v >> (8 * i)) & 0xFF); }
+void put64(std::vector<unsigned char>& b, uint64_t v) { for (int i = 0; i < 8; ++i) b.push_back((v >> (8 * i)) & 0xFF); }
 uint16_t get16(const unsigned char* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 uint32_t get32(const unsigned char* p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
+uint64_t get64(const unsigned char* p) { return (uint64_t)get32(p) | ((uint64_t)get32(p + 4) << 32); }
+
+// ZIP64, as RomVault writes it (Compress/ZipFile, ZipExtraFieldWrite.Zip64) :
+// a value that reaches 0xFFFFFFFF is written as 0xFFFFFFFF and given in a
+// 0x0001 extra field instead ; nothing of ZIP64 appears otherwise, so a zip
+// under 4 GB is exactly what it always was.
+constexpr uint32_t kMax32     = 0xFFFFFFFFu;
+constexpr uint16_t kVersion64 = 45;   // version needed when an entry carries ZIP64
+
+// The local header's ZIP64 field : both sizes, as soon as either needs it.
+bool local_zip64(uint64_t usize, uint64_t csize) { return usize >= kMax32 || csize >= kMax32; }
+
+// The central header's ZIP64 field : each value that needs it, in this order.
+std::vector<unsigned char> central_zip64(uint64_t usize, uint64_t csize, uint64_t offset) {
+    std::vector<unsigned char> values;
+    if (usize  >= kMax32) put64(values, usize);
+    if (csize  >= kMax32) put64(values, csize);
+    if (offset >= kMax32) put64(values, offset);
+    std::vector<unsigned char> field;
+    if (values.empty()) return field;
+    put16(field, 0x0001);
+    put16(field, (uint16_t)values.size());
+    field.insert(field.end(), values.begin(), values.end());
+    return field;
+}
+
+uint32_t clamp32(uint64_t v) { return v >= kMax32 ? kMax32 : (uint32_t)v; }
 
 struct Entry {
     zip_uint64_t   index = 0;
@@ -96,10 +124,28 @@ struct Entry {
     std::u32string key;      // for the order
     std::string    stored;   // bytes written
     uint16_t       flags = kFlags;
-    uint32_t       crc = 0, csize = 0, usize = 0, offset = 0;
+    uint32_t       crc = 0;
+    uint64_t       csize = 0, usize = 0, offset = 0;
 };
 
-bool fail(std::string& error, const std::string& why, const std::string& out_zip, std::ofstream* out = nullptr) {
+// Moves the bytes of [from, end) `by` bytes further, from the end backwards :
+// room for a ZIP64 field the local header turned out to need.
+bool shift_up(std::fstream& f, uint64_t from, uint64_t end, uint64_t by) {
+    std::vector<char> buf(1 << 16);
+    uint64_t pos = end;
+    while (pos > from) {
+        const uint64_t n = std::min<uint64_t>(buf.size(), pos - from);
+        pos -= n;
+        f.seekg((std::streamoff)pos);
+        f.read(buf.data(), (std::streamsize)n);
+        f.seekp((std::streamoff)(pos + by));
+        f.write(buf.data(), (std::streamsize)n);
+        if (!f) return false;
+    }
+    return true;
+}
+
+bool fail(std::string& error, const std::string& why, const std::string& out_zip, std::fstream* out = nullptr) {
     error = why;
     if (out) out->close();
     std::error_code ec;
@@ -116,7 +162,7 @@ bool rezip(const std::string& in_zip, const std::string& out_zip, std::string& e
     struct Closer { zip_t* z; ~Closer() { zip_close(z); } } closer{za};
 
     const zip_int64_t n = zip_get_num_entries(za, 0);
-    if (n < 0 || n >= 0xFFFF) { error = "too many entries for TorrentZip"; return false; }
+    if (n < 0) { error = "cannot read " + in_zip; return false; }
     std::vector<Entry> entries;
     for (zip_int64_t i = 0; i < n; ++i) {
         zip_stat_t st;
@@ -128,8 +174,7 @@ bool rezip(const std::string& in_zip, const std::string& out_zip, std::string& e
         e.index = (zip_uint64_t)i;
         e.name  = st.name;
         if (e.name.empty() || e.name.back() == '/') { error = "directory entry " + e.name; return false; }
-        if (st.size >= 0xFFFFFFFFull) { error = e.name + " is 4 GB or more"; return false; }
-        e.usize  = (uint32_t)st.size;
+        e.usize  = (uint64_t)st.size;
         e.key    = utf8_to_u32(e.name);
         e.stored = stored_name(e.name, e.flags);
         entries.push_back(std::move(e));
@@ -141,26 +186,34 @@ bool rezip(const std::string& in_zip, const std::string& out_zip, std::string& e
             return false;
         }
 
-    std::ofstream out(fs::path(out_zip), std::ios::binary | std::ios::trunc);
+    std::fstream out(fs::path(out_zip), std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
     if (!out) { error = "cannot write " + out_zip; return false; }
 
     std::vector<unsigned char> in_buf(1 << 16), out_buf(1 << 16);
     for (auto& e : entries) {
-        const auto start = (uint64_t)out.tellp();
-        if (start >= 0xFFFFFFFFull) return fail(error, "archive reaches 4 GB", out_zip, &out);
-        e.offset = (uint32_t)start;
+        e.offset = (uint64_t)out.tellp();
+        // The uncompressed size is known : its ZIP64 field, if any, is in
+        // the header from the start. The compressed one is only known once
+        // written (below).
+        bool zip64 = local_zip64(e.usize, 0);
         std::vector<unsigned char> head;
         put32(head, 0x04034b50);
-        put16(head, kVersion);
+        put16(head, zip64 ? kVersion64 : kVersion);
         put16(head, e.flags);
         put16(head, 8);
         put16(head, kDosTime);
         put16(head, kDosDate);
         put32(head, 0); put32(head, 0); put32(head, 0);   // crc, sizes : once the data is written
         put16(head, (uint16_t)e.stored.size());
-        put16(head, 0);
+        put16(head, zip64 ? 20 : 0);
         out.write((const char*)head.data(), (std::streamsize)head.size());
         out.write(e.stored.data(), (std::streamsize)e.stored.size());
+        const uint64_t extra_at = (uint64_t)out.tellp();
+        if (zip64) {
+            std::vector<unsigned char> field;
+            put16(field, 0x0001); put16(field, 16); put64(field, 0); put64(field, 0);
+            out.write((const char*)field.data(), (std::streamsize)field.size());
+        }
 
         zip_file_t* zf = zip_fopen_index(za, e.index, 0);
         if (!zf) return fail(error, "cannot read " + e.name, out_zip, &out);
@@ -191,47 +244,94 @@ bool rezip(const std::string& in_zip, const std::string& out_zip, std::string& e
         deflateEnd(&zs);
         zip_fclose(zf);
         if (!ok || read_total != e.usize) return fail(error, "cannot read " + e.name, out_zip, &out);
-        if (written >= 0xFFFFFFFFull) return fail(error, e.name + " compresses to 4 GB or more", out_zip, &out);
+        if (!out) return fail(error, "cannot write " + out_zip, out_zip, &out);
         e.crc   = (uint32_t)crc;
-        e.csize = (uint32_t)written;
+        e.csize = written;
 
-        const auto end = out.tellp();
+        uint64_t end = (uint64_t)out.tellp();
+        if (!zip64 && local_zip64(e.usize, e.csize)) {
+            // Data that grew past 4 GB once compressed : RomVault's
+            // FixFileForZip64, room made for the field after the fact.
+            if (!shift_up(out, extra_at, end, 20)) return fail(error, "cannot write " + out_zip, out_zip, &out);
+            end += 20;
+            zip64 = true;
+            std::vector<unsigned char> fix;
+            put16(fix, kVersion64);
+            out.seekp((std::streamoff)(e.offset + 4));
+            out.write((const char*)fix.data(), 2);
+            fix.clear();
+            put16(fix, 20);
+            out.seekp((std::streamoff)(e.offset + 28));
+            out.write((const char*)fix.data(), 2);
+        }
         std::vector<unsigned char> sizes;
-        put32(sizes, e.crc); put32(sizes, e.csize); put32(sizes, e.usize);
-        out.seekp((std::streamoff)(start + 14));
+        put32(sizes, e.crc);
+        put32(sizes, zip64 ? kMax32 : (uint32_t)e.csize);
+        put32(sizes, zip64 ? kMax32 : (uint32_t)e.usize);
+        out.seekp((std::streamoff)(e.offset + 14));
         out.write((const char*)sizes.data(), (std::streamsize)sizes.size());
-        out.seekp(end);
+        if (zip64) {
+            std::vector<unsigned char> field;
+            put16(field, 0x0001); put16(field, 16); put64(field, e.usize); put64(field, e.csize);
+            out.seekp((std::streamoff)extra_at);
+            out.write((const char*)field.data(), (std::streamsize)field.size());
+        }
+        out.seekp((std::streamoff)end);
+        if (!out) return fail(error, "cannot write " + out_zip, out_zip, &out);
     }
 
     std::vector<unsigned char> cd;
     for (const auto& e : entries) {
+        const std::vector<unsigned char> extra = central_zip64(e.usize, e.csize, e.offset);
         put32(cd, 0x02014b50);
         put16(cd, 0);                 // made by
-        put16(cd, kVersion);
+        put16(cd, extra.empty() ? kVersion : kVersion64);
         put16(cd, e.flags);
         put16(cd, 8);
         put16(cd, kDosTime);
         put16(cd, kDosDate);
-        put32(cd, e.crc); put32(cd, e.csize); put32(cd, e.usize);
+        put32(cd, e.crc); put32(cd, clamp32(e.csize)); put32(cd, clamp32(e.usize));
         put16(cd, (uint16_t)e.stored.size());
-        put16(cd, 0); put16(cd, 0); put16(cd, 0); put16(cd, 0);   // extra, comment, disk, internal
+        put16(cd, (uint16_t)extra.size());
+        put16(cd, 0); put16(cd, 0); put16(cd, 0);   // comment, disk, internal
         put32(cd, 0);                 // external attributes
-        put32(cd, e.offset);
+        put32(cd, clamp32(e.offset));
         cd.insert(cd.end(), e.stored.begin(), e.stored.end());
+        cd.insert(cd.end(), extra.begin(), extra.end());
     }
-    const auto cd_start = (uint64_t)out.tellp();
-    if (cd_start + cd.size() >= 0xFFFFFFFFull) return fail(error, "archive reaches 4 GB", out_zip, &out);
+    const uint64_t cd_start = (uint64_t)out.tellp();
+    const uint64_t cd_size  = cd.size();
     char comment[32];
     std::snprintf(comment, sizeof comment, "%s%08X", kCommentId, (unsigned)crc32(0L, cd.data(), (uInt)cd.size()));
+    out.write((const char*)cd.data(), (std::streamsize)cd.size());
+
+    // RomVault's EndOfCentralDirectoryWrite : the ZIP64 end records only when
+    // the central directory's start, its size or the count needs them.
+    const bool zip64_end = cd_start >= kMax32 || cd_size >= kMax32 || entries.size() >= 0xFFFF;
+    if (zip64_end) {
+        const uint64_t record_at = (uint64_t)out.tellp();
+        std::vector<unsigned char> rec;
+        put32(rec, 0x06064b50);
+        put64(rec, 44);
+        put16(rec, kVersion64); put16(rec, kVersion64);
+        put32(rec, 0); put32(rec, 0);
+        put64(rec, entries.size()); put64(rec, entries.size());
+        put64(rec, cd_size); put64(rec, cd_start);
+        put32(rec, 0x07064b50);
+        put32(rec, 0);
+        put64(rec, record_at);
+        put32(rec, 1);
+        out.write((const char*)rec.data(), (std::streamsize)rec.size());
+    }
+    const uint16_t count16 = entries.size() >= 0xFFFF ? 0xFFFF : (uint16_t)entries.size();
     std::vector<unsigned char> eocd;
     put32(eocd, 0x06054b50);
     put16(eocd, 0); put16(eocd, 0);
-    put16(eocd, (uint16_t)entries.size()); put16(eocd, (uint16_t)entries.size());
-    put32(eocd, (uint32_t)cd.size());
-    put32(eocd, (uint32_t)cd_start);
+    put16(eocd, count16); put16(eocd, count16);
+    put32(eocd, clamp32(cd_size));
+    put32(eocd, clamp32(cd_start));
     put16(eocd, 22);
     eocd.insert(eocd.end(), comment, comment + 22);
-    out.write((const char*)cd.data(), (std::streamsize)cd.size());
     out.write((const char*)eocd.data(), (std::streamsize)eocd.size());
     out.close();
     if (!out) return fail(error, "cannot write " + out_zip, out_zip);
@@ -249,12 +349,38 @@ bool is_torrentzip(const std::string& zip_path) {
     in.read((char*)eocd, 44);
     if (!in || get32(eocd) != 0x06054b50 || get16(eocd + 20) != 22) return false;
     if (std::string((const char*)eocd + 22, 14) != kCommentId) return false;
-    const uint16_t count = get16(eocd + 10);
-    const uint32_t cd_size = get32(eocd + 12), cd_start = get32(eocd + 16);
-    if ((uint64_t)cd_start + cd_size != size - 44) return false;
+    uint64_t count = get16(eocd + 10), cd_size = get32(eocd + 12), cd_start = get32(eocd + 16);
+    uint64_t cd_end = size - 44;   // where the central directory must stop
+
+    // The ZIP64 end records, right before the end record, when and only when
+    // RomVault would have written them.
+    bool zip64_end = false;
+    if (size >= 44 + 76) {
+        unsigned char loc[20];
+        in.seekg((std::streamoff)(size - 44 - 20));
+        in.read((char*)loc, 20);
+        zip64_end = in && get32(loc) == 0x07064b50;
+        if (zip64_end) {
+            const uint64_t record_at = get64(loc + 8);
+            if (get32(loc + 4) != 0 || get32(loc + 16) != 1 || record_at != size - 44 - 20 - 56) return false;
+            unsigned char rec[56];
+            in.seekg((std::streamoff)record_at);
+            in.read((char*)rec, 56);
+            if (!in || get32(rec) != 0x06064b50 || get64(rec + 4) != 44) return false;
+            if (get16(rec + 12) != kVersion64 || get16(rec + 14) != kVersion64 || get32(rec + 16) != 0 || get32(rec + 20) != 0) return false;
+            if (get64(rec + 24) != get64(rec + 32)) return false;
+            const uint64_t count64 = get64(rec + 32), size64 = get64(rec + 40), start64 = get64(rec + 48);
+            if (count != (count64 >= 0xFFFF ? 0xFFFF : count64) || cd_size != clamp32(size64) || cd_start != clamp32(start64)) return false;
+            if (count64 < 0xFFFF && size64 < kMax32 && start64 < kMax32) return false;   // not needed : not RomVault's
+            count = count64; cd_size = size64; cd_start = start64;
+            cd_end = record_at;
+        }
+    }
+    if (!zip64_end && (count == 0xFFFF || cd_size == kMax32 || cd_start == kMax32)) return false;
+    if (cd_start + cd_size != cd_end) return false;
     std::vector<unsigned char> cd(cd_size);
-    in.seekg(cd_start);
-    in.read((char*)cd.data(), cd_size);
+    in.seekg((std::streamoff)cd_start);
+    in.read((char*)cd.data(), (std::streamsize)cd_size);
     if (!in) return false;
     char want[9];
     std::snprintf(want, sizeof want, "%08X", (unsigned)crc32(0L, cd.data(), (uInt)cd.size()));
@@ -262,27 +388,49 @@ bool is_torrentzip(const std::string& zip_path) {
 
     size_t p = 0;
     std::u32string last;
-    for (uint16_t i = 0; i < count; ++i) {
-        if (p + 46 > cd.size() || get32(&cd[p]) != 0x02014b50) return false;
-        const uint16_t flags = get16(&cd[p + 8]);
-        if ((flags & ~kUtf8Flag) != kFlags || get16(&cd[p + 10]) != 8) return false;
-        if (get16(&cd[p + 12]) != kDosTime || get16(&cd[p + 14]) != kDosDate) return false;
-        const uint16_t nlen = get16(&cd[p + 28]);
-        if (get16(&cd[p + 30]) != 0 || get16(&cd[p + 32]) != 0) return false;
-        if (p + 46 + nlen > cd.size()) return false;
-        const std::string raw((const char*)&cd[p + 46], nlen);
+    for (uint64_t i = 0; i < count; ++i) {
+        if (p + 46 > cd.size() || get32(cd.data() + p) != 0x02014b50) return false;
+        const uint16_t flags = get16(cd.data() + p + 8);
+        if ((flags & ~kUtf8Flag) != kFlags || get16(cd.data() + p + 10) != 8) return false;
+        if (get16(cd.data() + p + 12) != kDosTime || get16(cd.data() + p + 14) != kDosDate) return false;
+        const uint16_t nlen = get16(cd.data() + p + 28), xlen = get16(cd.data() + p + 30);
+        if (get16(cd.data() + p + 32) != 0) return false;
+        if (p + 46 + nlen + xlen > cd.size()) return false;
+        const std::string raw((const char*)(cd.data() + p + 46), nlen);
         std::u32string key;
         if (flags & kUtf8Flag) key = utf8_to_u32(raw);
         else for (unsigned char c : raw) key.push_back(kCp437[c]);
         if (i > 0 && compare(last, key) >= 0) return false;
         last = key;
-        // L'en-tete local : meme date, aucun champ en plus.
+
+        // The sizes and the offset, from the ZIP64 field when the header
+        // says so ; the field must then be exactly the one RomVault writes.
+        uint64_t csize = get32(cd.data() + p + 20), usize = get32(cd.data() + p + 24), offset = get32(cd.data() + p + 42);
+        const unsigned char* x = cd.data() + p + 46 + nlen;
+        size_t at = 4;
+        if (xlen) {
+            if (xlen < 4 || get16(x) != 0x0001 || get16(x + 2) != xlen - 4) return false;
+        }
+        auto take = [&](uint64_t& v) {
+            if (v != kMax32) return true;
+            if (at + 8 > xlen) return false;
+            v = get64(x + at);
+            at += 8;
+            return true;
+        };
+        if (!take(usize) || !take(csize) || !take(offset)) return false;
+        if (central_zip64(usize, csize, offset) != std::vector<unsigned char>(x, x + xlen)) return false;
+        if (get16(cd.data() + p + 6) != (xlen ? kVersion64 : kVersion)) return false;
+
+        // L'en-tete local : meme date, et seulement le champ ZIP64 de ses tailles.
+        const bool lz = local_zip64(usize, csize);
         unsigned char local[30];
-        in.seekg(get32(&cd[p + 42]));
+        in.seekg((std::streamoff)offset);
         in.read((char*)local, 30);
-        if (!in || get32(local) != 0x04034b50 || get16(local + 28) != 0) return false;
+        if (!in || get32(local) != 0x04034b50 || get16(local + 28) != (lz ? 20 : 0)) return false;
         if (get16(local + 10) != kDosTime || get16(local + 12) != kDosDate || get16(local + 6) != flags) return false;
-        p += 46 + nlen;
+        if (get16(local + 4) != (lz ? kVersion64 : kVersion)) return false;
+        p += 46 + nlen + xlen;
     }
     return p == cd.size();
 }

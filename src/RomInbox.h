@@ -117,9 +117,10 @@ struct Options {
     bool recursive        = true;
     bool include_archives = true;   // zip, 7z, rar, …
     bool include_loose    = true;   // a bare ROM file is a one-piece source
-    // Pieces may be borrowed from the existing library (read-only). Off, only
-    // the inbox itself can supply them, and "already in library" is no longer
-    // detected either.
+    // Pieces may be borrowed from the existing library, the other emulators'
+    // libraries and the source folders (read-only). Off, only the inbox
+    // itself can supply them, and "already in library" is no longer detected
+    // either.
     bool use_library      = true;
     // Rebuild even a set that is already perfect as it sits : normalises the
     // archive (DAT names, deflate, nothing extra) instead of relocating it.

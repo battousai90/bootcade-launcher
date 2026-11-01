@@ -26,7 +26,16 @@
 //
 // Only the DAT's own sets are looked at : a parent, BIOS or device named by
 // a link is looked for in the same DAT. Nothing depends on where the DAT
-// comes from.
+// comes from. Two exceptions are asked for, never assumed (Options) : the
+// Rebuilder hands over the other DATs it read (`linked`), where a non-merged
+// set finds the devices a DAT of their own describes ; those sets get no
+// archive, they only lend their ROMs. And it reads the DAT alone
+// (`strict_dat`), without the one rule taken from an emulator : an FBNeo
+// clone repeating its parent's disk without merge= (disk_is_parents).
+//
+// check() says what a mode needs that a DAT does not say, before anything is
+// laid out : a DAT without links, ROMs inherited but not marked, a link to a
+// set no DAT holds. What it reports is never guessed instead.
 #pragma once
 
 #include "Game.h"
@@ -58,10 +67,19 @@ struct Archive {
     std::vector<DiskEntry> disks;
 };
 
+struct Options {
+    // Sets of other DATs a device_ref may name, looked for when `sets` has no
+    // set of that name.
+    std::vector<const Game*> linked;
+    // The DAT alone : no disk_is_parents.
+    bool strict_dat = false;
+};
+
 class Layout {
 public:
     // `sets` : every set of ONE DAT. `mode` : "", split, non-merged, merged.
-    Layout(const std::vector<const Game*>& sets, const std::string& mode);
+    Layout(const std::vector<const Game*>& sets, const std::string& mode,
+           const Options& options = Options());
 
     const std::string& mode() const { return m_mode; }
     const std::vector<Archive>& archives() const { return m_archives; }
@@ -83,6 +101,31 @@ private:
     std::unordered_map<std::string, std::vector<size_t>> m_entries_of;
     std::unordered_map<std::string, std::vector<size_t>> m_disks_of;
 };
+
+// ── What a mode needs that the DAT does not say ─────────────────────────────
+enum class Missing {
+    NoLinks,             // no cloneof, romof nor device_ref anywhere : only "" can be laid out
+    MergeNotMarked,      // a ROM the set shares with a parent or BIOS, not marked merge=
+    ParentRomsNotListed, // the DAT marks no ROM merge= and the set lists none of its parent's
+    LinkTargetMissing,   // cloneof or device_ref names a set no DAT read holds
+    NoDeviceRefs,        // devices described, but no device_ref : reported by the caller, which counts them
+};
+
+struct Problem {
+    Missing     kind;
+    std::string set;      // empty for the whole DAT
+    std::string detail;   // the ROM, or the set named
+};
+
+struct CheckResult {
+    bool                 whole_dat = false;   // the mode is impossible for every set
+    std::vector<Problem> problems;
+};
+
+// What laying `sets` (one DAT, `linked` the others read with it) out in
+// `mode` would have to guess. "" never does.
+CheckResult check(const std::vector<const Game*>& sets, const std::vector<const Game*>& linked,
+                  const std::string& mode);
 
 // "a9" before "a10" : how merged archives order clones and their ROMs.
 bool natural_less(const std::string& a, const std::string& b);

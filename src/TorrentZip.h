@@ -16,12 +16,13 @@
 namespace TorrentZip {
 
 // True when `zip_path` already follows TorrentZip (comment, central directory
-// CRC, fixed dates, no extra field, deflate, order).
+// CRC, fixed dates, deflate, order, and no extra field but the ZIP64 one
+// RomVault writes where a size or an offset reaches 4 GB).
 bool is_torrentzip(const std::string& zip_path);
 
 // Writes `out_zip`, a TorrentZip of every entry of `in_zip`, same names, same
-// data. False with `error` when it cannot : an entry of 4 GB or more (zip64,
-// left out here), two names equal but for their case, a directory entry, a
+// data, in ZIP64 where 4 GB is reached, as RomVault does. False with `error`
+// when it cannot : two names equal but for their case, a directory entry, a
 // read or write failure. `out_zip` is removed on failure.
 bool rezip(const std::string& in_zip, const std::string& out_zip, std::string& error);
 

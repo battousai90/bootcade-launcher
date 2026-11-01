@@ -204,7 +204,8 @@ int main(int argc, char *argv[]) {
      *                              actifs (la boite « Update DAT » elle-meme) ;
      *                              =fbneo ou =mame : ce seul emulateur ;
      *  BOOTCADE_ROM_SCAN=<emu>     scan de la bibliotheque d'un emulateur autre
-     *                              que FinalBurn Neo (RomScanner::scan_into_cache) ;
+     *                              que FinalBurn Neo (RomScanner::scan_into_cache),
+     *                              dossiers sources compris ;
      *  BOOTCADE_ROM_AUDIT=<groupe> audit de l'onglet Bibliotheque pour ce
      *                              groupe ; BOOTCADE_ROM_AUDIT_SETS=1 ecrit en
      *                              plus le verdict de chaque set.
@@ -217,7 +218,10 @@ int main(int argc, char *argv[]) {
      *                              de chaque set de cet emulateur ;
      *  BOOTCADE_IMPORT=<emu>|<import>|<sortie>  analyse le dossier d'import
      *                              et reconstruit ses sets dans <sortie>,
-     *                              comme Fix dans l'onglet Import.
+     *                              comme Fix dans l'onglet Import ;
+     *                              BOOTCADE_IMPORT_OPTIONS=incomplete,nolibrary
+     *                              coche « Rebuild incomplete » et decoche
+     *                              « Use existing Library ROMs ».
      * Ils peuvent se combiner, dans cet ordre.
      */
     {
@@ -297,12 +301,18 @@ int main(int argc, char *argv[]) {
             o.roms_paths = DatSource::roms_paths_for(o.emulator);
             o.processed  = RomInbox::Options::Processed::Keep;
             o.quarantine_rejects = false;
+            if (const char* opt = std::getenv("BOOTCADE_IMPORT_OPTIONS")) {
+                const std::string opts = std::string(",") + opt + ",";
+                o.rebuild_incomplete = opts.find(",incomplete,") != std::string::npos;
+                o.use_library = opts.find(",nolibrary,") == std::string::npos;
+            }
             const std::string inbox = spec.substr(a + 1, b - a - 1), outbox = spec.substr(b + 1);
             RomInbox::Callbacks cb;
             cb.log = [](const std::string& l) { if (l.rfind("[INBOX-DEBUG]", 0) != 0) std::cout << "[IMPORT] " << l << std::endl; };
             const RomInbox::Report rep = RomInbox::analyze(inbox, outbox, database, o, cb);
             for (const auto& set : rep.sets)
-                std::cout << "[IMPORT-SET] " << set.game_name << " " << RomInbox::action_label(set.action)
+                std::cout << "[IMPORT-SET] " << set.game_name << " [" << set.system << "] " << RomInbox::action_label(set.action)
+                          << (set.partial ? " (partial)" : "")
                           << " pieces=" << set.pieces.size() << " missing=" << set.missing.size() << std::endl;
             const RomInbox::ApplyResult res = RomInbox::apply(rep, cb);
             std::cout << "[IMPORT] rebuilt=" << res.rebuilt << " moved=" << res.moved << " failed=" << res.failed << std::endl;
@@ -310,6 +320,8 @@ int main(int argc, char *argv[]) {
         }
         if (scan && *scan) {
             const auto t0 = std::chrono::steady_clock::now();
+            RomScanner::scan_sources_into_cache(database, {},
+                [](const std::string& l, bool w) { std::cout << "[ROMSCAN]" << (w ? " WARN " : " ") << l << std::endl; });
             const auto r = RomScanner::scan_into_cache(database, DatSource::roms_paths_for(scan), scan, true,
                 {}, [](const std::string& l, bool w) { std::cout << "[ROMSCAN]" << (w ? " WARN " : " ") << l << std::endl; });
             std::cout << "[ROMSCAN] seconds=" << std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -27,6 +27,18 @@ public:
     enum class DatKind { None, Datafile, MameListxml };
     static DatKind datKind(const std::string& filepath);
 
+    // What a DAT file says of itself, read without loading it : its header,
+    // and how many machines it flags as devices and device_ref links it
+    // holds (which Game does not keep). Read only ; nothing is imported.
+    struct DatInfo {
+        DatKind     kind = DatKind::None;
+        std::string name, version;
+        std::string build;      // the root's build= (MAME's -listxml and Bootcade's MAME DATs)
+        std::string declared;   // the merge mode the header declares : split, non-merged, merged, ""
+        size_t      isdevice = 0, device_refs = 0;
+    };
+    static DatInfo inspect(const std::string& filepath);
+
     // "MAME Software List …" : media lists, which the ROM Manager does not
     // import (yet).
     static bool isSoftwareListHeader(const std::string& headerName);

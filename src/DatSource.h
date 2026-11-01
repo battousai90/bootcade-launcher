@@ -197,6 +197,10 @@ const Group* group_for(const std::vector<Group>& groups, const std::string& emul
 // flat roms_paths / roms_path for FinalBurn Neo, mame_rompaths for MAME,
 // the same fallbacks SettingsPanel::load_from_file applies.
 std::vector<std::string> roms_paths_for(const std::string& emulator);
+// The source folders (rom_manager.source_paths) : files kept outside every
+// library, RomVault's ToSort, where the ROM Manager also takes the pieces
+// that repair a set. Read only : never audited, never written.
+std::vector<std::string> source_paths();
 
 // ── Download from a site (Local folder) ─────────────────────────────────────
 //
