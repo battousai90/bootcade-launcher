@@ -3,6 +3,7 @@
 #include "RomScanner.h"
 #include "RomResolve.h"
 #include "DatSource.h"
+#include "RomArchive.h"
 #include <filesystem>
 #include <zlib.h>
 #include <zip.h>
@@ -466,6 +467,8 @@ std::vector<std::string> RomScanner::all_library_roots() {
     for (const auto& emu : emulators)
         for (const auto& r : DatSource::roms_paths_for(emu))
             if (!r.empty()) roots.push_back(std::filesystem::weakly_canonical(r, ec).string());
+    for (const auto& r : DatSource::source_paths())
+        roots.push_back(std::filesystem::weakly_canonical(r, ec).string());
     return roots;
 }
 
@@ -480,24 +483,20 @@ int RomScanner::prune_zip_cache(std::shared_ptr<DatabaseManager> db) {
     return db->forgetZipContents(out_of_libraries);
 }
 
-// ── Scan of one emulator's library into the cache ───────────────────────────
+// ── Bringing the cache up to date for some roots ────────────────────────────
 
-RomScanner::CacheScanReport
-RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
-                            const std::vector<std::string>& roots,
-                            const std::string& emulator,
-                            bool recursive,
-                            const std::function<bool(double, const std::string&)>& progress,
-                            const std::function<void(const std::string&, bool)>& log) {
+namespace {
+
+// zip_contents made true to every file under `roots` : the new or changed
+// ones read again, the ones gone from a root that was listed forgotten.
+// `any_file` : archives of every format and loose ROMs, as a source folder
+// holds them (RomArchive::read_any) ; otherwise ZIPs only, the library's.
+void refresh_cache(std::shared_ptr<DatabaseManager> db, const std::vector<std::string>& roots,
+                   bool recursive, bool any_file, RomScanner::CacheScanReport& rep,
+                   const std::function<bool(double, const std::string&)>& step,
+                   const std::function<void(const std::string&)>& say,
+                   const std::function<void(const std::string&)>& warn) {
     namespace fs = std::filesystem;
-    CacheScanReport rep;
-    auto say  = [&](const std::string& m) { if (log) log(m, false); };
-    auto warn = [&](const std::string& m) { if (log) log(m, true); };
-    auto step = [&](double pct, const std::string& m) {
-        if (progress && !progress(pct, m)) rep.cancelled = true;
-        return !rep.cancelled;
-    };
-
     // ── 1. What the roots hold ──────────────────────────────────────────────
     struct File { std::string path; long long size = 0, mtime = 0; };
     std::vector<File> files;
@@ -520,7 +519,8 @@ RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
             if (!e.is_regular_file(fec)) return;
             std::string ext = e.path().extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
-            if (ext != ".zip") return;
+            // A CHD is known by its header's SHA1, never read whole here.
+            if (any_file ? (ext == ".chd" || RomArchive::is_sidecar(e.path().string())) : ext != ".zip") return;
             File f;
             f.path  = e.path().string();
             f.size  = (long long)e.file_size(fec);
@@ -540,7 +540,7 @@ RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
             for (auto it = fs::directory_iterator(base, ec); it != fs::directory_iterator() && !rep.cancelled; it.increment(ec))
                 visit(*it);
         }
-        if (rep.cancelled) return rep;
+        if (rep.cancelled) return;
         if (!ec && files.size() > before) listed_roots.push_back(base.string());
     }
     rep.archives = files.size();
@@ -558,7 +558,7 @@ RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
     say(std::to_string(to_read.size()) + " archive(s) new or changed : reading them; "
         + std::to_string(files.size() - to_read.size()) + " unchanged since the cache read them");
 
-    struct Read { const File* file = nullptr; bool ok = false; std::vector<ZipEntry> entries; };
+    struct Read { const File* file = nullptr; bool ok = false; std::vector<RomScanner::ZipEntry> entries; };
     std::vector<Read> reads(to_read.size());
     {
         std::atomic<size_t> next{0}, done{0};
@@ -569,7 +569,13 @@ RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
             pool.emplace_back([&] {
                 for (size_t i = next++; i < to_read.size() && !stop; i = next++) {
                     reads[i].file = to_read[i];
-                    reads[i].ok = read_zip_entries(to_read[i]->path, reads[i].entries);
+                    if (!any_file || RomArchive::is_zip(to_read[i]->path)) {
+                        reads[i].ok = RomScanner::read_zip_entries(to_read[i]->path, reads[i].entries);
+                    } else {
+                        std::vector<RomArchive::Entry> got;
+                        reads[i].ok = RomArchive::read_any(to_read[i]->path, got);
+                        for (auto& g : got) reads[i].entries.push_back({std::move(g.name), g.crc, g.size});
+                    }
                     ++done;
                 }
             });
@@ -598,7 +604,7 @@ RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
         ++rep.reread;
     }
     db->commitTransaction();
-    if (rep.cancelled) return rep;
+    if (rep.cancelled) return;
 
     // ── 3. What left the disk or the libraries leaves the cache ────────────
     // So that whoever reads the cache afterwards (a DAT update) can trust it
@@ -610,9 +616,33 @@ RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
         std::vector<std::string> gone;
         for (const auto& p : db->getZipContentPaths())
             if (!listed.count(p) && RomResolve::under_any_root(p, listed_roots)) gone.push_back(p);
-        rep.forgotten = db->forgetZipContents(gone) + prune_zip_cache(db);
-        if (rep.forgotten) say(std::to_string(rep.forgotten) + " archive(s) no longer in the library : forgotten");
+        rep.forgotten = db->forgetZipContents(gone) + RomScanner::prune_zip_cache(db);
+        if (rep.forgotten) say(std::to_string(rep.forgotten) + " archive(s) gone : forgotten");
     }
+
+}
+
+} // namespace
+
+// ── Scan of one emulator's library into the cache ───────────────────────────
+
+RomScanner::CacheScanReport
+RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
+                            const std::vector<std::string>& roots,
+                            const std::string& emulator,
+                            bool recursive,
+                            const std::function<bool(double, const std::string&)>& progress,
+                            const std::function<void(const std::string&, bool)>& log) {
+    CacheScanReport rep;
+    auto say  = [&](const std::string& m) { if (log) log(m, false); };
+    auto warn = [&](const std::string& m) { if (log) log(m, true); };
+    auto step = [&](double pct, const std::string& m) {
+        if (progress && !progress(pct, m)) rep.cancelled = true;
+        return !rep.cancelled;
+    };
+
+    refresh_cache(db, roots, recursive, false, rep, step, say, warn);
+    if (rep.cancelled) return rep;
 
     // ── 4. Every status of this emulator, from the cache ────────────────────
     step(82.0, "Resolving sets…");
@@ -627,5 +657,23 @@ RomScanner::scan_into_cache(std::shared_ptr<DatabaseManager> db,
         + " incorrect, " + std::to_string(rep.statuses.incomplete) + " incomplete (BIOS or parent missing), "
         + std::to_string(rep.statuses.missing) + " missing; "
         + std::to_string(rep.statuses.changed) + " status(es) changed");
+    return rep;
+}
+
+RomScanner::CacheScanReport
+RomScanner::scan_sources_into_cache(std::shared_ptr<DatabaseManager> db,
+                                    const std::function<bool(double, const std::string&)>& progress,
+                                    const std::function<void(const std::string&, bool)>& log) {
+    CacheScanReport rep;
+    const auto sources = DatSource::source_paths();
+    if (sources.empty()) return rep;
+    auto say  = [&](const std::string& m) { if (log) log(m, false); };
+    auto warn = [&](const std::string& m) { if (log) log(m, true); };
+    auto step = [&](double pct, const std::string& m) {
+        if (progress && !progress(pct, m)) rep.cancelled = true;
+        return !rep.cancelled;
+    };
+    say("Reading the source folders : " + std::to_string(sources.size()) + " folder(s)");
+    refresh_cache(db, sources, true, true, rep, step, say, warn);
     return rep;
 }

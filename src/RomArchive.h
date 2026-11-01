@@ -31,9 +31,24 @@ bool looks_like_archive(const std::string& path);
 // ZIP gets the libzip path; anything else goes through libarchive.
 bool is_zip(const std::string& path);
 
+// A file that is clearly never ROM data (readme, cue sheet, patch, checksum
+// list, picture…), rather than an attempt at listing every ROM extension of
+// every system : anything else may be a loose ROM.
+bool is_sidecar(const std::string& path);
+
 // Every regular-file entry with its recomputed CRC32. Directory entries are
 // skipped. False when the file cannot be opened as an archive.
 bool read_entries(const std::string& path, std::vector<Entry>& out);
+
+// The ROM entries of any file : an archive's, or a loose ROM as its own one
+// entry, named after the file.
+bool read_any(const std::string& path, std::vector<Entry>& out);
+
+// The ROM entries of any file, a ZIP's as its central directory states them :
+// nothing decompressed, so a whole collection is listed in minutes. What it
+// states is checked where it matters, when an entry is read. Other archives
+// and loose files are read as read_any reads them.
+bool read_listed(const std::string& path, std::vector<Entry>& out);
 
 // Entry names only : no decompression. Used where the contents do not matter.
 bool list_names(const std::string& path, std::vector<std::string>& out);

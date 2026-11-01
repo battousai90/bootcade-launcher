@@ -57,6 +57,33 @@ bool looks_like_archive(const std::string& path) {
     return exts.count(lower_ext(path)) > 0;
 }
 
+bool is_sidecar(const std::string& path) {
+    static const std::unordered_set<std::string> exts = {
+        ".txt", ".nfo", ".diz", ".dsc", ".cue", ".ccd", ".sub", ".m3u",
+        ".ips", ".bps", ".ups", ".xdelta", ".dat", ".xml", ".json",
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".pdf",
+        ".md5", ".sha1", ".sfv", ".cfg", ".ini", ".url", ".log",
+    };
+    return exts.count(lower_ext(path)) > 0;
+}
+
+bool read_any(const std::string& path, std::vector<Entry>& out) {
+    out.clear();
+    if (looks_like_archive(path)) return read_entries(path, out);
+    std::ifstream f(fs::path(path), std::ios::binary);
+    if (!f) return false;
+    Entry e;
+    e.name = fs::path(path).filename().string();
+    e.crc  = crc32(0L, Z_NULL, 0);
+    std::vector<char> buf(kBuf);
+    while (f.read(buf.data(), buf.size()) || f.gcount() > 0) {
+        e.crc = crc32(e.crc, (const Bytef*)buf.data(), (uInt)f.gcount());
+        e.size += (uint64_t)f.gcount();
+    }
+    out.push_back(std::move(e));
+    return true;
+}
+
 bool read_entries(const std::string& path, std::vector<Entry>& out) {
     if (is_zip(path)) {
         std::vector<RomScanner::ZipEntry> z;
@@ -86,6 +113,30 @@ bool read_entries(const std::string& path, std::vector<Entry>& out) {
         if (n < 0) return false;   // truncated or corrupt
         out.push_back({name, (unsigned long)crc, total});
     }
+    return true;
+}
+
+bool read_listed(const std::string& path, std::vector<Entry>& out) {
+    if (!is_zip(path)) return read_any(path, out);
+    out.clear();
+    int err = 0;
+    zip_t* z = zip_open(path.c_str(), ZIP_RDONLY, &err);
+    if (!z) return false;
+    const zip_int64_t n = zip_get_num_entries(z, 0);
+    for (zip_uint64_t i = 0; i < (zip_uint64_t)n; ++i) {
+        zip_stat_t sb;
+        zip_stat_init(&sb);
+        if (zip_stat_index(z, i, 0, &sb) != 0) continue;
+        std::string name = sb.name ? sb.name : "";
+        if (name.empty() || name.back() == '/') continue;
+        if (!(sb.valid & ZIP_STAT_CRC) || !(sb.valid & ZIP_STAT_SIZE)) {
+            // A central directory that does not say : read as read_entries does.
+            zip_close(z);
+            return read_entries(path, out);
+        }
+        out.push_back({std::move(name), (unsigned long)sb.crc, (uint64_t)sb.size});
+    }
+    zip_close(z);
     return true;
 }
 

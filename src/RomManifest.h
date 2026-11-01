@@ -110,6 +110,12 @@ private:
     static constexpr size_t kMaxHistory = 5000;
 };
 
+// Where `src` goes in `dir` without overwriting anything. The free name is
+// `dir/<name>`, else `dir/<stem> (2)<ext>`, `(3)`… ; `same` turns true, and
+// the existing path comes back, when a file of that name already holds the
+// very same bytes : the folder already keeps it, nothing more to write.
+std::string free_destination(const std::string& dir, const std::string& src, bool& same);
+
 // Current time as "YYYY-MM-DDTHH:MM:SSZ".
 std::string now_iso();
 // An added_at/removed_at stamp (UTC, ISO 8601) as "YYYY-MM-DD HH:MM" in the

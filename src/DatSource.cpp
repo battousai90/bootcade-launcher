@@ -475,6 +475,18 @@ std::vector<std::string> roms_paths_for(const std::string& emulator) {
     return out;
 }
 
+std::vector<std::string> source_paths() {
+    nlohmann::json j;
+    std::ifstream fi(AppContext::get_config_path());
+    if (fi) { try { fi >> j; } catch (...) { j = nlohmann::json{}; } }
+    std::vector<std::string> out;
+    if (j.contains("rom_manager") && j["rom_manager"].is_object() && j["rom_manager"].contains("source_paths")
+        && j["rom_manager"]["source_paths"].is_array())
+        for (const auto& p : j["rom_manager"]["source_paths"])
+            if (p.is_string() && !p.get<std::string>().empty()) out.push_back(p.get<std::string>());
+    return out;
+}
+
 std::vector<std::string> files_to_load(const std::vector<Group>& groups, std::vector<std::string>* conflicts) {
     std::vector<std::string> out;
     std::map<std::string, std::string> seen;   // file name → folder it was taken from

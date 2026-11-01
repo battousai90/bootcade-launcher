@@ -322,6 +322,7 @@ private:
     void on_add_roms_path_clicked();
     void on_remove_roms_path_clicked();
     void refresh_roms_list();
+    void refresh_sources_list();
 
     // ── Coquille ─────────────────────────────────────────────────────────
     void         build_shell();
@@ -405,6 +406,21 @@ private:
     Glib::RefPtr<Gtk::GestureDrag> m_grip_drag;
     void set_roms_list_height(int height);
     void apply_roms_list_height();
+
+    /* Les dossiers sources du gestionnaire de ROMs (rom_manager.source_paths) :
+     * le ToSort de RomVault. Communs a tous les emulateurs, d'ou leur carte
+     * au-dessus des onglets. Meme liste, meme poignee que les dossiers de ROMs. */
+    std::vector<std::string> m_source_paths;
+    Gtk::ScrolledWindow m_scrolled_sources;
+    Gtk::TreeView m_treeview_sources;
+    Glib::RefPtr<Gtk::ListStore> m_model_sources;
+    Gtk::Button m_button_add_sources;
+    Gtk::Button m_button_remove_sources;
+    Gtk::EventBox m_sources_grip;
+    int  m_sources_list_height{120};
+    int  m_sources_grip_start{0};
+    Glib::RefPtr<Gtk::GestureDrag> m_sources_drag;
+    void set_sources_list_height(int height);
 
     // Other entries
     Gtk::Entry m_entry_dat;

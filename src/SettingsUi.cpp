@@ -1169,6 +1169,23 @@ void fit_to_content(Gtk::Window& win, Gtk::Window* anchor,
     });
 }
 
+void let_shrink(Gtk::Widget& root) {
+    if (auto* label = dynamic_cast<Gtk::Label*>(&root)) {
+        // Un texte qui passe a la ligne retrecit deja ; un texte d'une ligne,
+        // sans « … », imposait toute sa longueur a la fenetre.
+        if (!label->get_line_wrap() && label->get_ellipsize() == Pango::ELLIPSIZE_NONE)
+            label->set_ellipsize(Pango::ELLIPSIZE_END);
+        return;
+    }
+    if (auto* combo = dynamic_cast<Gtk::ComboBox*>(&root))
+        // La plus longue entree fixait la largeur minimale de la liste.
+        for (auto* cell : combo->get_cells())
+            if (auto* text = dynamic_cast<Gtk::CellRendererText*>(cell))
+                text->property_ellipsize() = Pango::ELLIPSIZE_END;
+    if (auto* container = dynamic_cast<Gtk::Container*>(&root))
+        for (auto* child : container->get_children()) let_shrink(*child);
+}
+
 void fit_work_window(Gtk::Window& win, Gtk::Window* anchor) {
     size_work_window(win, anchor);
     auto done = std::make_shared<bool>(false);

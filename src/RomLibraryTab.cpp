@@ -268,7 +268,7 @@ void RomLibraryTab::build_summary() {
     m_pill_ignored   = Gtk::make_managed<ui::Pill>(_("Ignored"),   ui::PillTone::Neutral, true);
     m_pill_incorrect->set_tooltip_text(_("Wrong data (bad CRC) and no good copy anywhere in the library : cannot be repaired, Fix moves them to quarantine."));
     m_pill_misnamed->set_tooltip_text(_("Right data under the wrong entry names : Fix sends them to Import, which rebuilds them."));
-    m_pill_fixable->set_tooltip_text(_("Absent or wrong pieces that exist elsewhere in the library : Fix sends them to Import, which rebuilds them."));
+    m_pill_fixable->set_tooltip_text(_("Absent or wrong pieces that exist elsewhere, in a library or a source folder : Fix sends them to Import, which rebuilds them."));
     m_pill_extra->set_tooltip_text(_("Files in the archive the DAT does not need : Fix moves them to quarantine. A set still lacking a ROM is Missing afterwards."));
     m_pill_orphan->set_tooltip_text(_("Archives no set of the DAT group claims : Fix moves them to quarantine."));
     for (auto* p : {m_pill_total, m_pill_correct, m_pill_missing, m_pill_incorrect, m_pill_misnamed,
@@ -1209,9 +1209,20 @@ void RomLibraryTab::worker_fix() {
         fs::path src(w.archive);
         fs::path dest_dir = fs::path(quarantine) / w.dat_header;
         fs::create_directories(dest_dir, ec);
-        fs::path dest = dest_dir / src.filename();
         step(src.filename().string());
-        if (fs::exists(dest, ec)) { m_fix.failed++; push_log("[FIX] quarantine already holds " + dest.string() + " : left alone"); continue; }
+        // Un fichier du meme nom deja en quarantaine bloquait ce Fix pour
+        // toujours. Identique, la quarantaine le garde deja : la copie part.
+        // Different, il prend un nom libre a cote.
+        bool same = false;
+        fs::path dest = RomManifest::free_destination(dest_dir.string(), src.string(), same);
+        if (same) {
+            std::error_code rec;
+            fs::remove(src, rec);
+            if (rec) { m_fix.failed++; push_log("[FIX] FAILED to remove " + src.string()); continue; }
+            m_fix.moved++;
+            push_log("[FIX] " + src.filename().string() + " : the same file is already in quarantine, copy removed");
+            continue;
+        }
         if (!move_file(src, dest)) { m_fix.failed++; push_log("[FIX] FAILED to move " + src.string()); continue; }
         m_fix.moved++;
         RomManifest::Entry e;
@@ -1255,9 +1266,20 @@ void RomLibraryTab::worker_fix() {
         fs::path src(o.archive);
         fs::path dest_dir = fs::path(quarantine) / (o.dat_header.empty() ? std::string("orphans") : o.dat_header);
         fs::create_directories(dest_dir, ec);
-        fs::path dest = dest_dir / src.filename();
         step(src.filename().string());
-        if (fs::exists(dest, ec)) { m_fix.failed++; push_log("[FIX] quarantine already holds " + dest.string() + " : left alone"); continue; }
+        // Un fichier du meme nom deja en quarantaine bloquait ce Fix pour
+        // toujours. Identique, la quarantaine le garde deja : la copie part.
+        // Different, il prend un nom libre a cote.
+        bool same = false;
+        fs::path dest = RomManifest::free_destination(dest_dir.string(), src.string(), same);
+        if (same) {
+            std::error_code rec;
+            fs::remove(src, rec);
+            if (rec) { m_fix.failed++; push_log("[FIX] FAILED to remove " + src.string()); continue; }
+            m_fix.moved++;
+            push_log("[FIX] " + src.filename().string() + " : the same file is already in quarantine, copy removed");
+            continue;
+        }
         if (!move_file(src, dest)) { m_fix.failed++; push_log("[FIX] FAILED to move " + src.string()); continue; }
         m_fix.moved++;
         RomManifest::Entry e;

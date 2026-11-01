@@ -380,6 +380,67 @@ bool DatParser::isSoftwareListHeader(const std::string& headerName) {
     return h.find("software list") != std::string::npos;
 }
 
+DatParser::DatInfo DatParser::inspect(const std::string& filepath) {
+    DatInfo info;
+    info.kind = datKind(filepath);
+    if (info.kind == DatKind::None) return info;
+    std::ifstream in(std::filesystem::path(filepath), std::ios::binary);
+    if (!in) return info;
+
+    // The header sits in the first kilobytes : read as text, never parsed.
+    std::string head(1 << 16, '\0');
+    in.read(&head[0], (std::streamsize)head.size());
+    head.resize((size_t)in.gcount());
+    auto between = [&](const std::string& from, const std::string& open, const std::string& close, size_t limit) {
+        const size_t at = head.find(from);
+        if (at == std::string::npos || at > limit) return std::string();
+        const size_t b = head.find(open, at);
+        if (b == std::string::npos || b > limit) return std::string();
+        const size_t e = head.find(close, b + open.size());
+        return e == std::string::npos ? std::string() : head.substr(b + open.size(), e - b - open.size());
+    };
+    const size_t header_end = std::min(head.find("</header>"), head.size());
+    const size_t first_set = std::min({head.find("<machine"), head.find("<game"), head.size()});
+    if (info.kind == DatKind::MameListxml) {
+        info.name  = "MAME";
+        info.build = between("<mame", "build=\"", "\"", first_set);
+        info.version = info.build.substr(0, info.build.find(' '));
+    } else {
+        info.name    = between("<header", "<name>", "</name>", header_end);
+        info.version = between("<header", "<version>", "</version>", header_end);
+        info.build   = between("<datafile", "build=\"", "\"", first_set);
+        const std::string force = between("<clrmamepro", "forcemerging=\"", "\"", header_end);
+        const std::string rom   = between("<romcenter", "rommode=\"", "\"", header_end);
+        if (force == "none" || rom == "unmerged") info.declared = "non-merged";
+        else if (force == "split" || rom == "split") info.declared = "split";
+        else if (force == "full" || rom == "merged") info.declared = "merged";
+    }
+
+    // The two counts, over the whole file, in chunks that overlap by the
+    // length of the longest pattern.
+    static const std::string kDevice = "isdevice=\"yes\"", kRef = "<device_ref ";
+    in.clear();
+    in.seekg(0);
+    std::string buf, carry;
+    std::vector<char> chunk(1 << 20);
+    while (in) {
+        in.read(chunk.data(), (std::streamsize)chunk.size());
+        const size_t got = (size_t)in.gcount();
+        if (!got) break;
+        buf.assign(carry);
+        buf.append(chunk.data(), got);
+        for (const auto* pat : {&kDevice, &kRef}) {
+            size_t n = 0;
+            for (size_t at = buf.find(*pat); at != std::string::npos; at = buf.find(*pat, at + 1))
+                if (at + pat->size() > carry.size()) ++n;   // not already counted in the previous chunk
+            (pat == &kDevice ? info.isdevice : info.device_refs) += n;
+        }
+        const size_t keep = std::max(kDevice.size(), kRef.size()) - 1;
+        carry = buf.size() > keep ? buf.substr(buf.size() - keep) : buf;
+    }
+    return info;
+}
+
 DatParser::DatKind DatParser::datKind(const std::string& filepath) {
     std::string ext = std::filesystem::path(filepath).extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });

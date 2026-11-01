@@ -52,8 +52,9 @@ public:
                                                           std::shared_ptr<DatabaseManager> db,
                                                           std::vector<std::pair<std::string, unsigned long>>* out_entries = nullptr);
 
-    // Every ROM directory of every emulator, canonical : the libraries the
-    // zip_contents cache is allowed to describe.
+    // Every ROM directory of every emulator and every source folder,
+    // canonical : what the zip_contents cache is allowed to describe, and
+    // where the ROM Manager may take the pieces that repair a set.
     static std::vector<std::string> all_library_roots();
     // Forget the cached archives that lie under no library any more (a
     // directory removed in Settings). Decided from Settings alone, no disk
@@ -96,6 +97,14 @@ public:
                                            bool recursive,
                                            const std::function<bool(double, const std::string&)>& progress,
                                            const std::function<void(const std::string&, bool)>& log);
+
+    // The source folders (DatSource::source_paths) brought into the cache
+    // the same way, every archive format and loose ROMs included, always
+    // recursively. Nothing else : a source folder is no library, no status
+    // is derived from it.
+    static CacheScanReport scan_sources_into_cache(std::shared_ptr<DatabaseManager> db,
+                                                   const std::function<bool(double, const std::string&)>& progress,
+                                                   const std::function<void(const std::string&, bool)>& log);
 
     // Database-specific availability check (used by scan_zip_file)
     static void check_availability_db(const std::string& game_name, const std::string& system,

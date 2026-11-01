@@ -24,8 +24,10 @@ public:
     // en Logiqx. La conversion dure une dizaine de secondes et tourne donc
     // dans un fil, la fenetre de progression restant vivante sur le fil
     // principal. Le bouton Annuler interrompt la conversion en cours.
+    // `quiet` : comme pour FinalBurn Neo, pas de message de reussite.
     static void execute_mame(Gtk::Window& parent, const std::string& mame_executable,
-                             const std::string& dat_path, Gtk::Entry* dat_entry = nullptr);
+                             const std::string& dat_path, Gtk::Entry* dat_entry = nullptr,
+                             bool quiet = false);
 
 private:
     static void show_success_dialog(Gtk::Window& parent, const std::string& dat_path, Gtk::Entry* dat_entry);

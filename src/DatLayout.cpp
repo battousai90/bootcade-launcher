@@ -56,12 +56,27 @@ std::string entry_path(const std::string& name) {
     return out;
 }
 
-Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode) : m_mode(mode) {
+Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode,
+               const Options& options) : m_mode(mode) {
+    const std::vector<const Game*>& linked = options.linked;
+    // A clone's disk the parent already has : left to the parent, unless the
+    // DAT alone is read.
+    auto parents_disk = [&](const Game& g, const Disk& d, const Game* parent) {
+        return !options.strict_dat && disk_is_parents(g, d, parent);
+    };
     std::unordered_map<std::string, const Game*> by_name;
     for (const Game* g : sets) by_name.emplace(g->name, g);
     auto find = [&](const std::string& name) -> const Game* {
         auto it = by_name.find(name);
         return it == by_name.end() ? nullptr : it->second;
+    };
+    std::unordered_map<std::string, const Game*> linked_by_name;
+    for (const Game* g : linked) linked_by_name.emplace(g->name, g);
+    // A device : this DAT's set of that name, else another DAT's.
+    auto find_device = [&](const std::string& name) -> const Game* {
+        if (const Game* g = find(name)) return g;
+        auto it = linked_by_name.find(name);
+        return it == linked_by_name.end() ? nullptr : it->second;
     };
 
     // A set's own ROMs : those the DAT does not mark merge=, each once.
@@ -77,7 +92,7 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode) : 
         std::unordered_set<std::string> seen;
         for (const auto& d : g.disks) {
             if (!d.merge.empty() || !seen.insert(d.name).second) continue;
-            if (disk_is_parents(g, d, find(g.cloneof))) continue;   // the parent's one copy
+            if (parents_disk(g, d, find(g.cloneof))) continue;   // the parent's one copy
             out.push_back({d.name, lower(d.sha1), ""});
         }
     };
@@ -188,7 +203,7 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode) : 
             }
             std::unordered_set<std::string> disk_names;
             for (const auto& d : g->disks) {
-                if (disk_is_parents(*g, d, find(g->cloneof))) continue;   // the parent's one copy
+                if (parents_disk(*g, d, find(g->cloneof))) continue;   // the parent's one copy
                 if (disk_names.insert(d.name).second) a.disks.push_back({d.name, lower(d.sha1), ""});
             }
             if (mode == "non-merged") {
@@ -200,7 +215,7 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode) : 
                     const std::string name = todo.back();
                     todo.pop_back();
                     if (!visited.insert(name).second) continue;
-                    const Game* dev = find(name);
+                    const Game* dev = find_device(name);
                     if (!dev) continue;
                     for (const auto& r : dev->roms) {
                         if (r.crc.empty()) continue;
@@ -214,6 +229,91 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode) : 
         }
         add_archive(std::move(a), g->name);
     }
+}
+
+CheckResult check(const std::vector<const Game*>& sets, const std::vector<const Game*>& linked,
+                  const std::string& mode) {
+    CheckResult out;
+    if (mode.empty()) return out;
+    std::unordered_map<std::string, const Game*> by_name;
+    for (const Game* g : sets) by_name.emplace(g->name, g);
+    for (const Game* g : linked) by_name.emplace(g->name, g);
+    auto find = [&](const std::string& name) -> const Game* {
+        auto it = by_name.find(name);
+        return it == by_name.end() ? nullptr : it->second;
+    };
+
+    bool links = false, marks = false;
+    for (const auto* list : {&sets, &linked})
+        for (const Game* g : *list) {
+            links = links || !g->cloneof.empty() || !g->romof.empty() || !g->devices.empty();
+            for (const auto& r : g->roms) marks = marks || r.is_inherited();
+        }
+    if (!links) {
+        out.whole_dat = true;
+        out.problems.push_back({Missing::NoLinks, "", ""});
+        return out;
+    }
+
+    // The sets a set's ROMs come from : its romof chain (parent, then BIOS).
+    auto ancestors = [&](const Game* g) {
+        std::vector<const Game*> up;
+        for (int depth = 0; depth < 8 && !g->romof.empty(); ++depth) {
+            const Game* a = find(g->romof);
+            if (!a || a == g) break;
+            up.push_back(a);
+            g = a;
+        }
+        return up;
+    };
+    auto on_clone_chain = [&](const Game* g, const Game* a) {
+        for (int depth = 0; depth < 8 && !g->cloneof.empty(); ++depth) {
+            const Game* p = find(g->cloneof);
+            if (!p || p == g) return false;
+            if (p == a) return true;
+            g = p;
+        }
+        return false;
+    };
+
+    for (const Game* g : sets) {
+        if (mode == "merged" && !g->cloneof.empty() && !find(g->cloneof))
+            out.problems.push_back({Missing::LinkTargetMissing, g->name, g->cloneof});
+        if (mode == "non-merged")
+            for (const auto& d : g->devices)
+                if (!find(d)) out.problems.push_back({Missing::LinkTargetMissing, g->name, d});
+
+        const std::vector<const Game*> up = ancestors(g);
+        if (up.empty()) continue;
+        std::unordered_set<std::string> by_name_crc, crcs;
+        for (const Game* a : up)
+            for (const auto& r : a->roms)
+                if (!r.crc.empty()) by_name_crc.insert(entry_path(r.name) + '\x1f' + lower(r.crc));
+
+        if (mode == "split" || mode == "merged") {
+            // A ROM with the content of one its parent or BIOS holds, not
+            // marked merge= : whatever its name (a merge= may name the
+            // parent's ROM otherwise), whether it is shared is not said.
+            // Merged shares a clone's ROM with its parent by CRC anyway ; what
+            // it cannot tell is a BIOS ROM the set lists as its own.
+            for (const Game* a : up) {
+                if (mode == "merged" && on_clone_chain(g, a)) continue;
+                for (const auto& ar : a->roms) if (!ar.crc.empty()) crcs.insert(lower(ar.crc));
+            }
+            for (const auto& r : g->roms) {
+                if (r.crc.empty() || r.is_inherited()) continue;
+                if (crcs.count(lower(r.crc))) { out.problems.push_back({Missing::MergeNotMarked, g->name, r.name}); break; }
+            }
+        } else if (mode == "non-merged" && !marks) {
+            // Nothing in the DAT says which of its parent's ROMs a set uses.
+            bool lists_one = false;
+            for (const auto& r : g->roms)
+                if (!r.crc.empty() && by_name_crc.count(entry_path(r.name) + '\x1f' + lower(r.crc))) { lists_one = true; break; }
+            if (!lists_one && !by_name_crc.empty())
+                out.problems.push_back({Missing::ParentRomsNotListed, g->name, up.front()->name});
+        }
+    }
+    return out;
 }
 
 const Archive* Layout::archive_of(const std::string& set) const {

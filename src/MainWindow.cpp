@@ -3050,7 +3050,15 @@ void MainWindow::on_play_clicked() {
         }
         break;
     }
-    
+
+    // Les profils ne sont charges qu'a l'ouverture de l'ecran des manettes :
+    // sans cette lecture, un lancement fait avant de l'ouvrir n'en trouvait
+    // aucun. MAME partait sans fichier controleur, et FBNeo lisait les
+    // reglages par joueur avec les numeros de manette enregistres, pas ceux
+    // des manettes branchees : le joueur 1 tombait sur la manette du joueur 2.
+    ControllerManager::load_profiles(m_controller_profiles, m_active_controller_profile,
+                                     AppContext::get_config_path());
+
     // === Jeu MAME : autre emulateur, autre chemin ===
     //
     // Rien de ce qui suit ne s'applique : pas de prefixe de systeme, pas de
@@ -3176,11 +3184,6 @@ void MainWindow::on_play_clicked() {
          * Sans fichier ecrit, pas de -ctrlr : MAME s'arrete net sur un
          * fichier controleur introuvable. */
         std::vector<std::string> mame_env;
-        // Les profils ne sont charges qu'a l'ouverture de l'ecran des
-        // manettes : sans cette lecture, un premier lancement n'en trouvait
-        // aucun et partait sans fichier controleur.
-        ControllerManager::load_profiles(m_controller_profiles, m_active_controller_profile,
-                                         AppContext::get_config_path());
         if (const ControllerConfig* prof = controller_profile_for(MameControls::profile_key(rom_name))) {
             const std::string dir = MameControls::ctrlr_dir();
             if (MameControls::write_ctrlr(*prof, dir)) {

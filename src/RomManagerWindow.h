@@ -19,6 +19,7 @@
 
 #include "DatabaseManager.h"
 #include "RomImportTab.h"
+#include "RomRebuildTab.h"
 #include "RomLibraryTab.h"
 #include "RomOutboxTab.h"
 #include "RomQuarantineTab.h"
@@ -41,7 +42,7 @@ public:
     // already performed this session, so this never starts an unrequested scan.
     void refresh_after_scan();
 
-    // Bring one tab to the front: "library", "downloads", "import", "outbox", "quarantine", "dat".
+    // Bring one tab to the front: "library", "downloads", "import", "rebuild", "outbox", "quarantine", "dat".
     void show_tab(const std::string& id);
     void grow_to_page();   // elargit la fenetre a l'onglet affiche, sans retrecir
 
@@ -109,6 +110,7 @@ private:
     std::vector<std::string> m_pending_import;
 
     RomImportTab*  m_import  = nullptr;
+    RomRebuildTab* m_rebuild = nullptr;
     RomLibraryTab* m_library = nullptr;
     RomOutboxTab*  m_outbox  = nullptr;
     RomQuarantineTab* m_quarantine = nullptr;

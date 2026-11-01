@@ -113,6 +113,8 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     });
     m_import->signal_outbox_changed().connect([this] { m_outbox->refresh(); m_quarantine->refresh(); });
 
+    m_rebuild = Gtk::make_managed<RomRebuildTab>(m_db);
+
     m_outbox = Gtk::make_managed<RomOutboxTab>(m_db, [this] {
         RomOutboxTab::Paths p;
         p.outbox     = config_string("outbox_path");
@@ -170,7 +172,10 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     m_library->signal_send_to_import().connect(sigc::mem_fun(*this, &RomManagerWindow::on_send_to_import));
     // The DAT groups are the Library's choice of what "complete" means :
     // the combo follows every change made on the DAT tab.
-    m_dat->signal_groups_changed().connect([this] { if (m_library) m_library->reload_groups(); });
+    m_dat->signal_groups_changed().connect([this] {
+        if (m_library) m_library->reload_groups();
+        if (m_rebuild) m_rebuild->reload_groups();
+    });
 
     // Downloads : les manquants du dernier audit de Library.
     RomDownloadTab::Env denv;
@@ -199,12 +204,14 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     m_pages.add(*m_quarantine,    "quarantine");
     m_pages.add(*m_dat,           "dat");
     m_pages.add(*m_downloads,     "downloads");
+    m_pages.add(*m_rebuild,       "rebuild");
     add_tab("library",    "bc-folder.svg",   _("Library"),    _("Scan your ROM library and compare it with DAT files."));
     add_tab("import",     "bc-download.svg", _("Import"),     _("Analyse and repair ROMs before they reach your library."));
     add_tab("outbox",     "bc-package.svg",  _("Outbox"),     _("Repaired ROMs, ready to be moved to your library."));
     add_tab("quarantine", "bc-shield.svg",   _("Quarantine"), _("Files that could not be used, or were rejected."));
     add_tab("dat",        "bc-file.svg",     _("DAT"),        _("The DAT files your library is compared with."));
     add_tab("downloads",  "bc-cloud.svg",    _("Downloads"),  _("Download the sets your library is missing."));
+    add_tab("rebuild",    "bc-sync.svg",     _("Rebuild"),    _("Rebuild sets into another folder, as non-merged, split or merged."));
 
     /* Les onglets defilent, la fenetre garde sa taille.
      *
@@ -216,7 +223,9 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
     m_pages.set_hhomogeneous(false);
     m_pages.set_vhomogeneous(false);
     auto* pages_scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
-    pages_scroll->set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+    // Jamais en largeur : un onglet trop large debordait, coupe a droite. Ses
+    // textes retrecissent a la place (let_shrink, plus bas).
+    pages_scroll->set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
     pages_scroll->set_shadow_type(Gtk::SHADOW_NONE);
     pages_scroll->add(m_pages);
     // La fenetre a la taille de Library, une fois pour toutes : aucun onglet ne
@@ -231,6 +240,7 @@ RomManagerWindow::RomManagerWindow(Gtk::Window& parent, std::shared_ptr<Database
 
     reload_settings();
     show_all_children();
+    ui::let_shrink(m_pages);
     show_tab("library");
 }
 
@@ -288,7 +298,8 @@ void RomManagerWindow::on_send_to_import(std::vector<std::string> archives) {
 }
 
 bool RomManagerWindow::busy() const {
-    return (m_import && m_import->busy()) || (m_library && m_library->busy()) || (m_outbox && m_outbox->busy());
+    return (m_import && m_import->busy()) || (m_rebuild && m_rebuild->busy()) || (m_library && m_library->busy())
+        || (m_outbox && m_outbox->busy());
 }
 
 std::string RomManagerWindow::config_string(const char* key) const {
@@ -346,6 +357,7 @@ std::string RomManagerWindow::fbneo_executable() const {
 // re-reads what is its own.
 void RomManagerWindow::reload_settings() {
     if (m_import) m_import->reload_settings();
+    if (m_rebuild && !m_rebuild->busy()) m_rebuild->reload_settings();
     if (m_outbox) m_outbox->reload_settings();
     if (m_quarantine) m_quarantine->refresh();
     if (m_dat) m_dat->refresh();

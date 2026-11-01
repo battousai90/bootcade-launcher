@@ -37,8 +37,9 @@ struct RomEntry {
     unsigned long found_crc = 0;  // CRC of the entry that answered; the wrong one when Corrupt
     // Where the data actually is, when not in the set's own archive: the
     // ancestor's archive that provides an inherited ROM (Present/WrongName in
-    // a split collection), or another library archive holding a good copy of
-    // an Absent/Corrupt one : in which case the set is repairable locally.
+    // a split collection), or another archive holding a good copy of an
+    // Absent/Corrupt one, in this library first, else in another emulator's
+    // or a source folder : in which case the set is repairable locally.
     std::string   found_in;
     // The DAT marks this ROM merge= : it belongs to the parent or the BIOS.
     bool          inherited = false;

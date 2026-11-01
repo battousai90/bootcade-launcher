@@ -155,8 +155,26 @@ void ROMScanDialog::start_scan() {
                                                         : &ROMScanDialog::worker_cache_scan, this);
 }
 
+void ROMScanDialog::scan_sources() {
+    RomScanner::scan_sources_into_cache(m_db,
+        [this](double, const std::string& msg) {
+            {
+                std::lock_guard<std::mutex> lk(m_shared_mutex);
+                m_current_message = msg;
+            }
+            m_progress_dispatcher();
+            return !m_cancelled;
+        },
+        [this](const std::string& line, bool warn) {
+            add_log_message(line, warn ? Level::Warn : Level::Info);
+        });
+}
+
 void ROMScanDialog::worker_thread() {
     try {
+        // Before the library, whatever path the scan takes after : the
+        // pieces Fix and Import may borrow from.
+        scan_sources();
         // Get game count from database (fast COUNT query)
         size_t total_games = m_db->getGameCount();
         add_log_message("Database loaded: " + std::to_string(total_games) + " games");
@@ -722,6 +740,7 @@ void ROMScanDialog::worker_thread() {
 
 void ROMScanDialog::worker_cache_scan() {
     try {
+        scan_sources();
         add_log_message("Scanning the " + m_emulator + " library: "
                         + std::to_string(m_roms_paths.size()) + " ROM path(s)");
         auto rep = RomScanner::scan_into_cache(m_db, m_roms_paths, m_emulator, m_scan_recursive,

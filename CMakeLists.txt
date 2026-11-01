@@ -22,7 +22,7 @@ cmake_minimum_required(VERSION 3.16)
 #
 # Packaging (CPack, plus bas) l'utilise tel quel : un nom de paquet veut un
 # numero de release propre, jamais une empreinte de commit.
-project(bootcade VERSION 2.0.2 LANGUAGES CXX)
+project(bootcade VERSION 2.1.0 LANGUAGES CXX)
 
 # --- Ce que le binaire annonce -------------------------------------------
 #
@@ -195,12 +195,16 @@ add_executable(bootcade
     src/RomScanner.cpp
     src/RomArchive.cpp
     src/RomInbox.cpp
+    src/RomBuild.cpp
+    src/RomRebuild.cpp
     src/RomAudit.cpp
     src/RomResolve.cpp
     src/DatLayout.cpp
     src/RomManifest.cpp
+    src/TorrentZip.cpp
     src/RomLibraryTab.cpp
     src/RomImportTab.cpp
+    src/RomRebuildTab.cpp
     src/RomOutboxTab.cpp
     src/RomQuarantineTab.cpp
     src/DatSource.cpp

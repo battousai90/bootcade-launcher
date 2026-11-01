@@ -1,6 +1,7 @@
 // src/RomAudit.cpp
 #include "RomAudit.h"
 #include "i18n.h"
+#include "RomScanner.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -101,6 +102,21 @@ Report audit(std::shared_ptr<DatabaseManager> db,
     for (const auto& [path, a] : index.all())
         for (const auto& [crc, name] : a.name_by_crc)
             crc_to_archive.emplace(crc, path);
+    // A good copy may also sit outside this library : in another emulator's,
+    // or in a source folder (RomVault's ToSort). Asked only when the library
+    // has none. The scans keep that part of the cache true to the disk.
+    std::unordered_multimap<unsigned long, std::string> crc_elsewhere;
+    {
+        std::vector<std::string> library_roots;
+        std::error_code ec;
+        for (const auto& r : roms_paths)
+            if (!r.empty()) library_roots.push_back(std::filesystem::weakly_canonical(r, ec).string());
+        const RomResolve::CacheIndex pool(db, RomScanner::all_library_roots(), RomResolve::CacheIndex::OnDisk::Trust);
+        for (const auto& [path, a] : pool.all()) {
+            if (RomResolve::under_any_root(path, library_roots)) continue;
+            for (const auto& [crc, name] : a.name_by_crc) crc_elsewhere.emplace(crc, path);
+        }
+    }
 
     rep.pool_empty = index.empty();
     rep.cache_files = index.cache_files();
@@ -257,6 +273,10 @@ Report audit(std::shared_ptr<DatabaseManager> db,
                     auto range = crc_to_archive.equal_range(r.crc);
                     for (auto it = range.first; it != range.second; ++it)
                         if (!own || it->second != own->path) { r.found_in = it->second; break; }
+                    if (r.found_in.empty()) {
+                        auto other = crc_elsewhere.find(r.crc);
+                        if (other != crc_elsewhere.end()) r.found_in = other->second;
+                    }
                 }
                 if (r.state == RomState::Corrupt)        { e.corrupt++; all_correct = false; }
                 else if (r.state == RomState::Absent)    { e.absent++;  all_present = false; }
