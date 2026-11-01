@@ -349,6 +349,10 @@ install(FILES packaging/${APP_ID}.metainfo.xml
 install(FILES assets/logo.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
         RENAME ${APP_ID}.svg)
+# appimagetool exige une icone PNG a la racine de l'AppImage : la SVG ne
+# suffit plus depuis sa version du 2026-10-31.
+install(FILES packaging/${APP_ID}.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
 endif()
 
 # ─────────────────────────────────────────────────────────────────────────────
