@@ -109,6 +109,14 @@ if wants appimage; then
         --plugin gtk \
         --desktop-file "$APPDIR/usr/share/applications/$APP_ID.desktop" \
         --icon-file "$APPDIR/usr/share/icons/hicolor/scalable/apps/$APP_ID.svg" \
+        --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_ID.png" \
+        2>&1 | grep -viE 'warning|^\s*$' || true
+    # appimagetool refuse une icone de tete qui n'est pas un PNG (.DirIcon) :
+    # on la pose nous-memes plutot que de dependre du choix de linuxdeploy.
+    rm -f "$APPDIR/$APP_ID.svg" "$APPDIR/.DirIcon"
+    cp "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
+    ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
+    PATH="$TOOLS:$PATH" "$TOOLS/linuxdeploy" --appdir "$APPDIR" \
         --output appimage 2>&1 | grep -viE 'warning|^\s*$' || true
 
     out="$(find "$ROOT" "$BUILD" -maxdepth 1 -name '*.AppImage' -newer "$BUILD/CMakeCache.txt" | head -1)"
