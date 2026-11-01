@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="2.1.0" date="2026-11-01">
+      <description>
+        <p>2.1.0</p>
+      </description>
+    </release>
     <release version="2.0.2" date="2026-10-28">
       <description>
         <p>Repair ROMs on import, rebuild incomplete sets and install MAME Sooner on Windows</p>
