@@ -98,32 +98,32 @@ private:
      * Construite pour le seul joueur 1, elle disparaissait en passant sur
      * l'onglet Player 2 et la colonne de gauche s'etalait sur toute la
      * largeur : la fenetre changeait de forme d'un onglet a l'autre. */
-    Gtk::Box*   m_device_panel[2]{};
-    Gtk::Label* m_device_title[2]{};
-    Gtk::Label* m_device_sub[2]{};
-    Gtk::Image* m_device_art[2]{};
+    Gtk::Box*   m_device_panel[MAX_PLAYERS]{};
+    Gtk::Label* m_device_title[MAX_PLAYERS]{};
+    Gtk::Label* m_device_sub[MAX_PLAYERS]{};
+    Gtk::Image* m_device_art[MAX_PLAYERS]{};
     // Dimensions de l'illustration : celles de la maquette, resserrees quand
     // l'ecran est trop etroit (compact_layout).
     int m_art_w = 322;
     int m_art_h = 226;
     int m_panel_w = 368;
     int m_field_w = 136;
-    Gtk::Expander* m_analog_exp[2]{};
+    Gtk::Expander* m_analog_exp[MAX_PLAYERS]{};
     void compact_layout(int missing_width, int missing_height);
 
     /* L'encart du bas dit toujours quelque chose : la recommandation quand
      * elle existe, l'etat neutre sinon. Un conteneur vert vide qui affirme
      * un succes sans rien annoncer serait pire que pas d'encart du tout. */
-    Gtk::Grid*   m_detected_box[2]{};
-    SettingsUi::Icon* m_detected_icon[2]{};
-    Gtk::Label*  m_detected_title[2]{};
-    Gtk::Label*  m_detected_sub[2]{};
-    Gtk::Button* m_detected_btn[2]{};
+    Gtk::Grid*   m_detected_box[MAX_PLAYERS]{};
+    SettingsUi::Icon* m_detected_icon[MAX_PLAYERS]{};
+    Gtk::Label*  m_detected_title[MAX_PLAYERS]{};
+    Gtk::Label*  m_detected_sub[MAX_PLAYERS]{};
+    Gtk::Button* m_detected_btn[MAX_PLAYERS]{};
 
     /* Le materiel reconnu et le prereglage choisi sont deux choses : un
      * prereglage pose a la main ne change pas l'identite de la manette. */
-    Gtk::ComboBoxText* m_preset_combos[2]{};
-    std::string        m_reco_preset[2];
+    Gtk::ComboBoxText* m_preset_combos[MAX_PLAYERS]{};
+    std::string        m_reco_preset[MAX_PLAYERS];
 
     /* La ligne manette et la ligne prereglage appartiennent au joueur
      * affiche, mais la maquette les place hors de l'onglet : l'une dans la
@@ -142,8 +142,8 @@ private:
 
     // Retour visuel de l'enregistrement, coupe a la fermeture.
     sigc::connection m_saved_timer;
-    Gtk::Label* m_conn_dot[2]{};
-    Gtk::Label* m_conn_lbl[2]{};
+    Gtk::Label* m_conn_dot[MAX_PLAYERS]{};
+    Gtk::Label* m_conn_lbl[MAX_PLAYERS]{};
     void        update_device_panel(int p);
 
     Gtk::Widget* icon(const std::string& file, int px = 20);
@@ -156,12 +156,12 @@ private:
     Gtk::Widget* card(const std::string& title, const std::string& icon_file,
                       Gtk::Widget& body, const std::string& subtitle = {});
     std::vector<JoystickInfo>  m_devices;
-    Gtk::ComboBoxText*         m_device_combos[2]{};
+    Gtk::ComboBoxText*         m_device_combos[MAX_PLAYERS]{};
 
     /* Boutons 7 a 16 : une carte a part, et une ligne par bouton, montrees
      * selon le nombre de boutons de la manette choisie. */
-    Gtk::Widget* m_extra_card[2]{};
-    Gtk::Widget* m_extra_rows[2][MAX_GAME_BUTTONS]{};
+    Gtk::Widget* m_extra_card[MAX_PLAYERS]{};
+    Gtk::Widget* m_extra_rows[MAX_PLAYERS][MAX_GAME_BUTTONS]{};
     // Combien de boutons l'ecran propose pour ce joueur : ceux de sa manette
     // (six au moins), plus tout bouton deja lie au-dela.
     int  shown_buttons(int p) const;
@@ -194,12 +194,12 @@ private:
         Gtk::Button*      tune   = nullptr;    // vitesse, retour au centre, mode
         AnalogBinding     value;               // ce qui est lie aujourd'hui
     };
-    AnalogWidgets m_analog_widgets[2][ANALOG_ROLE_COUNT];
+    AnalogWidgets m_analog_widgets[MAX_PLAYERS][ANALOG_ROLE_COUNT];
     bool          m_analog_loading = false;    // suppresses signals while filling
     // Sensibilite de tout le jeu : une seule valeur dans le .ini, mais un
     // curseur par onglet joueur, tenus ensemble.
-    Gtk::Scale*   m_sens_scale[2]{};
-    Gtk::Label*   m_sens_value[2]{};
+    Gtk::Scale*   m_sens_scale[MAX_PLAYERS]{};
+    Gtk::Label*   m_sens_value[MAX_PLAYERS]{};
     void          sensitivity_changed(int from_player);
     void          tune_analog(int player, AnalogRole role);
     void          refresh_analog_row(int player, int role);

@@ -16,7 +16,10 @@ namespace WinProc {
 // Rend l'identifiant du processus, ou -1 s'il n'a pas pu demarrer. La poignee
 // reste ouverte jusqu'a wait() : c'est elle qui permet d'en lire le code de
 // sortie meme apres la fin du processus.
-int spawn(const std::vector<std::string>& args, const std::vector<std::string>& env = {});
+// `log_path` : si non vide, la sortie et les erreurs du programme y sont
+// ajoutees.
+int spawn(const std::vector<std::string>& args, const std::vector<std::string>& env = {},
+          const std::string& log_path = {});
 
 // Bloque jusqu'a la fin du processus lance par spawn(), rend son code de sortie
 // (-1 si inconnu) et libere la poignee.

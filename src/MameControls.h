@@ -39,6 +39,16 @@ bool write_ctrlr(const ControllerConfig& cfg, const std::string& dir);
 // sdljoy), le seul qui numerote comme /dev/input/js*.
 bool uses_pad(const ControllerConfig& cfg);
 
+// Un joueur au moins vise ou tire a la souris : MAME ne lit la souris qu'avec
+// -mouse, coupe par defaut dans mame.ini.
+bool uses_mouse(const ControllerConfig& cfg);
+
+// Le pilote de manettes de MAME dont le fichier controleur suit la
+// numerotation : « sdljoy » sous Linux, « dinput » sous Windows, ou la
+// version officielle de MAME n'a pas les pilotes SDL (un nom inconnu le
+// ferait retomber sur un autre pilote, avec d'autres numeros).
+const char* joystick_provider();
+
 // Nombre de commandes redefinies dans le <input> d'un .cfg de MAME (0 si
 // aucune, -1 si le fichier est absent ou illisible). Elles passent devant
 // le fichier controleur.
