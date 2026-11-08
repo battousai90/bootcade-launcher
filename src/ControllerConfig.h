@@ -17,10 +17,31 @@ enum class GameAction {
     BUTTON7, BUTTON8, BUTTON9, BUTTON10, BUTTON11, BUTTON12,
     BUTTON13, BUTTON14, BUTTON15, BUTTON16,
     START, COIN,
+    /* Le second stick des jeux a deux manches (Robotron, Smash TV, Ikari
+     * Warriors) : on se deplace avec l'un, on tire avec l'autre. Ranges APRES
+     * Coin pour que les index d'avant ne bougent pas ; l'enregistrement se
+     * fait par nom, un ancien profil se relit donc tel quel. */
+    RSTICK_UP, RSTICK_DOWN, RSTICK_LEFT, RSTICK_RIGHT,
     COUNT
 };
 
 constexpr int GAME_ACTION_COUNT = static_cast<int>(GameAction::COUNT);
+
+// Les joueurs que Bootcade regle. Quatre, comme FBNeo (p1 a p4defaults.ini) et
+// les jeux a quatre de MAME (Tortues Ninja, Simpsons, Gauntlet).
+constexpr int MAX_PLAYERS = 4;
+
+inline bool is_direction_action(GameAction a) {
+    return a >= GameAction::UP && a <= GameAction::RIGHT;
+}
+inline bool is_right_stick_action(GameAction a) {
+    return a >= GameAction::RSTICK_UP && a <= GameAction::RSTICK_RIGHT;
+}
+// La direction du stick principal qui correspond a une direction du second.
+inline GameAction right_stick_direction(GameAction a) {
+    return static_cast<GameAction>(static_cast<int>(a) - static_cast<int>(GameAction::RSTICK_UP)
+                                   + static_cast<int>(GameAction::UP));
+}
 constexpr int MAX_GAME_BUTTONS  = 16;
 // Ce que l'ecran montre quand on ne sait rien de la manette : la borne
 // classique a six boutons.
@@ -51,6 +72,10 @@ inline const char* game_action_name(GameAction a) {
         case GameAction::RIGHT:   return "Right";
         case GameAction::START:   return "Start";
         case GameAction::COIN:    return "Coin / Select";
+        case GameAction::RSTICK_UP:    return "Right stick up";
+        case GameAction::RSTICK_DOWN:  return "Right stick down";
+        case GameAction::RSTICK_LEFT:  return "Right stick left";
+        case GameAction::RSTICK_RIGHT: return "Right stick right";
         default:                  return "Unknown";
     }
 }
@@ -69,6 +94,10 @@ inline const char* game_action_key(GameAction a) {
         case GameAction::RIGHT:   return "right";
         case GameAction::START:   return "start";
         case GameAction::COIN:    return "coin";
+        case GameAction::RSTICK_UP:    return "rstick_up";
+        case GameAction::RSTICK_DOWN:  return "rstick_down";
+        case GameAction::RSTICK_LEFT:  return "rstick_left";
+        case GameAction::RSTICK_RIGHT: return "rstick_right";
         default:                  return "unknown";
     }
 }
@@ -119,7 +148,19 @@ inline std::string key_label(int code) {
 // D'ou vient une commande. Le clavier n'etait pas propose : un joueur sans
 // manette ne pouvait rien configurer, et un joueur qui en a une ne pouvait pas
 // garder deux ou trois touches au clavier a cote.
-enum class InputSource { PAD = 0, KEY };
+/* MOUSE : un bouton de la souris, pour les jeux de tir au pistolet et les
+ * trackballs. Bouton 0 = gauche, 1 = droit, 2 = milieu : l'ordre de FBNeo
+ * (code 0x8080 + n). MAME, lui, les numerote autrement, voir MameControls. */
+enum class InputSource { PAD = 0, KEY, MOUSE };
+
+inline const char* mouse_button_name(int button) {
+    switch (button) {
+        case 0:  return "Mouse left";
+        case 1:  return "Mouse right";
+        case 2:  return "Mouse middle";
+        default: return "Mouse";
+    }
+}
 
 struct InputBinding {
     bool valid    = false;
@@ -138,6 +179,8 @@ struct InputBinding {
         if (!valid) return "";
         if (source == InputSource::KEY)
             return key_name.empty() ? key_label(key) : key_name;
+        if (source == InputSource::MOUSE)
+            return _(mouse_button_name(button));
         if (is_axis)
             return _("Axis ") + std::to_string(axis)
                    + (axis_dir > 0 ? " +" : " -");
@@ -154,7 +197,10 @@ struct InputBinding {
 // Roles are the answer: what an input DOES, which is stable across the dozens
 // of names games give it. A role is matched to a game's input name by pattern
 // (see analog_role_for_input), and carries the binding the player chose.
-enum class AnalogRole { STEERING = 0, THROTTLE, BRAKE, AIM_X, AIM_Y, COUNT };
+/* LEVER et PEDAL3 viennent de MAME : la manette des gaz d'After Burner ou de
+ * Star Wars est le troisieme axe d'un manche (AD_STICK_Z), et quelques jeux
+ * ont une troisieme pedale. Ajoutes a la fin, ils ne deplacent rien. */
+enum class AnalogRole { STEERING = 0, THROTTLE, BRAKE, AIM_X, AIM_Y, LEVER, PEDAL3, COUNT };
 
 constexpr int ANALOG_ROLE_COUNT = static_cast<int>(AnalogRole::COUNT);
 
@@ -165,6 +211,8 @@ inline const char* analog_role_name(AnalogRole r) {
         case AnalogRole::BRAKE:    return "Brake";
         case AnalogRole::AIM_X:    return "Aim X (gun, trackball)";
         case AnalogRole::AIM_Y:    return "Aim Y (gun, trackball)";
+        case AnalogRole::LEVER:    return "Throttle lever";
+        case AnalogRole::PEDAL3:   return "Pedal 3";
         default:                   return "Unknown";
     }
 }
@@ -176,6 +224,8 @@ inline const char* analog_role_key(AnalogRole r) {
         case AnalogRole::BRAKE:    return "brake";
         case AnalogRole::AIM_X:    return "aim_x";
         case AnalogRole::AIM_Y:    return "aim_y";
+        case AnalogRole::LEVER:    return "lever";
+        case AnalogRole::PEDAL3:   return "pedal3";
         default:                   return "unknown";
     }
 }
@@ -188,12 +238,12 @@ inline AnalogRole analog_role_from_key(const std::string& k) {
     return AnalogRole::COUNT;
 }
 
-// Where an analog input reads from. Only joystick axes are wired today; the
-// enum exists so a mouse or a light gun can be added later without changing
-// the saved file format or the dialog's shape.
-// MOUSE_AXIS est conserve pour ne pas invalider les configurations deja
-// enregistrees, mais le pilote SDL de l'emulateur ne lit pas la souris : la
-// valeur est ecrite et jamais appliquee. Le dialogue ne la propose plus.
+// Where an analog input reads from.
+//
+// MOUSE_AXIS : l'axe 0 (gauche-droite) ou 1 (haut-bas) de la souris. FBNeo
+// SDL2 lit la souris du systeme (« mouseaxis N » dans le .ini) et MAME aussi,
+// a condition de lui passer -mouse : c'est ce qui fait viser un pistolet,
+// rouler un trackball ou tourner un spinner a la souris.
 //
 // KEY_PAIR est la facon dont l'emulateur fait tourner un volant au clavier :
 // deux touches, une par sens, avec une vitesse et un retour au centre. C'est
@@ -246,6 +296,17 @@ inline AnalogBinding default_analog_binding(AnalogRole r) {
     return b;
 }
 
+// Une liaison qui ne vaut que manette branchee : sans manette, son numero de
+// bouton ou d'axe ne designe rien.
+inline bool binding_needs_pad(const InputBinding& b) {
+    return b.valid && b.source == InputSource::PAD;
+}
+inline bool analog_needs_pad(const AnalogBinding& b) {
+    if (b.source == AnalogSource::JOY_AXIS) return true;
+    if (b.source == AnalogSource::KEY_PAIR) return b.pad_neg.valid || b.pad_pos.valid;
+    return false;
+}
+
 // ── Per-player configuration ───────────────────────────────────────────────
 struct PlayerConfig {
     std::string device_path;   // "" = unset, "/dev/input/js0" etc.
@@ -260,6 +321,24 @@ struct PlayerConfig {
     std::string preset;
     std::map<GameAction, InputBinding> bindings;
     std::map<AnalogRole, AnalogBinding> analog;
+
+    bool has_device() const { return !device_path.empty(); }
+    // Le joueur a quelque chose a ecrire meme sans manette : une touche, un
+    // bouton de souris, un axe de souris ou une paire de touches.
+    bool has_pad_free_inputs() const {
+        for (const auto& [a, b] : bindings)
+            if (b.valid && !binding_needs_pad(b)) return true;
+        for (const auto& [r, b] : analog)
+            if (b.is_set() && !analog_needs_pad(b)) return true;
+        return false;
+    }
+    bool uses_mouse() const {
+        for (const auto& [a, b] : bindings)
+            if (b.valid && b.source == InputSource::MOUSE) return true;
+        for (const auto& [r, b] : analog)
+            if (b.is_set() && b.source == AnalogSource::MOUSE_AXIS) return true;
+        return false;
+    }
 };
 
 // ── Préréglages ────────────────────────────────────────────────────────────
@@ -409,26 +488,23 @@ inline void apply_preset(PlayerConfig& player, const ControllerPreset& preset) {
         // Gaz et frein sur deux touches voisines, faute d'analogique.
         player.analog[AnalogRole::THROTTLE] = pair(0x1F, "S", 0x11, "Z");
         player.analog[AnalogRole::BRAKE]    = pair(0x2D, "X", 0x2C, "W");
-    } else {
-        // Les valeurs d'origine conviennent a toutes ces manettes : stick
-        // gauche pour la direction, gachettes pour les pedales. Elles sont
-        // absolues, la position du stick etant celle du volant.
-        for (int r = 0; r < ANALOG_ROLE_COUNT; ++r) {
-            auto role = static_cast<AnalogRole>(r);
-            AnalogBinding b = default_analog_binding(role);
-            if (b.is_set()) player.analog[role] = b;
-        }
     }
+    /* Manette : rien d'enregistre. Les numeros d'axes « 5 = gachette droite,
+     * 2 = gauche » ne valent que pour les manettes Xbox et PS4 : sur une copie
+     * de DualShock 3, l'axe 5 est la croix et l'axe 2 le stick droit, et le
+     * prereglage y mettait l'accelerateur. Les ecrivains de fichiers prennent
+     * donc, pour une commande non reglee, ce que la manette BRANCHEE a
+     * vraiment (ControllerManager::default_analog). */
 }
 
-// ── Full controller configuration (2 players) ─────────────────────────────
+// ── Full controller configuration (MAX_PLAYERS players) ───────────────────
 struct ControllerConfig {
     std::vector<PlayerConfig> players;
     // Sensibilite des commandes analogiques, en pourcent (100 = celle de
     // l'emulateur). Le .ini d'un jeu n'en porte qu'une, pour tout le jeu.
     // 0 = jamais reglee : on ne touche pas a ce que l'emulateur a ecrit.
     int analog_percent = 0;
-    ControllerConfig() { players.resize(2); }
+    ControllerConfig() { players.resize(MAX_PLAYERS); }
 };
 
 constexpr int ANALOG_PERCENT_MIN = 10;

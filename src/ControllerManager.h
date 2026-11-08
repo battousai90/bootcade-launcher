@@ -38,6 +38,50 @@ public:
     };
     static bool poll_raw(int fd, RawInput& out);
 
+    /* Ce qu'est chaque axe de la manette, dans la numerotation de Bootcade.
+     *
+     * Une case par axe : le code ABS_* de Linux (ABS_X = stick gauche
+     * horizontal, ABS_RX = stick droit, ABS_HAT0X = croix...), ou -1 quand on
+     * ne sait pas. Sous Linux c'est la table de joydev (JSIOCGAXMAP). Sous
+     * Windows, winmm ne dit que X, Y et Z avec certitude, et Bootcade range
+     * toujours le chapeau en 6 et 7 : le reste est -1. Vide si la manette
+     * n'est pas lisible. */
+    static std::vector<int> axis_codes(const std::string& device_path);
+
+    /* Le second stick par defaut : le stick droit de la manette.
+     *
+     * Une direction du stick droit que le joueur n'a pas liee lui-meme part
+     * sur l'axe ABS_RX / ABS_RY de sa manette, comme MAME et FBNeo le
+     * proposent d'eux-memes sur une manette standard. Rien n'est ajoute si
+     * la manette n'a pas de stick droit reconnu. Les ecrivains de fichiers
+     * l'appliquent a une COPIE du profil : ce qui est enregistre ne change
+     * pas. */
+    static void fill_right_stick(PlayerConfig& player);
+
+    /* La commande analogique d'un joueur qui ne l'a pas reglee lui-meme.
+     *
+     * Choisie d'apres ce que la manette BRANCHEE annonce, pas d'apres un
+     * numero d'axe fixe : direction et visee sur le stick gauche (ou le
+     * volant), accelerateur et frein sur les pedales d'un volant ou sur les
+     * gachettes analogiques d'une manette qui en a (Z/RZ a cote de RX/RY).
+     * Une manette sans gachette analogique, comme une copie de DualShock 3
+     * dont Z/RZ sont le stick droit, n'a pas d'accelerateur par defaut.
+     * Quand la manette ne dit pas tout (Windows, manette debranchee), on
+     * garde les numeros habituels. */
+    static AnalogBinding default_analog(const PlayerConfig& player, AnalogRole role);
+
+    /* Les profils fournis : un par famille de jeux.
+     *
+     * Construits a partir d'un profil deja regle (le profil actif), pour
+     * reprendre SA manette et SES numeros de boutons : « Fighting » remet la
+     * disposition a six boutons des bornes, « Neo Geo / Shoot'em up » range
+     * les quatre boutons principaux sous le pouce, « Twin-stick » deplace au
+     * stick gauche et tire au stick droit, « Racing » pose volant et pedales,
+     * « Keyboard and mouse » vise et tire a la souris (pistolets, trackballs,
+     * spinners), « Keyboard » joue sans manette. Dans l'ordre d'affichage. */
+    static std::vector<std::pair<std::string, ControllerConfig>>
+        builtin_profiles(const ControllerConfig& base);
+
     // ── Single-config persistence (legacy / backward-compat) ─────────────
     // Reads/writes only the "controllers" key in config_path.
     static void load_config(ControllerConfig& out,  const std::string& config_path);

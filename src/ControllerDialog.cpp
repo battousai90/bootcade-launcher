@@ -165,6 +165,8 @@ static std::string analog_label(const AnalogBinding& b) {
         return shown(b.key_neg, b.key_neg_name, b.pad_neg) + " / "
              + shown(b.key_pos, b.key_pos_name, b.pad_pos);
     }
+    if (b.source == AnalogSource::MOUSE_AXIS)
+        return b.index == 0 ? _("Mouse left-right") : _("Mouse up-down");
     return Glib::ustring::compose(_("Axis %1"), b.index).raw();
 }
 
@@ -207,8 +209,8 @@ ControllerDialog::ControllerDialog(const std::map<std::string, ControllerConfig>
                                [this](int mw, int mh) { compact_layout(mw, mh); });
     set_position(Gtk::WIN_POS_CENTER_ON_PARENT);
 
-    m_binding_labels.resize(2 * GAME_ACTION_COUNT, nullptr);
-    m_bind_buttons.resize(2 * GAME_ACTION_COUNT, nullptr);
+    m_binding_labels.resize(MAX_PLAYERS * GAME_ACTION_COUNT, nullptr);
+    m_bind_buttons.resize(MAX_PLAYERS * GAME_ACTION_COUNT, nullptr);
     m_devices = ControllerManager::list_devices();
     // Chaque joueur retrouve sa manette par son nom, quelle que soit sa
     // position dans la liste de l'ordinateur.
@@ -283,8 +285,7 @@ ControllerDialog::ControllerDialog(const std::map<std::string, ControllerConfig>
     m_topbar.get_style_context()->add_class("cc-topbar");
     vbox->pack_start(m_topbar, Gtk::PACK_SHRINK);
 
-    build_player_tab(0);
-    build_player_tab(1);
+    for (int p = 0; p < MAX_PLAYERS; ++p) build_player_tab(p);
     analog_ui_from_config();   // widgets exist now; fill them from the profile
     m_notebook.get_style_context()->add_class("cc-tabs");
 
@@ -500,6 +501,34 @@ void ControllerDialog::on_new_profile_clicked() {
     entry->set_margin_start(12); entry->set_margin_end(12);
     entry->set_margin_top(12);
     dlg.get_content_area()->pack_start(*entry, Gtk::PACK_SHRINK);
+
+    /* Le point de depart : vide, une copie du profil affiche, ou l'un des
+     * profils fournis, construit sur la manette du profil affiche. C'est
+     * aussi la facon de refaire un profil fourni apres avoir change de
+     * manette. */
+    save_active_to_profiles();
+    const auto templates = ControllerManager::builtin_profiles(m_config);
+    auto* from_row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
+    from_row->set_margin_start(12); from_row->set_margin_end(12);
+    from_row->set_margin_top(10);   from_row->set_margin_bottom(6);
+    from_row->pack_start(*Gtk::make_managed<Gtk::Label>(_("Start from")), Gtk::PACK_SHRINK);
+    auto* from = Gtk::make_managed<Gtk::ComboBoxText>();
+    from->append("empty", _("Empty"));
+    from->append("copy", Glib::ustring::compose(_("Copy of \"%1\""), m_active_profile_name));
+    for (size_t i = 0; i < templates.size(); ++i)
+        from->append(std::to_string(i), templates[i].first);
+    from->set_active_id("empty");
+    from->signal_changed().connect([from, entry, &templates] {
+        // Le nom du modele, tant que le joueur n'en a pas tape un a lui.
+        const std::string id = from->get_active_id();
+        bool typed = !entry->get_text().empty();
+        for (const auto& t : templates) typed = typed && entry->get_text() != t.first;
+        if (typed || id == "empty" || id == "copy") return;
+        entry->set_text(templates[std::stoul(id)].first);
+    });
+    from_row->pack_start(*from, Gtk::PACK_EXPAND_WIDGET);
+    dlg.get_content_area()->pack_start(*from_row, Gtk::PACK_SHRINK);
+
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.add_button(_("Create"),  Gtk::RESPONSE_OK);
     dlg.set_default_response(Gtk::RESPONSE_OK);
@@ -508,6 +537,7 @@ void ControllerDialog::on_new_profile_clicked() {
     if (dlg.run() != Gtk::RESPONSE_OK) return;
     std::string name = entry->get_text();
     if (name.empty()) return;
+    const std::string from_id = from->get_active_id();
     if (m_profiles.count(name)) {
         SettingsUi::notice(*this, _("Profile already exists"),
                            Glib::ustring::compose(_("Profile \"%1\" already exists."), name),
@@ -515,9 +545,12 @@ void ControllerDialog::on_new_profile_clicked() {
         return;
     }
 
-    save_active_to_profiles();
-    // New profile starts as empty (no bindings, no device)
-    m_profiles[name] = ControllerConfig{};
+    if (from_id == "copy")
+        m_profiles[name] = m_config;
+    else if (from_id != "empty" && !from_id.empty())
+        m_profiles[name] = templates[std::stoul(from_id)].second;
+    else
+        m_profiles[name] = ControllerConfig{};
 
     populate_profile_combo();
     m_profile_switching = true;
@@ -794,8 +827,11 @@ void ControllerDialog::build_player_tab(int p) {
          * Coin leur pictogramme nu. Les trois cas passent par un
          * conteneur de MEME taille : les colonnes tombent donc en face
          * d'une carte a l'autre. */
-        const bool is_dir = a >= (int)GameAction::UP
-                         && a <= (int)GameAction::RIGHT;
+        const bool rstick = is_right_stick_action(action);
+        const bool is_dir = is_direction_action(action) || rstick;
+        // Dans la carte du second stick, « Up » suffit : le titre de la carte
+        // dit deja de quel stick il s'agit.
+        const GameAction shown_as = rstick ? right_stick_direction(action) : action;
 
         Gtk::Widget* cell = nullptr;
         if (is_button_action(action)) {
@@ -803,7 +839,7 @@ void ControllerDialog::build_player_tab(int p) {
         } else if (is_dir) {
             static const char* kArrow[] = {"bc-up.svg", "bc-down.svg",
                                            "bc-left.svg", "bc-right.svg"};
-            cell = glyph_cell(kArrow[a - (int)GameAction::UP], true);
+            cell = glyph_cell(kArrow[(int)shown_as - (int)GameAction::UP], true);
         } else if (action == GameAction::START) {
             cell = glyph_cell("bc-start.svg", false);
         } else if (action == GameAction::COIN) {
@@ -813,7 +849,7 @@ void ControllerDialog::build_player_tab(int p) {
         auto* name_row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 11);
         name_row->set_size_request(-1, kRowHeight);
         if (cell) name_row->pack_start(*cell, Gtk::PACK_SHRINK);
-        auto* name_lbl = Gtk::make_managed<Gtk::Label>(_(game_action_name(action)));
+        auto* name_lbl = Gtk::make_managed<Gtk::Label>(_(game_action_name(shown_as)));
         name_lbl->set_halign(Gtk::ALIGN_START);
         name_lbl->set_valign(Gtk::ALIGN_CENTER);
         name_lbl->set_hexpand(true);
@@ -894,6 +930,39 @@ void ControllerDialog::build_player_tab(int p) {
     extra->get_style_context()->add_class("cc-subcard");
     extra->set_no_show_all(true);
     m_extra_card[p] = extra;
+
+    /* Le second stick des jeux a deux manches, sous le panneau manette.
+     *
+     * Une poignee de jeux seulement (Robotron, Smash TV, Ikari Warriors). Pose
+     * sous les trois cartes, il repoussait les commandes analogiques hors
+     * d'un ecran 1080p ; la colonne de droite, elle, avait la place. Laissee
+     * vide, chaque direction part sur le stick droit de la manette. */
+    auto* rstick_grid = Gtk::make_managed<Gtk::Grid>();
+    rstick_grid->set_column_spacing(10);
+    rstick_grid->set_row_spacing(10);
+    // Deux lignes de deux, la fleche seule : sur quatre lignes la carte
+    // depassait de 64 pixels la hauteur d'un ecran 1080p.
+    for (int d = 0; d < 4; ++d) {
+        auto cells = make_row((int)GameAction::RSTICK_UP + d);
+        if (auto* row = dynamic_cast<Gtk::Box*>(cells.first))
+            for (auto* child : row->get_children())
+                if (auto* lbl = dynamic_cast<Gtk::Label*>(child)) {
+                    lbl->set_no_show_all(true);
+                    lbl->hide();
+                }
+        cells.first->set_hexpand(false);
+        cells.second->set_tooltip_text(_(game_action_name(
+            static_cast<GameAction>((int)GameAction::RSTICK_UP + d))));
+        rstick_grid->attach(*cells.first,  (d % 2) * 2,     d / 2, 1, 1);
+        rstick_grid->attach(*cells.second, (d % 2) * 2 + 1, d / 2, 1, 1);
+    }
+    auto* rstick = card(_("Second stick"), "bc-directions.svg", *rstick_grid);
+    /* L'explication en bulle et non en sous-titre : deux lignes de plus
+     * suffisaient a faire depasser la colonne de droite d'un ecran 1080p, et
+     * les commandes analogiques se repliaient alors d'office. */
+    rstick->set_tooltip_text(
+        _("Twin-stick games: move with one stick, shoot with the "
+          "other. Left empty, it uses the right stick."));
 
     auto* arcade_body = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 16);
     arcade_body->pack_start(*cards, Gtk::PACK_SHRINK);
@@ -1008,7 +1077,10 @@ void ControllerDialog::build_player_tab(int p) {
         m_device_art[p]   = art;
         m_detected_box[p] = det;
         m_device_panel[p] = panel;
-        main_row->pack_start(*panel, Gtk::PACK_SHRINK);
+        auto* right_col = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 18);
+        right_col->pack_start(*panel,  Gtk::PACK_SHRINK);
+        right_col->pack_start(*rstick, Gtk::PACK_SHRINK);
+        main_row->pack_start(*right_col, Gtk::PACK_SHRINK);
     }
 
     /* Volant, pedales et visee ne concernent qu'une poignee de jeux : la
@@ -1061,7 +1133,7 @@ void ControllerDialog::build_player_tab(int p) {
      * selecteurs de joueur plutot que les petits onglets d'un carnet GTK. */
     {
         auto* tab_head = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 8);
-        tab_head->pack_start(*icon(p == 0 ? "bc-player-1.svg" : "bc-player-2.svg", 18),
+        tab_head->pack_start(*icon("bc-player-" + std::to_string(p + 1) + ".svg", 18),
                              Gtk::PACK_SHRINK);
         auto* tl = Gtk::make_managed<Gtk::Label>(
             Glib::ustring::compose(_("Player %1"), p + 1));
@@ -1103,13 +1175,13 @@ void ControllerDialog::compact_layout(int missing, int missing_height) {
         m_field_w = std::max(kMinField, m_field_w - per_field);
     }
 
-    for (int p = 0; p < 2; ++p) {
+    for (int p = 0; p < MAX_PLAYERS; ++p) {
         if (m_device_panel[p]) m_device_panel[p]->set_size_request(m_panel_w, -1);
         if (m_device_art[p])   m_device_art[p]->set_size_request(m_art_w, m_art_h);
     }
     for (auto* b : m_bind_buttons)
         if (b) b->set_size_request(m_field_w, kRowHeight);
-    for (int p = 0; p < 2; ++p) update_device_panel(p);
+    for (int p = 0; p < MAX_PLAYERS; ++p) update_device_panel(p);
 }
 
 void ControllerDialog::update_device_panel(int p) {
@@ -1232,11 +1304,33 @@ void ControllerDialog::update_device_panel(int p) {
 // ── Refresh all UI from m_config ──────────────────────────────────────────
 
 void ControllerDialog::refresh_from_config() {
-    for (int p = 0; p < 2; ++p) {
+    for (int p = 0; p < MAX_PLAYERS; ++p) {
         if (!m_device_combos[p]) continue;
-        const std::string& cur = m_config.players[p].device_path;
+        PlayerConfig& player = m_config.players[p];
+        /* Un profil cree hors de cet ecran (les profils fournis) ne connait
+         * ses touches que par leur position : on releve leur nom sur le
+         * clavier branche, comme le fait « Apply ». */
+        for (auto& [action, binding] : player.bindings)
+            if (binding.source == InputSource::KEY && binding.key_name.empty())
+                binding.key_name = key_name_for_code(binding.key);
+        for (auto& [role, b] : player.analog) {
+            if (b.source != AnalogSource::KEY_PAIR) continue;
+            if (b.key_neg >= 0 && b.key_neg_name.empty()) b.key_neg_name = key_name_for_code(b.key_neg);
+            if (b.key_pos >= 0 && b.key_pos_name.empty()) b.key_pos_name = key_name_for_code(b.key_pos);
+        }
+        const std::string& cur = player.device_path;
         if (!cur.empty()) m_device_combos[p]->set_active_id(cur);
         else              m_device_combos[p]->set_active(0);
+        /* Le prereglage et le dessin suivent le profil. Sans cela, passer a
+         * un profil sans manette laissait la manette Xbox du precedent, la
+         * liste des manettes restant sur « aucune » et ne signalant rien. */
+        if (m_preset_combos[p]) {
+            const std::string want = player.preset;
+            if (want.empty() || !m_preset_combos[p]->set_active_id(want))
+                m_preset_combos[p]->set_active(0);
+            player.preset = want;     // le signal l'a remplace par l'entree affichee
+        }
+        update_device_panel(p);
         refresh_bindings(p);
     }
 }
@@ -1334,8 +1428,8 @@ void ControllerDialog::start_binding(int p, GameAction action) {
     auto* info = Gtk::make_managed<Gtk::Label>();
     info->set_markup("<b>" + Glib::Markup::escape_text(
         m_bind_fd >= 0
-            ? Glib::ustring::compose(_("Press a key, or a button on %1…"), dev_name)
-            : Glib::ustring(_("Press a key…"))) + "</b>");
+            ? Glib::ustring::compose(_("Press a key, click, or press a button on %1…"), dev_name)
+            : Glib::ustring(_("Press a key or click…"))) + "</b>");
     info->set_halign(Gtk::ALIGN_CENTER);
     info->set_margin_top(20); info->set_margin_bottom(10);
     wait_dlg.get_content_area()->add(*info);
@@ -1357,6 +1451,28 @@ void ControllerDialog::start_binding(int p, GameAction action) {
             result.source   = InputSource::KEY;
             result.key      = code;
             result.key_name = key_name_from_event(ev);
+            m_config.players[p].bindings[action] = result;
+            if (bind_lbl) bind_lbl->set_text(result.label());
+            wait_dlg.response(Gtk::RESPONSE_OK);
+            return true;
+        }, false);
+
+    /* Un clic dans la fenetre d'attente lie un bouton de la souris : la
+     * gachette d'un pistolet, le bouton d'un trackball. Le clic sur
+     * « Annuler » ne remonte pas jusqu'ici, le bouton le garde pour lui. */
+    wait_dlg.add_events(Gdk::BUTTON_PRESS_MASK);
+    wait_dlg.signal_button_press_event().connect(
+        [this, p, action, &wait_dlg, bind_lbl](GdkEventButton* ev) -> bool {
+            if (ev->type != GDK_BUTTON_PRESS) return true;
+            int button = -1;
+            if (ev->button == 1) button = 0;            // gauche
+            else if (ev->button == 3) button = 1;       // droit
+            else if (ev->button == 2) button = 2;       // milieu
+            if (button < 0) return true;
+            InputBinding result;
+            result.valid  = true;
+            result.source = InputSource::MOUSE;
+            result.button = button;
             m_config.players[p].bindings[action] = result;
             if (bind_lbl) bind_lbl->set_text(result.label());
             wait_dlg.response(Gtk::RESPONSE_OK);
@@ -1470,25 +1586,36 @@ Gtk::Widget* ControllerDialog::build_analog_section(int p) {
 
     static const char* kIcons[ANALOG_ROLE_COUNT] = {
         "bc-steering.svg", "bc-throttle.svg", "bc-brake.svg",
-        "bc-aim-x.svg",    "bc-aim-y.svg",
+        "bc-aim-x.svg",    "bc-aim-y.svg",    "bc-lever.svg",
+        "bc-pedal3.svg",
     };
 
-    // Volant et accelerateur a gauche, frein et visee a droite, comme la
-    // maquette. La coupure se fait apres la deuxieme ligne.
-    const int split = 2;
+    /* Ce que l'on conduit a gauche (volant et pedales), ce que l'on vise et
+     * le manche a droite. La place de chaque role est ecrite ici plutot que
+     * deduite de l'ordre de l'enumeration, qui suit l'historique des
+     * fichiers enregistres et non l'ecran. {colonne, ligne}. */
+    static const int kPlace[ANALOG_ROLE_COUNT][2] = {
+        {0, 0},   // STEERING
+        {0, 1},   // THROTTLE
+        {0, 2},   // BRAKE
+        {1, 0},   // AIM_X
+        {1, 1},   // AIM_Y
+        {1, 2},   // LEVER
+        {0, 3},   // PEDAL3
+    };
     const int kColStride = 6;   // 5 colonnes utiles plus le separateur
 
     auto* sep = Gtk::make_managed<Gtk::Separator>(Gtk::ORIENTATION_VERTICAL);
     sep->set_margin_start(10);
     sep->set_margin_end(10);
-    grid->attach(*sep, 5, 0, 1, 3);
+    grid->attach(*sep, 5, 0, 1, 4);
 
     for (int r = 0; r < ANALOG_ROLE_COUNT; ++r) {
         auto role = static_cast<AnalogRole>(r);
         auto& w   = m_analog_widgets[p][r];
 
-        const int col = (r < split ? 0 : kColStride);
-        const int row = (r < split ? r : r - split);
+        const int col = kPlace[r][0] * kColStride;
+        const int row = kPlace[r][1];
 
         auto* ico = glyph_cell(kIcons[r], false);
         grid->attach(*ico, col + 0, row, 1, 1);
@@ -1532,11 +1659,14 @@ Gtk::Widget* ControllerDialog::build_analog_section(int p) {
      * porte qu'une, qui multiplie la vitesse de tout ce qui est relatif. C'est
      * le reglage qui rend une palette ou un trackball jouables a la manette,
      * ou un stick, a pleine course, va bien plus vite qu'un vrai spinner. */
+    /* Dans la case laissee libre a cote de « Pedal 3 », plutot que sur une
+     * ligne a elle seule : la section garde la hauteur qu'elle avait avec
+     * cinq commandes, et tient encore sans defiler sur un ecran 1080p. */
     auto* sens_row = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 10);
-    sens_row->set_margin_top(14);
-    sens_row->set_margin_start(4);
+    sens_row->set_valign(Gtk::ALIGN_CENTER);
     auto* sens_name = Gtk::make_managed<Gtk::Label>(_("Sensitivity"));
     sens_name->set_xalign(0.0f);
+    sens_name->set_valign(Gtk::ALIGN_CENTER);
     sens_name->set_tooltip_text(_("How fast paddles, dials, trackballs and aiming react "
                                   "for this game. 100% is the emulator's own speed."));
     m_sens_scale[p] = Gtk::make_managed<Gtk::Scale>(Gtk::ORIENTATION_HORIZONTAL);
@@ -1545,7 +1675,8 @@ Gtk::Widget* ControllerDialog::build_analog_section(int p) {
     m_sens_scale[p]->set_digits(0);
     m_sens_scale[p]->set_draw_value(false);
     m_sens_scale[p]->set_value(100);
-    m_sens_scale[p]->set_size_request(260, -1);
+    m_sens_scale[p]->set_size_request(150, -1);
+    m_sens_scale[p]->set_hexpand(true);
     m_sens_scale[p]->add_mark(100, Gtk::POS_BOTTOM, "");
     m_sens_value[p] = Gtk::make_managed<Gtk::Label>("100%");
     m_sens_value[p]->set_width_chars(5);
@@ -1555,22 +1686,19 @@ Gtk::Widget* ControllerDialog::build_analog_section(int p) {
     auto* sens_reset = Gtk::make_managed<Gtk::Button>(_("Reset"));
     sens_reset->signal_clicked().connect(
         [this, p] { m_sens_scale[p]->set_value(100); });
-    sens_row->pack_start(*sens_name, Gtk::PACK_SHRINK);
-    sens_row->pack_start(*m_sens_scale[p], Gtk::PACK_SHRINK);
+    sens_row->pack_start(*m_sens_scale[p], Gtk::PACK_EXPAND_WIDGET);
     sens_row->pack_start(*m_sens_value[p], Gtk::PACK_SHRINK);
     sens_row->pack_start(*sens_reset, Gtk::PACK_SHRINK);
-
-    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_VERTICAL, 0);
-    box->pack_start(*sens_row, Gtk::PACK_SHRINK);
-    box->pack_start(*grid, Gtk::PACK_SHRINK);
-    return box;
+    grid->attach(*sens_name, kColStride + 1, 3, 1, 1);
+    grid->attach(*sens_row,  kColStride + 2, 3, 3, 1);
+    return grid;
 }
 
 void ControllerDialog::sensitivity_changed(int from_player) {
     const int percent = (int)std::lround(m_sens_scale[from_player]->get_value());
     m_config.analog_percent = percent;
     m_analog_loading = true;                       // l'autre onglet suit sans rebondir
-    for (int q = 0; q < 2; ++q) {
+    for (int q = 0; q < MAX_PLAYERS; ++q) {
         if (!m_sens_scale[q]) continue;
         m_sens_scale[q]->set_value(percent);
         m_sens_value[q]->set_text(std::to_string(percent) + "%");
@@ -1595,17 +1723,18 @@ void ControllerDialog::refresh_analog_row(int p, int r) {
 
 void ControllerDialog::analog_ui_from_config() {
     m_analog_loading = true;
-    for (int p = 0; p < 2 && p < (int)m_config.players.size(); ++p) {
+    for (int p = 0; p < MAX_PLAYERS && p < (int)m_config.players.size(); ++p) {
         for (int r = 0; r < ANALOG_ROLE_COUNT; ++r) {
             auto role = static_cast<AnalogRole>(r);
             auto& w = m_analog_widgets[p][r];
             if (!w.bind) continue;
             auto it = m_config.players[p].analog.find(role);
-            // Le joueur 1 part des valeurs d'origine, le joueur 2 de rien :
+            // Le joueur 1 part des valeurs d'origine, les autres de rien :
             // une deuxieme manette est rarement branchee, et proposer des
             // liaisons pour un appareil absent trompe sur ce qui est actif.
             AnalogBinding b = it != m_config.players[p].analog.end() ? it->second
-                            : (p == 0 ? default_analog_binding(role) : AnalogBinding{});
+                            : (p == 0 ? ControllerManager::default_analog(m_config.players[p], role)
+                                      : AnalogBinding{});
             w.value = b;
             w.bind->set_label(analog_label(b));
             w.invert->set_active(b.invert);
@@ -1662,6 +1791,13 @@ void ControllerDialog::capture_analog(int player, AnalogRole role) {
     two->set_margin_bottom(10);
     dlg.get_content_area()->add(*two);
 
+    /* La souris : un axe entier, comme un stick, pour viser au pistolet,
+     * rouler un trackball ou tourner un spinner. Proposee par deux boutons
+     * plutot que capturee au mouvement : aller cliquer sur « Annuler »
+     * suffirait a lier l'axe vertical. */
+    constexpr int kMouseX = 1, kMouseY = 2;
+    dlg.add_button(_("Mouse left-right"), kMouseX);
+    dlg.add_button(_("Mouse up-down"), kMouseY);
     dlg.add_button(_("Not used"), Gtk::RESPONSE_REJECT);
     dlg.add_button(_("Cancel"), Gtk::RESPONSE_CANCEL);
     dlg.show_all_children();
@@ -1732,8 +1868,20 @@ void ControllerDialog::capture_analog(int player, AnalogRole role) {
     const int answer = dlg.run();
     stop_binding();
 
-    if (answer == Gtk::RESPONSE_REJECT) captured = AnalogBinding{};
+    if (answer == kMouseX || answer == kMouseY) {
+        captured = AnalogBinding{};
+        captured.source = AnalogSource::MOUSE_AXIS;
+        captured.index  = answer == kMouseX ? 0 : 1;
+    } else if (answer == Gtk::RESPONSE_REJECT) captured = AnalogBinding{};
     else if (answer != Gtk::RESPONSE_OK || !captured.is_set()) return;
+    if (answer == kMouseX || answer == kMouseY) {
+        w.value = captured;
+        w.invert->set_active(false);
+        w.bind->set_label(analog_label(captured));
+        analog_config_from_ui();
+        refresh_analog_row(player, (int)role);
+        return;
+    }
 
     // Les reglages deja faits sur cette commande survivent a une nouvelle
     // liaison : seul ce a quoi elle est liee change.
@@ -1866,7 +2014,7 @@ void ControllerDialog::tune_analog(int player, AnalogRole role) {
 }
 
 void ControllerDialog::analog_config_from_ui() {
-    for (int p = 0; p < 2 && p < (int)m_config.players.size(); ++p) {
+    for (int p = 0; p < MAX_PLAYERS && p < (int)m_config.players.size(); ++p) {
         for (int r = 0; r < ANALOG_ROLE_COUNT; ++r) {
             auto& w = m_analog_widgets[p][r];
             if (!w.bind) continue;
@@ -2544,8 +2692,10 @@ void ControllerDialog::run_auto_configure(int p) {
     int bound = 0, skipped = 0;
     for (int a = 0; a < GAME_ACTION_COUNT; ++a) {
         const GameAction action = static_cast<GameAction>(a);
-        // Pas de bouton 12 a demander sur une manette qui en a huit.
-        if (!action_shown(p, action)) continue;
+        // Pas de bouton 12 a demander sur une manette qui en a huit. Le second
+        // stick non plus : il ne sert qu'a une poignee de jeux, et sans
+        // liaison il part de lui-meme sur le stick droit de la manette.
+        if (!action_shown(p, action) || is_right_stick_action(action)) continue;
         start_binding(p, action);
         // La capture ne rend rien : on regarde si elle a effectivement pose
         // une liaison. Absente, c'est que le joueur a ferme la fenetre, ce

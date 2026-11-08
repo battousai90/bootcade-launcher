@@ -56,6 +56,8 @@
 #include <sys/stat.h>
 #include "Platform.h"
 #include "ProcessWin.h"
+#include "LaunchLog.h"
+#include <fcntl.h>
 #ifndef _WIN32
 #include <sys/wait.h>
 #endif
@@ -155,12 +157,17 @@ static bool fbneo_can_start(const std::string& exe);
 #ifdef _WIN32
 // Windows : CreateProcess (voir ProcessWin.cpp). Pas de Flatpak ni d'hote.
 static pid_t spawn_process(const std::vector<std::string>& args,
-                           const std::vector<std::string>& env = {}) {
-    return WinProc::spawn(args, env);
+                           const std::vector<std::string>& env = {},
+                           const std::string& log_path = {}) {
+    return WinProc::spawn(args, env, log_path);
 }
 #else
+// `log_path` : si non vide, la sortie et les erreurs du programme y sont
+// ajoutees (voir LaunchLog) au lieu de partir dans le terminal, ou personne
+// ne les lit.
 static pid_t spawn_process(const std::vector<std::string>& args,
-                           const std::vector<std::string>& env = {}) {
+                           const std::vector<std::string>& env = {},
+                           const std::string& log_path = {}) {
     if (args.empty()) return -1;
 
     std::vector<std::string> cmd = AppContext::host_command(args);
@@ -175,6 +182,10 @@ static pid_t spawn_process(const std::vector<std::string>& args,
         return -1;
     }
     if (pid == 0) {
+        if (!log_path.empty()) {
+            const int fd = open(log_path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+            if (fd >= 0) { dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO); close(fd); }
+        }
         if (!via_host)
             for (const auto& e : env) putenv(const_cast<char*>(e.c_str()));
         std::vector<char*> argv;
@@ -199,7 +210,8 @@ static pid_t spawn_process(const std::vector<std::string>& args,
  * fin de partie. Lu sur le fil graphique et passe ici, comme le reste : ce fil
  * ne touche pas au panneau de reglages.
  */
-static void watch_playtime(pid_t pid,
+// Rend la facon dont le processus s'est termine, pour LaunchLog.
+static LaunchLog::Exit watch_playtime(pid_t pid,
                             std::shared_ptr<DatabaseManager> db,
                             const std::string& game_name,
                             const std::string& system,
@@ -217,6 +229,11 @@ static void watch_playtime(pid_t pid,
     int elapsed = (int)std::chrono::duration_cast<std::chrono::seconds>(end - start).count();
     if (record && elapsed > 0)
         db->addPlayTime(game_name, system, elapsed, emulator);
+#ifdef _WIN32
+    return LaunchLog::from_exit_code(status, elapsed);
+#else
+    return LaunchLog::from_wait_status(status, elapsed);
+#endif
 }
 
 // Where FBNeo keeps the raw RAM dump it writes when a game with hiscore
@@ -1540,6 +1557,10 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     // Les chevrons flottaient au-dessus de la ligne : un peu d'indentation
     // les cale sur l'icone et le libelle qu'ils commandent.
     m_treeview_filters.set_level_indentation(4);
+    // Des milliers de fabricants : taper « cave » dans la colonne y saute
+    // directement, une fois la categorie depliee.
+    m_treeview_filters.set_enable_search(true);
+    m_treeview_filters.set_search_column(m_filter_columns.m_col_name);
     m_treeview_filters.get_selection()->signal_changed().connect(sigc::mem_fun(*this, &MainWindow::on_filter_selection_changed));
     
     m_scrolled_filters.add(m_treeview_filters);
@@ -1690,7 +1711,10 @@ MainWindow::MainWindow(std::shared_ptr<DatabaseManager> database,
     m_sidebar_foot.set_margin_bottom(12);
     build_emulator_picker();
     m_sidebar_box.pack_start(m_btn_emu_picker,   Gtk::PACK_SHRINK);
+    setup_filter_find();
+    m_sidebar_box.pack_start(m_filter_find,      Gtk::PACK_SHRINK);
     m_sidebar_box.pack_start(m_scrolled_filters, Gtk::PACK_EXPAND_WIDGET);
+    m_sidebar_box.pack_start(m_filter_find_scroll, Gtk::PACK_EXPAND_WIDGET);
     m_paned_main.pack1(m_sidebar_box, false, false);
     m_paned_main.pack2(m_right_box, true, true);
     // Suit la largeur demandee par la colonne : les laisser diverger faisait
@@ -2998,6 +3022,27 @@ std::string MainWindow::missing_dependencies(const std::string& name, const std:
     return out;
 }
 
+/* Appele par le fil qui attendait l'emulateur. Le journal recoit toujours la
+ * fin de la partie ; la boite ne s'ouvre que pour un arret anormal, et sur le
+ * fil graphique, la seule ou GTK peut etre touche. La fenetre a pu etre
+ * fermee entre-temps : le jeton le dit. */
+void MainWindow::report_launch_end(const LaunchLog::Game& game, const LaunchLog::Exit& exit,
+                                   const std::string& log_path,
+                                   std::shared_ptr<AliveToken> alive) {
+    LaunchLog::finish(log_path, exit);
+    std::cout << "[LAUNCH] " << game.emulator << " " << game.title << " ended: "
+              << (exit.signaled ? "signal " : "code ") << exit.code << " after "
+              << exit.seconds << " s (log: " << log_path << ")" << std::endl;
+    if (!LaunchLog::looks_failed(exit)) return;
+    Glib::signal_idle().connect_once([this, game, exit, log_path, alive] {
+        {
+            std::lock_guard<std::mutex> lock(alive->mutex);
+            if (!alive->alive) return;
+        }
+        LaunchLog::show_report(*this, game, exit, log_path);
+    });
+}
+
 void MainWindow::on_play_clicked() {
     /* Le jeu a lancer est celui que le volet de details MONTRE.
      *
@@ -3024,11 +3069,18 @@ void MainWindow::on_play_clicked() {
     }
     if (rom_name.empty()) return;   // vraiment aucun jeu a lancer
 
+    // Ce que la boite d'echec dira du jeu s'il ne demarre pas (LaunchLog).
+    LaunchLog::Game launched;
+    launched.title = rom_name;
+    launched.emulator = emulator_id == "mame" ? "mame" : "fbneo";
+
     // Un jeu dont il manque le BIOS ou le parent ne demarrera pas : le dire,
     // nommement, plutot que lancer un emulateur qui se ferme sans un mot.
     for (const auto& g : m_cached_games) {
         if (g.name != rom_name || g.system != game_system || g.emulator != (emulator_id.empty() ? "fbneo" : emulator_id))
             continue;
+        if (!g.description.empty()) launched.title = g.description;
+        launched.driver_status = g.driver_status;
         if (g.status == "incomplete") {
             const std::string what = missing_dependencies(g.name, g.system, g.emulator);
             SettingsUi::notice(*this, _("This game cannot start yet"),
@@ -3194,9 +3246,13 @@ void MainWindow::on_play_clicked() {
                  * raison : il court-circuite le noyau et change l'ordre des
                  * boutons des manettes Sony, Nintendo et Xbox. */
                 if (MameControls::uses_pad(*prof)) {
-                    args.push_back("-joystickprovider"); args.push_back("sdljoy");
+                    args.push_back("-joystickprovider");
+                    args.push_back(MameControls::joystick_provider());
+#ifndef _WIN32
                     mame_env.push_back("SDL_JOYSTICK_HIDAPI=0");
+#endif
                 }
+                if (MameControls::uses_mouse(*prof)) args.push_back("-mouse");
                 args.push_back("-ctrlrpath"); args.push_back(dir);
                 args.push_back("-ctrlr");     args.push_back(MameControls::CTRLR_NAME);
             }
@@ -3281,14 +3337,23 @@ void MainWindow::on_play_clicked() {
         if (m_settings_panel.keeps_play_history())
             m_database->recordLaunch(rom_name, game_system, "mame");
 
-        const pid_t pid = spawn_process(args, mame_env);
+        const std::string log_path = LaunchLog::path_for("mame");
+        {
+            std::string line;
+            for (const auto& q : args) line += (line.empty() ? "" : " ") + q;
+            LaunchLog::begin(log_path, "MAME", line);
+        }
+        const pid_t pid = spawn_process(args, mame_env, log_path);
         if (pid <= 0) {
             SettingsUi::notice(*this, _("Could not start MAME"),
                                _("The emulator could not be started."), "bc-error.svg");
             return;
         }
-        std::thread(watch_playtime, pid, m_database, rom_name, game_system,
-                    std::string("mame"), m_settings_panel.keeps_play_history()).detach();
+        std::thread([this, pid, db = m_database, rom_name, game_system, launched, log_path,
+                     record = m_settings_panel.keeps_play_history(), alive = m_alive_token] {
+            const LaunchLog::Exit exit = watch_playtime(pid, db, rom_name, game_system, "mame", record);
+            report_launch_end(launched, exit, log_path, alive);
+        }).detach();
         return;
     }
 
@@ -3505,7 +3570,13 @@ void MainWindow::on_play_clicked() {
     const std::vector<std::string> ra_env = RetroAchievements::supports("fbneo", game_system)
                                                 ? RetroAchievements::launch_env()
                                                 : std::vector<std::string>();
-    pid_t pid = spawn_process(launch_args, ra_env);
+    const std::string log_path = LaunchLog::path_for("fbneo");
+    {
+        std::string line;
+        for (const auto& q : launch_args) line += (line.empty() ? "" : " ") + q;
+        LaunchLog::begin(log_path, "FinalBurn Neo", line);
+    }
+    pid_t pid = spawn_process(launch_args, ra_env, log_path);
     if (pid > 0) {
         // Detached watcher thread: waits for process exit, records playtime,
         // then checks whether FBNeo's own F6 screenshot hotkey was used during
@@ -3518,8 +3589,9 @@ void MainWindow::on_play_clicked() {
             profile = *p;
         std::thread([this, pid, rom_name, game_system, fbneo_rom_name, previews_dir, titles_dir, launch_time, score_path, hi_before, sram_path, sram_before, hiscore_player, hiscore_country,
                      hiscore_enabled, keep_history, share_playtime, profile = std::move(profile), own_profile,
-                     alive = m_alive_token]() {
-            watch_playtime(pid, m_database, rom_name, game_system, "fbneo", keep_history);
+                     launched, log_path, alive = m_alive_token]() {
+            const LaunchLog::Exit exit = watch_playtime(pid, m_database, rom_name, game_system, "fbneo", keep_history);
+            report_launch_end(launched, exit, log_path, alive);
             /* Which file holds this game's table is the server's call, and it
              * can have changed since the launcher started (a definition fixed
              * while the window stayed open). The list is read again now, in
@@ -5599,6 +5671,18 @@ void MainWindow::rebuild_play_menu() {
             auto o = m_settings_panel.fbneo_video(); o.stretch = on; m_settings_panel.set_fbneo_video(o);
         });
     }
+
+    // Ce que l'emulateur du jeu choisi a ecrit a son dernier lancement : la
+    // cause d'un jeu qui demarre mal se lit la, meme quand il n'a pas plante.
+    m_play_menu.append(*Gtk::make_managed<Gtk::SeparatorMenuItem>());
+    auto* log = Gtk::make_managed<Gtk::MenuItem>(_("Last launch log…"));
+    log->signal_activate().connect([this] {
+        const std::string emu = m_last_selected_emulator == "mame" ? "mame" : "fbneo";
+        // Apres la fermeture du menu : une boite modale ouverte depuis son
+        // signal garderait le menu affiche dessous.
+        Glib::signal_idle().connect_once([this, emu] { LaunchLog::show_last(*this, emu); });
+    });
+    m_play_menu.append(*log);
     m_play_menu.show_all();
 }
 
@@ -7991,6 +8075,160 @@ void MainWindow::save_filter_cache() {
 
 // Removed all ComboBox population methods - will implement MAMEUI-style filtering
 
+void MainWindow::setup_filter_find() {
+    m_filter_find.set_placeholder_text(_("Find a filter…"));
+    m_filter_find.set_tooltip_text(_("Type part of a manufacturer, genre, series or year, then pick it in the list."));
+    m_filter_find.get_style_context()->add_class("filter-find");
+    m_filter_find.set_margin_start(14);
+    m_filter_find.set_margin_end(10);
+    m_filter_find.set_margin_top(4);
+    m_filter_find.set_margin_bottom(6);
+
+    m_filter_find_results = Gtk::ListStore::create(m_filter_find_columns);
+    m_filter_find_view.set_model(m_filter_find_results);
+    m_filter_find_view.set_headers_visible(false);
+    m_filter_find_view.set_activate_on_single_click(true);
+    auto* col = Gtk::make_managed<Gtk::TreeViewColumn>("");
+    auto* name_cell = Gtk::make_managed<Gtk::CellRendererText>();
+    name_cell->property_ypad() = 5;
+    name_cell->property_xpad() = 14;
+    name_cell->property_ellipsize() = Pango::ELLIPSIZE_END;
+    col->pack_start(*name_cell, true);
+    col->add_attribute(name_cell->property_text(), m_filter_find_columns.name);
+    // La categorie et le nombre de jeux, attenues : « Cave » est un
+    // fabricant, un autre « Cave » pourrait etre une serie.
+    auto* detail_cell = Gtk::make_managed<Gtk::CellRendererText>();
+    detail_cell->property_scale() = 0.86;
+    detail_cell->property_xalign() = 1.0f;
+    detail_cell->property_xpad() = 8;
+    col->pack_start(*detail_cell, false);
+    col->set_cell_data_func(*detail_cell,
+        [this, detail_cell](Gtk::CellRenderer*, const Gtk::TreeModel::iterator& it) {
+            detail_cell->property_text() = Glib::ustring((*it)[m_filter_find_columns.detail]);
+            if (!m_filter_find_muted.empty()) detail_cell->property_foreground() = m_filter_find_muted;
+        });
+    m_filter_find_view.append_column(*col);
+    col->set_expand(true);
+    m_filter_find_scroll.add(m_filter_find_view);
+    m_filter_find_scroll.set_policy(Gtk::POLICY_NEVER, Gtk::POLICY_AUTOMATIC);
+    m_filter_find_scroll.get_style_context()->add_class("sidebar");
+    // Cachee tant qu'on ne cherche pas : show_all ne doit pas l'afficher.
+    m_filter_find_scroll.set_no_show_all(true);
+    m_filter_find_view.show();
+
+    auto pick = [this](const Gtk::TreeModel::iterator& it) {
+        if (!it) return;
+        const std::string type  = Glib::ustring((*it)[m_filter_find_columns.type]).raw();
+        const std::string value = Glib::ustring((*it)[m_filter_find_columns.value]).raw();
+        if (type.empty()) return;   // la ligne « No filter matches »
+        m_filter_find.set_text("");   // l'arbre revient avant d'y selectionner
+        select_filter_row(type, value);
+    };
+    m_filter_find_view.signal_row_activated().connect(
+        [this, pick](const Gtk::TreeModel::Path& path, Gtk::TreeViewColumn*) {
+            pick(m_filter_find_results->get_iter(path));
+        });
+    m_filter_find.signal_changed().connect([this] { update_filter_find_results(); });
+    // Entree : le premier resultat, qui est le nom exact s'il existe.
+    m_filter_find.signal_activate().connect([this, pick] {
+        if (!m_filter_find_results->children().empty())
+            pick(m_filter_find_results->children().begin());
+    });
+    // Fleche bas : on descend dans les resultats au clavier.
+    m_filter_find.signal_key_press_event().connect([this](GdkEventKey* ev) {
+        if (ev->keyval != GDK_KEY_Down || !m_filter_find_scroll.get_visible()
+            || m_filter_find_results->children().empty())
+            return false;
+        m_filter_find_view.grab_focus();
+        m_filter_find_view.set_cursor(Gtk::TreeModel::Path("0"));
+        return true;
+    }, false);
+}
+
+void MainWindow::update_filter_find_results() {
+    const std::string typed = m_filter_find.get_text().casefold().raw();
+    if (typed.size() < 2) {
+        // Une lettre ouvrirait des milliers de lignes : on garde l'arbre.
+        m_filter_find_scroll.hide();
+        m_scrolled_filters.show();
+        return;
+    }
+    if (m_filter_find_stale) refresh_filter_find_store();
+    // Le nom exact, puis ceux qui commencent par le texte, puis ceux qui le
+    // contiennent : « sega » met Sega avant « Sega / Nasco ».
+    std::vector<const FilterFindEntry*> exact, prefix, inside;
+    for (const auto& e : m_filter_find_all) {
+        const size_t at = e.key.find(typed);
+        if (at == std::string::npos) continue;
+        (e.key.size() == typed.size() ? exact : at == 0 ? prefix : inside).push_back(&e);
+    }
+    m_filter_find_results->clear();
+    constexpr size_t kMax = 300;   // au-dela, il faut taper une lettre de plus
+    size_t n = 0;
+    for (const auto* list : {&exact, &prefix, &inside})
+        for (const FilterFindEntry* e : *list) {
+            if (n++ >= kMax) break;
+            auto row = *m_filter_find_results->append();
+            row[m_filter_find_columns.name]   = e->name;
+            row[m_filter_find_columns.detail] = e->detail;
+            row[m_filter_find_columns.type]   = e->type;
+            row[m_filter_find_columns.value]  = e->value;
+        }
+    if (m_filter_find_results->children().empty()) {
+        auto row = *m_filter_find_results->append();
+        row[m_filter_find_columns.name] = _("No filter matches");
+    }
+    m_scrolled_filters.hide();
+    m_filter_find_scroll.show();
+}
+
+void MainWindow::refresh_filter_find_store() {
+    m_filter_find_stale = false;
+    m_filter_find_muted = SettingsUi::tone_hex(*this, "muted");
+    m_filter_find_all.clear();
+    std::function<void(const Gtk::TreeModel::Children&, const std::string&)> walk =
+        [&](const Gtk::TreeModel::Children& rows, const std::string& category) {
+            for (auto it = rows.begin(); it; ++it) {
+                const std::string name = Glib::ustring((*it)[m_filter_columns.m_col_name]).raw();
+                const std::string type = Glib::ustring((*it)[m_filter_columns.m_col_type]).raw();
+                if (type == "category" || type == "root") { walk(it->children(), name); continue; }
+                if (type == "section") continue;
+                if (!category.empty() && !type.empty()) {
+                    FilterFindEntry e;
+                    e.name  = name;
+                    const int n = (*it)[m_filter_columns.m_col_count];
+                    e.detail = n > 0 ? category + " · " + std::to_string(n) : category;
+                    e.type  = type;
+                    e.value = Glib::ustring((*it)[m_filter_columns.m_col_value]).raw();
+                    e.key   = Glib::ustring(name).casefold().raw();
+                    m_filter_find_all.push_back(std::move(e));
+                }
+                if (!it->children().empty()) walk(it->children(), category.empty() ? name : category);
+            }
+        };
+    walk(m_model_filters->children(), "");
+}
+
+// Selectionne dans l'arbre la ligne (type, valeur) : le reste se fait comme
+// pour un clic, par on_filter_selection_changed.
+bool MainWindow::select_filter_row(const std::string& type, const std::string& value) {
+    Gtk::TreeModel::iterator found;
+    std::function<bool(const Gtk::TreeModel::Children&)> walk = [&](const Gtk::TreeModel::Children& rows) {
+        for (auto it = rows.begin(); it; ++it) {
+            if (Glib::ustring((*it)[m_filter_columns.m_col_type]).raw() == type &&
+                Glib::ustring((*it)[m_filter_columns.m_col_value]).raw() == value) { found = it; return true; }
+            if (walk(it->children())) return true;
+        }
+        return false;
+    };
+    if (!walk(m_model_filters->children())) return false;
+    const Gtk::TreeModel::Path path = m_model_filters->get_path(found);
+    m_treeview_filters.expand_to_path(path);
+    m_treeview_filters.get_selection()->select(found);
+    m_treeview_filters.scroll_to_row(path, 0.3f);
+    return true;
+}
+
 void MainWindow::populate_filter_tree() {
     // Guard the whole rebuild: clearing the model drags the selection across the
     // remaining rows and fires selection-changed for each of them. The ★ Favorites
@@ -8003,6 +8241,7 @@ void MainWindow::populate_filter_tree() {
     } guard(m_populating_filters);
 
     m_model_filters->clear();
+    m_filter_find_stale = true;
 
     if (!m_filter_cache_loaded || m_cached_games.empty()) {
         return;
@@ -8045,7 +8284,7 @@ void MainWindow::populate_filter_tree() {
         if (game.is_favorite)    favorite_count++;
         if (all_scope) emulator_counts_map[game.emulator]++;
         if (!game.system.empty())       system_counts[game.system]++;
-        if (!game.manufacturer.empty()) manuf_counts[game.manufacturer]++;
+        for (const auto& m : manufacturer_companies(game.manufacturer)) manuf_counts[m]++;
         for (const auto& v : split_dat_values(game.genre))  genre_counts[v]++;
         for (const auto& v : split_dat_values(game.family)) family_counts[v]++;
         if (game.players > 0)     players_counts[std::to_string(game.players)]++;
@@ -8223,8 +8462,11 @@ void MainWindow::populate_filter_tree() {
         }
     }
 
-    // Manufacturers (top 20)
-    if (!m_filter_cache.manufacturers.empty()) {
+    /* Manufacturers : TOUS, par ordre alphabetique. Un « top 20 » au nombre
+     * de jeux ne laissait que les fabricants de machines a sous et les
+     * grands editeurs ; Cave, 135 jeux, n'y entrait pas. Taper un nom dans
+     * la colonne des filtres y mene directement. */
+    if (!manuf_counts.empty()) {
         auto manuf_root = m_model_filters->append();
         (*manuf_root)[m_filter_columns.m_col_icon] = get_filter_icon("Manufacturers");
         (*manuf_root)[m_filter_columns.m_col_name] = _("Manufacturers");
@@ -8232,19 +8474,19 @@ void MainWindow::populate_filter_tree() {
         (*manuf_root)[m_filter_columns.m_col_value] = "";
 
         std::vector<std::pair<std::string, int>> sorted_manufs(manuf_counts.begin(), manuf_counts.end());
-        std::sort(sorted_manufs.begin(), sorted_manufs.end(),
-                 [](const auto& a, const auto& b) { return a.second > b.second; });
+        std::sort(sorted_manufs.begin(), sorted_manufs.end(), [](const auto& a, const auto& b) {
+            const Glib::ustring ka = Glib::ustring(a.first).casefold();
+            const Glib::ustring kb = Glib::ustring(b.first).casefold();
+            return ka != kb ? ka < kb : a.first < b.first;
+        });
 
-        int added = 0;
         for (const auto& [manuf, count] : sorted_manufs) {
-            if (added >= 20) break;
             auto child = m_model_filters->append(manuf_root->children());
             (*child)[m_filter_columns.m_col_icon] = get_filter_icon("item");
             (*child)[m_filter_columns.m_col_name] = manuf;
             (*child)[m_filter_columns.m_col_type] = "manufacturer";
             (*child)[m_filter_columns.m_col_value] = manuf;
             (*child)[m_filter_columns.m_col_count] = count;
-            added++;
         }
     }
 
@@ -8285,7 +8527,7 @@ void MainWindow::populate_filter_tree() {
             added++;
         }
     };
-    add_simple_category(N_("Genres"),  "genre",   genre_counts,   false, 30);
+    add_simple_category(N_("Genres"),  "genre",   genre_counts,   false, 0);
     add_simple_category(N_("Series"),  "family",  family_counts,  false, 0);
     add_simple_category(N_("Players"), "players", players_counts, true,  0);
 
@@ -8530,7 +8772,7 @@ void MainWindow::apply_tree_filters() {
             if (filter_type == "system" && game.system != filter_value) {
                 matches = false; break;
             }
-            if (filter_type == "manufacturer" && game.manufacturer != filter_value) {
+            if (filter_type == "manufacturer" && !manufacturer_matches(game.manufacturer, filter_value)) {
                 matches = false; break;
             }
             if (filter_type == "year" && game.year != filter_value) {

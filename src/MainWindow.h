@@ -19,6 +19,7 @@
 #include "FilterCache.h"
 #include "ControllerConfig.h"
 #include "ControllerManager.h"
+#include "LaunchLog.h"
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -506,6 +507,36 @@ private:
         Gtk::TreeModelColumn<int> m_col_count; // number of games
     };
     FilterColumns m_filter_columns;
+
+    /* Le champ « Find a filter » au-dessus de la colonne : on tape « cave »,
+     * et la colonne montre, a la place de l'arbre, les entrees de TOUTES
+     * les categories (fabricants, genres, series, annees...) qui contiennent
+     * ce texte. En choisir une selectionne la ligne de l'arbre, qui revient.
+     * La liste de recherche est refaite a la premiere frappe qui suit une
+     * reconstruction de l'arbre. */
+    class FilterFindColumns : public Gtk::TreeModel::ColumnRecord {
+    public:
+        FilterFindColumns() { add(name); add(detail); add(type); add(value); }
+        Gtk::TreeModelColumn<Glib::ustring> name;
+        Gtk::TreeModelColumn<Glib::ustring> detail;   // « Manufacturers · 135 »
+        Gtk::TreeModelColumn<Glib::ustring> type;
+        Gtk::TreeModelColumn<Glib::ustring> value;
+    };
+    struct FilterFindEntry {
+        std::string name, detail, type, value, key;   // key : nom replie
+    };
+    FilterFindColumns m_filter_find_columns;
+    Gtk::SearchEntry m_filter_find;
+    Gtk::ScrolledWindow m_filter_find_scroll;
+    Gtk::TreeView m_filter_find_view;
+    Glib::RefPtr<Gtk::ListStore> m_filter_find_results;
+    std::vector<FilterFindEntry> m_filter_find_all;
+    bool m_filter_find_stale = true;
+    std::string m_filter_find_muted;   // couleur du detail, en #rrggbb
+    void setup_filter_find();
+    void refresh_filter_find_store();
+    void update_filter_find_results();
+    bool select_filter_row(const std::string& type, const std::string& value);
     
     // Current active filters
     std::map<std::string, std::string> m_active_filters;
@@ -563,6 +594,11 @@ private:
         bool       alive = true;
     };
     std::shared_ptr<AliveToken> m_alive_token{std::make_shared<AliveToken>()};
+
+    // Fin d'une partie : la note dans le journal de lancement, et la boite
+    // qui en donne la cause quand le jeu n'a pas demarre (LaunchLog).
+    void report_launch_end(const LaunchLog::Game& game, const LaunchLog::Exit& exit,
+                           const std::string& log_path, std::shared_ptr<AliveToken> alive);
     // Which games the service can rank, fetched once at startup. Read from
     // the GTK thread while the worker may still be writing it, hence the
     // mutex : the list is small and consulted once per visible row.
