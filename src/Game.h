@@ -64,6 +64,45 @@ inline std::vector<std::string> split_dat_values(const std::string& value) {
     return out;
 }
 
+/* Les societes d'un champ « manufacturer ».
+ *
+ * MAME et FinalBurn Neo y ecrivent qui a fait le jeu, puis entre parentheses
+ * qui l'a distribue, et separent les coeditions par « / » :
+ * « Cave (Atlus license) », « IGS / Cave (Tong Li Animation license) ». Pris
+ * tel quel, Cave s'eparpillait en une dizaine d'entrees dont aucune n'entrait
+ * dans la liste des filtres. On garde chaque societe, sans la mention entre
+ * parentheses. */
+inline std::vector<std::string> manufacturer_companies(const std::string& value) {
+    std::string bare;
+    int depth = 0;
+    for (char c : value) {
+        if (c == '(') { ++depth; continue; }
+        if (c == ')') { if (depth) --depth; continue; }
+        if (!depth) bare += c;
+    }
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= bare.size()) {
+        const size_t slash = bare.find('/', start);
+        std::string piece = bare.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
+        const size_t a = piece.find_first_not_of(" \t");
+        const size_t b = piece.find_last_not_of(" \t");
+        if (a != std::string::npos) {
+            piece = piece.substr(a, b - a + 1);
+            if (std::find(out.begin(), out.end(), piece) == out.end()) out.push_back(piece);
+        }
+        if (slash == std::string::npos) break;
+        start = slash + 1;
+    }
+    return out;
+}
+
+inline bool manufacturer_matches(const std::string& value, const std::string& wanted) {
+    for (const auto& one : manufacturer_companies(value))
+        if (one == wanted) return true;
+    return false;
+}
+
 inline bool value_list_contains(const std::string& list, const std::string& wanted) {
     for (const auto& one : split_dat_values(list)) {
         if (one == wanted) return true;

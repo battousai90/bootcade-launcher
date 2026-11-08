@@ -67,8 +67,9 @@ std::map<int, HANDLE> g_handles;
 struct Started { HANDLE process = nullptr; int pid = -1; };
 
 // `out_write` : si non nul, l'extremite d'ecriture du tube donnee en stdout.
+// `err_write` : la meme pour stderr ; nul, stderr reste celui du launcher.
 Started start(const std::vector<std::string>& args, const std::vector<std::string>& env,
-              HANDLE out_write) {
+              HANDLE out_write, HANDLE err_write = nullptr) {
     Started s;
     if (args.empty()) return s;
 
@@ -92,7 +93,7 @@ Started start(const std::vector<std::string>& args, const std::vector<std::strin
     if (out_write) {
         si.dwFlags = STARTF_USESTDHANDLES;
         si.hStdOutput = out_write;
-        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        si.hStdError = err_write ? err_write : GetStdHandle(STD_ERROR_HANDLE);
         si.hStdInput = nullptr;
     }
 
@@ -113,8 +114,18 @@ Started start(const std::vector<std::string>& args, const std::vector<std::strin
 
 }  // namespace
 
-int spawn(const std::vector<std::string>& args, const std::vector<std::string>& env) {
-    const Started s = start(args, env, nullptr);
+int spawn(const std::vector<std::string>& args, const std::vector<std::string>& env,
+          const std::string& log_path) {
+    HANDLE log = nullptr;
+    if (!log_path.empty()) {
+        SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};   // herite par le jeu
+        log = CreateFileW(widen(log_path).c_str(), FILE_APPEND_DATA,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_ALWAYS,
+                          FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (log == INVALID_HANDLE_VALUE) log = nullptr;
+    }
+    const Started s = start(args, env, log, log);
+    if (log) CloseHandle(log);   // le jeu garde sa propre copie
     if (s.pid < 0) return -1;
     std::lock_guard<std::mutex> lock(g_mutex);
     g_handles[s.pid] = s.process;

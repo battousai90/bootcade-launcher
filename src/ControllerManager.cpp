@@ -248,6 +248,271 @@ std::vector<JoystickInfo> ControllerManager::list_devices() {
 #endif
 }
 
+// ── Ce que sont les axes ─────────────────────────────────────────────────
+
+std::vector<int> ControllerManager::axis_codes(const std::string& device_path) {
+    std::vector<int> codes;
+    if (device_path.empty()) return codes;
+#ifdef _WIN32
+    const int id = pad_number(device_path);
+    if (id < 0) return codes;
+    JOYCAPSW caps{};
+    if (joyGetDevCapsW((UINT)id, &caps, sizeof caps) != JOYERR_NOERROR) return codes;
+    // Meme numerotation que win_open : les axes declares dans l'ordre
+    // X Y Z R U V, puis le chapeau toujours en 6 et 7.
+    const bool has[6] = {true, true, (caps.wCaps & JOYCAPS_HASZ) != 0, (caps.wCaps & JOYCAPS_HASR) != 0,
+                         (caps.wCaps & JOYCAPS_HASU) != 0, (caps.wCaps & JOYCAPS_HASV) != 0};
+    // R, U et V n'ont pas de correspondance fixe avec les axes de DirectInput
+    // (ce que lit MAME) : on ne les nomme pas plutot que de deviner.
+    const int known[6] = {0x00 /*ABS_X*/, 0x01 /*ABS_Y*/, 0x02 /*ABS_Z*/, -1, -1, -1};
+    codes.assign(8, -1);
+    int slot = 0;
+    for (int i = 0; i < 6 && slot < 6; ++i)
+        if (has[i] && slot < (int)caps.wNumAxes) codes[slot++] = known[i];
+    if (caps.wCaps & JOYCAPS_HASPOV) { codes[6] = 0x10; codes[7] = 0x11; }   // ABS_HAT0X/Y
+    return codes;
+#else
+    const int fd = open(device_path.c_str(), O_RDONLY | O_NONBLOCK);
+    if (fd < 0) return codes;
+    uint8_t count = 0;
+    uint8_t map[ABS_CNT] = {};
+    if (ioctl(fd, JSIOCGAXES, &count) >= 0 && ioctl(fd, JSIOCGAXMAP, map) >= 0)
+        codes.assign(map, map + count);
+    close(fd);
+    return codes;
+#endif
+}
+
+void ControllerManager::fill_right_stick(PlayerConfig& player) {
+    if (player.device_path.empty()) return;
+    bool missing = false;
+    for (int a = (int)GameAction::RSTICK_UP; a <= (int)GameAction::RSTICK_RIGHT; ++a) {
+        auto it = player.bindings.find(static_cast<GameAction>(a));
+        missing = missing || it == player.bindings.end() || !it->second.valid;
+    }
+    if (!missing) return;
+    const std::vector<int> codes = axis_codes(player.device_path);
+    constexpr int kAbsRX = 0x03, kAbsRY = 0x04;
+    int rx = -1, ry = -1;
+    for (int i = 0; i < (int)codes.size(); ++i) {
+        if (codes[i] == kAbsRX) rx = i;
+        if (codes[i] == kAbsRY) ry = i;
+    }
+    /* Sans RX/RY, la convention HID des manettes : le stick droit est sur
+     * Z et RZ. C'est le cas des copies de manette PS3 et de beaucoup de pads
+     * generiques ; une manette Xbox, elle, a RX/RY et ses gachettes sur Z/RZ,
+     * elle ne passe donc jamais ici. */
+    if (rx < 0 || ry < 0) {
+        constexpr int kAbsZ = 0x02, kAbsRZ = 0x05;
+        rx = ry = -1;
+        for (int i = 0; i < (int)codes.size(); ++i) {
+            if (codes[i] == kAbsZ)  rx = i;
+            if (codes[i] == kAbsRZ) ry = i;
+        }
+    }
+    if (rx < 0 || ry < 0) return;
+    auto put = [&player](GameAction a, int axis, int dir) {
+        auto it = player.bindings.find(a);
+        if (it != player.bindings.end() && it->second.valid) return;   // le choix du joueur
+        InputBinding b;
+        b.valid = true;
+        b.source = InputSource::PAD;
+        b.is_axis = true;
+        b.axis = axis;
+        b.axis_dir = dir;
+        player.bindings[a] = b;
+    };
+    put(GameAction::RSTICK_UP,    ry, -1);
+    put(GameAction::RSTICK_DOWN,  ry,  1);
+    put(GameAction::RSTICK_LEFT,  rx, -1);
+    put(GameAction::RSTICK_RIGHT, rx,  1);
+}
+
+AnalogBinding ControllerManager::default_analog(const PlayerConfig& player, AnalogRole role) {
+    // Une manette connue par son seul nom (chemin absent) : la premiere
+    // manette, avec les numeros habituels, voir apply_analog_bindings.
+    if (!player.has_device() && player.device_name.empty()) return {};
+    const std::vector<int> codes = axis_codes(player.device_path);
+    if (codes.empty()) return default_analog_binding(role);   // manette illisible
+
+    constexpr int kAbsX = 0x00, kAbsY = 0x01, kAbsZ = 0x02, kAbsRX = 0x03,
+                  kAbsRY = 0x04, kAbsRZ = 0x05, kAbsWheel = 0x08,
+                  kAbsGas = 0x09, kAbsBrake = 0x0a;
+    auto find = [&codes](int code) {
+        for (int i = 0; i < (int)codes.size(); ++i) if (codes[i] == code) return i;
+        return -1;
+    };
+    bool unknown = false;
+    for (int c : codes) unknown = unknown || c < 0;
+    // Z et RZ ne sont des gachettes que si le stick droit est ailleurs.
+    const bool trigger_axes = find(kAbsRX) >= 0 && find(kAbsRY) >= 0;
+
+    int axis = -1;
+    switch (role) {
+        case AnalogRole::STEERING:
+            axis = find(kAbsWheel) >= 0 ? find(kAbsWheel) : find(kAbsX); break;
+        case AnalogRole::AIM_X: axis = find(kAbsX); break;
+        case AnalogRole::AIM_Y: axis = find(kAbsY); break;
+        case AnalogRole::THROTTLE:
+            axis = find(kAbsGas) >= 0 ? find(kAbsGas) : (trigger_axes ? find(kAbsRZ) : -1);
+            break;
+        case AnalogRole::BRAKE:
+            axis = find(kAbsBrake) >= 0 ? find(kAbsBrake) : (trigger_axes ? find(kAbsZ) : -1);
+            break;
+        default: return {};
+    }
+    if (axis < 0) return unknown ? default_analog_binding(role) : AnalogBinding{};
+    AnalogBinding b;
+    b.source = AnalogSource::JOY_AXIS;
+    b.index  = axis;
+    return b;
+}
+
+namespace {
+
+// Le prereglage d'un joueur, s'il en a un de connu.
+const ControllerPreset* preset_named(const std::string& name) {
+    for (const auto& p : controller_presets())
+        if (name == p.name) return &p;
+    return nullptr;
+}
+
+// Le joueur d'un profil fourni, au depart : celui du profil de base, ou le
+// clavier pour un joueur 1 qui n'a encore rien de regle.
+PlayerConfig template_player(const ControllerConfig& base, int p) {
+    PlayerConfig out = p < (int)base.players.size() ? base.players[p] : PlayerConfig{};
+    if (!out.bindings.empty()) return out;
+    if (const ControllerPreset* pr = preset_named(out.preset)) {
+        if (!pr->keyboard && out.has_device()) apply_preset(out, *pr);
+        else if (pr->keyboard)                 apply_preset(out, *pr);
+    } else if (p == 0 && !out.has_device() && !controller_presets().empty()
+               && controller_presets().front().keyboard) {
+        apply_preset(out, controller_presets().front());
+        out.preset = controller_presets().front().name;
+    }
+    return out;
+}
+
+// La disposition a six boutons des bornes, celle du prereglage du joueur.
+void six_button_layout(PlayerConfig& pl) {
+    const ControllerPreset* pr = preset_named(pl.preset);
+    if (!pr || (!pr->keyboard && !pl.has_device())) return;   // on garde ses boutons
+    for (int i = 0; i < 6; ++i) {
+        InputBinding b;
+        b.valid = true;
+        if (pr->keyboard) { b.source = InputSource::KEY; b.key = pr->face[i]; }
+        else              { b.source = InputSource::PAD; b.button = pr->face[i]; }
+        pl.bindings[button_action(i + 1)] = b;
+    }
+}
+
+} // namespace
+
+std::vector<std::pair<std::string, ControllerConfig>>
+ControllerManager::builtin_profiles(const ControllerConfig& base)
+{
+    std::vector<std::pair<std::string, ControllerConfig>> out;
+    auto each_player = [&base](auto&& shape) {
+        ControllerConfig cfg;
+        cfg.analog_percent = base.analog_percent;
+        for (int p = 0; p < MAX_PLAYERS; ++p) {
+            cfg.players[p] = template_player(base, p);
+            shape(cfg.players[p], p);
+        }
+        return cfg;
+    };
+
+    // Combat : la rangee du haut en poings, celle du bas en pieds.
+    out.emplace_back(_("Fighting (6 buttons)"),
+                     each_player([](PlayerConfig& pl, int) { six_button_layout(pl); }));
+
+    /* Neo Geo et shoot'em up : les quatre boutons principaux sur les quatre
+     * boutons du pouce, A en bas, B a droite, C a gauche, D en haut, comme
+     * les manettes Neo Geo. Le tir tombe sous le pouce, la bombe a cote. */
+    out.emplace_back(_("Neo Geo / Shoot'em up (4 buttons)"),
+                     each_player([](PlayerConfig& pl, int) {
+        six_button_layout(pl);
+        auto get = [&pl](int n) {
+            auto it = pl.bindings.find(button_action(n));
+            return it != pl.bindings.end() ? it->second : InputBinding{};
+        };
+        const InputBinding b[6] = {get(4), get(5), get(1), get(2), get(3), get(6)};
+        for (int i = 0; i < 6; ++i) {
+            if (b[i].valid) pl.bindings[button_action(i + 1)] = b[i];
+            else            pl.bindings.erase(button_action(i + 1));
+        }
+    }));
+
+    // Deux sticks : on se deplace au stick gauche, on tire au stick droit.
+    out.emplace_back(_("Twin-stick"), each_player([](PlayerConfig& pl, int) {
+        if (!pl.has_device()) return;
+        const std::vector<int> codes = axis_codes(pl.device_path);
+        int ax = -1, ay = -1;
+        for (int i = 0; i < (int)codes.size(); ++i) {
+            if (codes[i] == 0x00) ax = i;
+            if (codes[i] == 0x01) ay = i;
+        }
+        if (ax < 0 || ay < 0) return;
+        auto put = [&pl](GameAction a, int axis, int dir) {
+            InputBinding b;
+            b.valid = true; b.source = InputSource::PAD;
+            b.is_axis = true; b.axis = axis; b.axis_dir = dir;
+            pl.bindings[a] = b;
+        };
+        put(GameAction::UP, ay, -1);   put(GameAction::DOWN, ay, 1);
+        put(GameAction::LEFT, ax, -1); put(GameAction::RIGHT, ax, 1);
+        for (int a = (int)GameAction::RSTICK_UP; a <= (int)GameAction::RSTICK_RIGHT; ++a)
+            pl.bindings.erase(static_cast<GameAction>(a));
+        fill_right_stick(pl);
+    }));
+
+    // Course : volant au stick gauche, pedales sur les gachettes analogiques.
+    out.emplace_back(_("Racing"), each_player([](PlayerConfig& pl, int) {
+        if (!pl.has_device()) return;
+        // Recalcule d'apres la manette, sans reprendre le profil de base :
+        // l'ancien prereglage PS3 y mettait l'accelerateur sur la croix.
+        for (AnalogRole r : {AnalogRole::STEERING, AnalogRole::THROTTLE, AnalogRole::BRAKE}) {
+            const AnalogBinding b = default_analog(pl, r);
+            if (b.is_set()) pl.analog[r] = b;
+            else            pl.analog.erase(r);
+        }
+    }));
+
+    /* Clavier et souris, pour le joueur 1 : la souris vise (pistolets),
+     * roule (trackballs) et tourne (spinners, paddles) ; ses trois boutons
+     * sont les trois premiers boutons du jeu. Les autres joueurs gardent
+     * leur manette. */
+    out.emplace_back(_("Keyboard and mouse"), each_player([](PlayerConfig& pl, int p) {
+        if (p != 0) return;
+        const ControllerPreset& kb = controller_presets().front();
+        pl = PlayerConfig{};
+        apply_preset(pl, kb);
+        pl.preset = kb.name;
+        for (int i = 0; i < 3; ++i) {
+            InputBinding b;
+            b.valid = true; b.source = InputSource::MOUSE; b.button = i;
+            pl.bindings[button_action(i + 1)] = b;
+        }
+        AnalogBinding mx, my;
+        mx.source = my.source = AnalogSource::MOUSE_AXIS;
+        mx.index = 0; my.index = 1;
+        pl.analog[AnalogRole::AIM_X]    = mx;
+        pl.analog[AnalogRole::AIM_Y]    = my;
+        pl.analog[AnalogRole::STEERING] = mx;
+    }));
+
+    // Clavier seul : le joueur 1 au clavier, les autres avec les touches de
+    // l'emulateur.
+    out.emplace_back(_("Keyboard"), [] {
+        ControllerConfig cfg;
+        const ControllerPreset& kb = controller_presets().front();
+        apply_preset(cfg.players[0], kb);
+        cfg.players[0].preset = kb.name;
+        return cfg;
+    }());
+    return out;
+}
+
 // ── Device I/O ────────────────────────────────────────────────────────────
 
 #ifdef _WIN32
@@ -394,6 +659,9 @@ static json config_to_json(const ControllerConfig& cfg) {
                 jv["source"]   = "key";
                 jv["key"]      = binding.key;
                 jv["key_name"] = binding.key_name;
+            } else if (binding.source == InputSource::MOUSE) {
+                jv["source"] = "mouse";
+                jv["button"] = binding.button;
             } else {
                 jv["is_axis"] = binding.is_axis;
                 if (binding.is_axis) { jv["axis"] = binding.axis; jv["dir"] = binding.axis_dir; }
@@ -434,7 +702,7 @@ static json config_to_json(const ControllerConfig& cfg) {
 
 static ControllerConfig json_to_config(const json& jctrl) {
     ControllerConfig cfg;
-    for (int p = 0; p < 2 && p < (int)jctrl.size(); ++p) {
+    for (int p = 0; p < MAX_PLAYERS && p < (int)jctrl.size(); ++p) {
         const auto& jp = jctrl[p];
         cfg.players[p].device_path = jp.value("device",      "");
         cfg.players[p].device_name = jp.value("device_name", "");
@@ -452,6 +720,13 @@ static ControllerConfig json_to_config(const json& jctrl) {
                     b.key      = val.value("key", -1);
                     b.key_name = val.value("key_name", std::string());
                     if (b.key < 0) continue;
+                    cfg.players[p].bindings[action] = b;
+                    continue;
+                }
+                if (val.value("source", std::string("pad")) == "mouse") {
+                    b.source = InputSource::MOUSE;
+                    b.button = val.value("button", -1);
+                    if (b.button < 0 || b.button > 2) continue;
                     cfg.players[p].bindings[action] = b;
                     continue;
                 }
@@ -521,6 +796,10 @@ void ControllerManager::save_config(const ControllerConfig& cfg, const std::stri
 
 // ── Profile persistence ───────────────────────────────────────────────────
 
+// Monte d'un cran quand de nouveaux profils fournis s'ajoutent : seuls les
+// noms encore absents sont alors crees.
+static constexpr int kBuiltinProfilesVersion = 1;
+
 void ControllerManager::load_profiles(std::map<std::string, ControllerConfig>& profiles,
                                        std::string& active_name,
                                        const std::string& config_path)
@@ -538,7 +817,6 @@ void ControllerManager::load_profiles(std::map<std::string, ControllerConfig>& p
     if (!j.contains("controller_profiles") && j.contains("controllers")) {
         profiles["Default"] = json_to_config(j["controllers"]);
         active_name = "Default";
-        return;
     }
 
     if (j.contains("controller_profiles")) {
@@ -558,6 +836,19 @@ void ControllerManager::load_profiles(std::map<std::string, ControllerConfig>& p
     // Ensure active_name is valid
     if (!profiles.count(active_name))
         active_name = profiles.begin()->first;
+
+    /* Les profils fournis, une seule fois.
+     *
+     * Construits sur le profil actif, donc sur la manette que le joueur a
+     * deja reglee. Un nom deja pris n'est pas touche, et la marque
+     * « builtin_profiles » fait qu'un profil fourni supprime ne revient pas.
+     * Enregistres tout de suite : un jeu peut se voir assigner l'un d'eux
+     * avant que l'ecran des manettes ait jamais ete ouvert. */
+    if (j.value("builtin_profiles", 0) < kBuiltinProfilesVersion) {
+        for (auto& [name, cfg] : builtin_profiles(profiles[active_name]))
+            if (!profiles.count(name)) profiles[name] = std::move(cfg);
+        save_profiles(profiles, active_name, config_path);
+    }
 }
 
 void ControllerManager::save_profiles(const std::map<std::string, ControllerConfig>& profiles,
@@ -576,6 +867,7 @@ void ControllerManager::save_profiles(const std::map<std::string, ControllerConf
 
     j["controller_profiles"]      = jprofiles;
     j["active_controller_profile"] = active_name;
+    j["builtin_profiles"]          = kBuiltinProfilesVersion;
 
     // Also write "controllers" key with the active profile (backward compat / FBNeo write)
     if (profiles.count(active_name))
@@ -606,6 +898,39 @@ static std::string fbneo_action_name(GameAction a)
         case GameAction::COIN:  return "coin";
         default:                return "";
     }
+}
+
+/* Les noms affiches du second stick dans les pilotes de FBNeo, sans le
+ * prefixe du joueur ni la direction. Releves dans les sources du fork : il n'y
+ * a pas de nom commun, Smash TV dit « Fire Up », Total Carnage « Shoot Up »,
+ * d'autres « Right Stick Up » (ou « Rightstick », ou « Rght Stick »). */
+static const char* const kRightStickNames[] = {"Right Stick", "Rightstick", "Rght Stick",
+                                               "Shoot", "Fire"};
+// Et ceux du stick qui deplace, quand le jeu en a deux.
+static const char* const kLeftStickNames[] = {"Left Stick", "Leftstick", "Stick"};
+
+/* Les noms sous lesquels une action s'ecrit dans pNdefaults.ini.
+ *
+ * FBNeo cherche chaque ligne d'abord par le nom affiche de la commande, puis
+ * par son nom interne, sans tenir compte des majuscules. Pour le second
+ * stick, le nom interne le plus repandu est « p1 up 2 » ; on ecrit aussi
+ * chaque nom affiche connu. Un jeu qui n'en a aucun ignore ces lignes. */
+static std::vector<std::string> fbneo_default_names(GameAction a)
+{
+    if (!is_right_stick_action(a)) {
+        const std::string n = fbneo_action_name(a);
+        if (n.empty()) return {};
+        return {n};
+    }
+    static const char* const dir[4] = {"up", "down", "left", "right"};
+    const std::string d = dir[(int)a - (int)GameAction::RSTICK_UP];
+    std::vector<std::string> names{d + " 2"};
+    for (const char* n : kRightStickNames) {
+        std::string lower;
+        for (const char* c = n; *c; ++c) lower += (char)std::tolower((unsigned char)*c);
+        names.push_back(lower + " " + d);
+    }
+    return names;
 }
 
 // Update or add a key=value line in fbneo.ini (key is the token before the first space)
@@ -656,6 +981,17 @@ static uint32_t read_fbneo_burn_ver(const std::string& fbneo_ini_path)
 //
 // L'ancien code ecrivait toujours 0 a 3 pour un axe, quel qu'il soit : une
 // gachette liee a Gauche devenait le stick gauche dans le .ini du jeu.
+// Un joueur dont on ecrit les commandes : il a une manette, ou au moins une
+// touche ou un bouton de souris (profil « Keyboard and mouse »).
+static bool writes_defaults(const PlayerConfig& player)
+{
+    if (player.bindings.empty()) return false;
+    if (player.has_device()) return true;
+    for (const auto& [a, b] : player.bindings)
+        if (b.valid && !binding_needs_pad(b)) return true;
+    return false;
+}
+
 static bool switch_code_for(const InputBinding& b, uint32_t base,
                             const std::string& preset, uint32_t& sw,
                             const std::array<int, 64>* rest = nullptr)
@@ -666,6 +1002,12 @@ static bool switch_code_for(const InputBinding& b, uint32_t base,
         // le haut : un code de touche s'ecrit tel quel.
         if (b.key < 0) return false;
         sw = static_cast<uint32_t>(b.key);
+        return true;
+    }
+    if (b.source == InputSource::MOUSE) {
+        // La souris du systeme : 0x8080 + bouton (gauche, droit, milieu).
+        if (b.button < 0 || b.button > 2) return false;
+        sw = 0x8080u + static_cast<uint32_t>(b.button);
         return true;
     }
     if (b.is_axis) {
@@ -736,9 +1078,11 @@ void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
     // Read the installed FBNeo version so we can stamp it in the defaults files.
     const uint32_t burn_ver = read_fbneo_burn_ver(FbneoPaths::ini_path());
 
-    for (int p = 0; p < 2; ++p) {
-        const auto& player = cfg.players[p];
-        if (player.device_path.empty() || player.bindings.empty()) continue;
+    for (int p = 0; p < MAX_PLAYERS && p < (int)cfg.players.size(); ++p) {
+        PlayerConfig player = cfg.players[p];
+        // Sans manette, seules les touches et la souris ont un sens.
+        if (!writes_defaults(player)) continue;
+        fill_right_stick(player);
 
         const uint32_t base = joystick_base_for(player.device_path);
         std::array<int, 64> rest_values{};
@@ -763,16 +1107,19 @@ void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
             GameAction action = static_cast<GameAction>(a);
             auto it = player.bindings.find(action);
             if (it == player.bindings.end() || !it->second.valid) continue;
+            if (binding_needs_pad(it->second) && !player.has_device()) continue;
 
             uint32_t sw = 0;
             if (!switch_code_for(it->second, base, player.preset, sw,
                                  has_rest ? &rest_values : nullptr)) continue;
 
-            std::ostringstream oss;
-            oss << "input \"" << prefix << fbneo_action_name(action)
-                << "\" switch 0x"
-                << std::uppercase << std::hex << sw;
-            f << oss.str() << "\n";
+            for (const std::string& name : fbneo_default_names(action)) {
+                std::ostringstream oss;
+                oss << "input \"" << prefix << name
+                    << "\" switch 0x"
+                    << std::uppercase << std::hex << sw;
+                f << oss.str() << "\n";
+            }
         }
 
         std::cout << "[ControllerManager] Wrote " << ini_path << "\n";
@@ -790,12 +1137,12 @@ void ControllerManager::write_fbneo_config(const ControllerConfig& cfg,
         }
     }
 
-    for (int p = 0; p < 2; ++p) {
+    for (int p = 0; p < MAX_PLAYERS && p < (int)cfg.players.size(); ++p) {
         const auto& player = cfg.players[p];
         std::string key = "szPlayerDefaultIni[" + std::to_string(p) + "]";
 
         std::string new_line;
-        if (!player.device_path.empty() && !player.bindings.empty()) {
+        if (writes_defaults(player)) {
             new_line = key + " "
                        + fbneo_config_dir + "/p" + std::to_string(p + 1) + "defaults.ini";
         } else {
@@ -969,8 +1316,7 @@ AnalogRole ControllerManager::analog_role_for_input(const std::string& name) {
         || has("trackball x") || has("mouse x") || has("track x")
         || has("fire x") || has("spinner x") || has("stick x")
         || has("x axis") || has("x-axis")
-        || has("target l/r") || has("l/r")
-        || has("gun"))                                               return AnalogRole::AIM_X;
+        || has("target l/r") || has("l/r"))                          return AnalogRole::AIM_X;
 
     // Axe vertical.
     if (has("gun y") || has("target y") || has("aim y") || has("crosshair y")
@@ -978,6 +1324,11 @@ AnalogRole ControllerManager::analog_role_for_input(const std::string& name) {
         || has("fire y") || has("spinner y") || has("stick y")
         || has("y axis") || has("y-axis")
         || has("target u/d") || has("u/d") || has("pitch"))          return AnalogRole::AIM_Y;
+
+    // Un pistolet nomme sans son axe. APRES l'axe vertical : place avec
+    // l'horizontal, « gun » attrapait aussi « Gun Y », et le viseur de tous
+    // les jeux au pistolet montait et descendait avec la souris gauche-droite.
+    if (has("gun"))                                                  return AnalogRole::AIM_X;
 
     if (has("brake"))                                                return AnalogRole::BRAKE;
 
@@ -1090,6 +1441,18 @@ int game_action_of(const std::string& name, int player, int& fires)
     if (rest == "Down")  return static_cast<int>(GameAction::DOWN);
     if (rest == "Left")  return static_cast<int>(GameAction::LEFT);
     if (rest == "Right") return static_cast<int>(GameAction::RIGHT);
+    /* Les jeux a deux manches : le stick de gauche deplace, celui de droite
+     * tire. Sans ces noms, « P1 Shoot Up » passait pour un bouton et prenait
+     * la place du bouton 1, ce qui decalait tous les suivants. */
+    static const char* const kDirs[4] = {"Up", "Down", "Left", "Right"};
+    for (int d = 0; d < 4; ++d) {
+        for (const char* n : kLeftStickNames)
+            if (rest == std::string(n) + " " + kDirs[d])
+                return static_cast<int>(GameAction::UP) + d;
+        for (const char* n : kRightStickNames)
+            if (rest == std::string(n) + " " + kDirs[d])
+                return static_cast<int>(GameAction::RSTICK_UP) + d;
+    }
     // Select n'est pas un bouton d'action : les defauts de FBNeo ne le
     // touchent pas, on fait pareil.
     if (rest == "Select") return -1;
@@ -1111,9 +1474,10 @@ int ControllerManager::write_game_config(const ControllerConfig& cfg,
     fi.close();
 
     int changed = 0;
-    for (int p = 0; p < 2; ++p) {
-        const auto& player = cfg.players[p];
-        if (player.device_path.empty() || player.bindings.empty()) continue;
+    for (int p = 0; p < MAX_PLAYERS && p < (int)cfg.players.size(); ++p) {
+        PlayerConfig player = cfg.players[p];
+        if (!writes_defaults(player)) continue;
+        fill_right_stick(player);
         const uint32_t base = joystick_base_for(player.device_path);
         std::array<int, 64> rest_values{};
         const bool has_rest = read_axis_rest(player.device_path, rest_values);
@@ -1137,6 +1501,7 @@ int ControllerManager::write_game_config(const ControllerConfig& cfg,
             if (action < 0) continue;
             auto it = player.bindings.find(static_cast<GameAction>(action));
             if (it == player.bindings.end()) continue;
+            if (binding_needs_pad(it->second) && !player.has_device()) continue;
             uint32_t sw = 0;
             if (!switch_code_for(it->second, base, player.preset, sw,
                                  has_rest ? &rest_values : nullptr)) continue;
@@ -1212,7 +1577,8 @@ void ControllerManager::apply_analog_bindings(const std::string& fbneo_rom_name,
         // mieux vaut une commande partagee qu'une commande morte.
         if (index >= cfg.players.size()) index = 0;
         const PlayerConfig& chosen = cfg.players[index];
-        if (chosen.device_path.empty() && chosen.device_name.empty())
+        if (chosen.device_path.empty() && chosen.device_name.empty()
+            && !chosen.has_pad_free_inputs())
             return cfg.players.empty() ? nullptr : &cfg.players[0];
         return &chosen;
     };
@@ -1226,12 +1592,13 @@ void ControllerManager::apply_analog_bindings(const std::string& fbneo_rom_name,
     // Sans chemin, fbneo_joy_index rend zero, soit la premiere manette : c'est
     // le cas de tout le monde sauf a en avoir branche plusieurs, et c'est en
     // tout cas meilleur que de ne rien lier du tout.
-    if (p1.device_path.empty() && p1.device_name.empty()) return;
+    // Un joueur 1 au clavier et a la souris a lui aussi ses commandes.
+    if (p1.device_path.empty() && p1.device_name.empty() && !p1.has_pad_free_inputs()) return;
 
     // Les positions de repos des deux manettes, une fois pour tout le fichier.
-    std::array<int, 64> rest_values[2]{};
-    bool has_rest[2] = {false, false};
-    for (size_t i = 0; i < 2 && i < cfg.players.size(); ++i)
+    std::array<int, 64> rest_values[MAX_PLAYERS]{};
+    bool has_rest[MAX_PLAYERS] = {};
+    for (size_t i = 0; i < (size_t)MAX_PLAYERS && i < cfg.players.size(); ++i)
         has_rest[i] = read_axis_rest(cfg.players[i].device_path, rest_values[i]);
 
     bool changed = false;
@@ -1271,13 +1638,15 @@ void ControllerManager::apply_analog_bindings(const std::string& fbneo_rom_name,
         if (role == AnalogRole::COUNT) continue;      // unrecognised: leave alone
 
         const PlayerConfig* who = owner(name);
-        if (!who || (who->device_path.empty() && who->device_name.empty())) continue;
+        if (!who) continue;
+        const bool who_pad = !who->device_path.empty() || !who->device_name.empty();
         auto it = who->analog.find(role);
-        AnalogBinding b = it != who->analog.end() ? it->second : default_analog_binding(role);
+        AnalogBinding b = it != who->analog.end() ? it->second : default_analog(*who, role);
         if (!b.is_set()) continue;
+        if (analog_needs_pad(b) && !who_pad) continue;
         const int pad = fbneo_joy_index(who->device_path);
         const size_t who_index = who - cfg.players.data();
-        const bool who_has_rest = who_index < 2 && has_rest[who_index];
+        const bool who_has_rest = who_index < (size_t)MAX_PLAYERS && has_rest[who_index];
 
         const std::string value_text = analog_value_for(
             b, pad, who->preset, who_has_rest ? &rest_values[who_index] : nullptr);
@@ -1364,16 +1733,16 @@ bool switch_value(const std::string& l, size_t& value_at, size_t& value_end, uin
 // target[p] : numero de manette actuel (>= 0), -1 (absente), -2 (pas de manette
 // reglee pour ce joueur : on n'y touche pas). Une manette presente recoit les
 // boutons de SON profil : deux manettes n'ont pas les memes numeros de boutons.
-std::string retarget_players(const std::string& text, const int target[2],
+std::string retarget_players(const std::string& text, const int target[MAX_PLAYERS],
                              const ControllerConfig& cfg)
 {
     std::istringstream in(text);
     std::string out, line;
-    int fires[2] = {0, 0};
+    int fires[MAX_PLAYERS] = {};
     while (std::getline(in, line)) {
         const std::string name = switch_line_name(line);
         if (!name.empty()) {
-            for (int p = 0; p < 2; ++p) {
+            for (int p = 0; p < MAX_PLAYERS && p < (int)cfg.players.size(); ++p) {
                 const int action = game_action_of(name, p, fires[p]);
                 if (action < 0 || target[p] == -2) continue;
                 size_t at = 0, end = 0; uint32_t val = 0;
@@ -1404,7 +1773,7 @@ std::string retarget_players(const std::string& text, const int target[2],
                         const size_t kind = line.find_first_not_of(" \t", q2 + 1);
                         std::snprintf(buf, sizeof(buf), "switch 0x%02X", code);
                         line = line.substr(0, kind) + buf;
-                    } else if (is_pad) {                               // joueur 2 : rien
+                    } else if (is_pad) {                               // joueurs 2 a 4 : rien
                         std::snprintf(buf, sizeof(buf), "0x%X", (val & 0xF0FFu) | (0xFu << 8));
                         line = line.substr(0, at) + buf + line.substr(end);
                     }
@@ -1424,21 +1793,21 @@ std::string players_from_original(const std::string& current, const std::string&
     {
         std::istringstream in(original);
         std::string line;
-        int fires[2] = {0, 0};
+        int fires[MAX_PLAYERS] = {};
         while (std::getline(in, line)) {
             const std::string name = switch_line_name(line);
             if (name.empty()) continue;
-            for (int p = 0; p < 2; ++p)
+            for (int p = 0; p < MAX_PLAYERS; ++p)
                 if (game_action_of(name, p, fires[p]) >= 0) { kept[name] = line; break; }
         }
     }
     std::istringstream in(current);
     std::string out, line;
-    int fires[2] = {0, 0};
+    int fires[MAX_PLAYERS] = {};
     while (std::getline(in, line)) {
         const std::string name = switch_line_name(line);
         if (!name.empty())
-            for (int p = 0; p < 2; ++p)
+            for (int p = 0; p < MAX_PLAYERS; ++p)
                 if (game_action_of(name, p, fires[p]) >= 0) {
                     auto it = kept.find(name);
                     if (it != kept.end()) line = it->second;
@@ -1539,8 +1908,8 @@ void ControllerManager::put_back_saved_devices(const std::string& fbneo_rom_name
     if (fbneo_rom_name.empty()) return;
     const std::string dir = get_fbneo_config_dir();
     put_back_file(dir + "/games/" + fbneo_rom_name + ".ini");
-    put_back_file(dir + "/p1defaults.ini");
-    put_back_file(dir + "/p2defaults.ini");
+    for (int p = 1; p <= MAX_PLAYERS; ++p)
+        put_back_file(dir + "/p" + std::to_string(p) + "defaults.ini");
 }
 
 void ControllerManager::use_current_devices(const std::string& fbneo_rom_name,
@@ -1553,20 +1922,27 @@ void ControllerManager::use_current_devices(const std::string& fbneo_rom_name,
     // `cfg` est deja rapproche des manettes branchees (adopt_plugged_pads) :
     // un joueur avec un chemin a sa manette, un joueur avec un nom seul l'a
     // debranchee, un joueur sans rien joue au clavier ou n'a rien regle.
-    int target[2] = {-2, -2};
-    for (int p = 0; p < 2 && p < (int)cfg.players.size(); ++p) {
+    int target[MAX_PLAYERS];
+    bool any = false;
+    // Le second stick par defaut fait partie du profil de chaque manette.
+    ControllerConfig filled = cfg;
+    for (int p = 0; p < MAX_PLAYERS; ++p) {
+        target[p] = -2;
+        if (p >= (int)cfg.players.size()) continue;
         const auto& pl = cfg.players[p];
         if (!pl.device_path.empty())            target[p] = (int)((joystick_base_for(pl.device_path) >> 8) & 0xF);
         else if (!pl.device_name.empty())       target[p] = -1;
+        any = any || target[p] != -2;
+        fill_right_stick(filled.players[p]);
     }
-    if (target[0] == -2 && target[1] == -2) return;
+    if (!any) return;
 
     const std::string dir = get_fbneo_config_dir();
     const std::string ini = dir + "/games/" + fbneo_rom_name + ".ini";
     std::string text;
     bool changed = false;
     if (read_all(ini, text)) {
-        const std::string out = retarget_players(text, target, cfg);
+        const std::string out = retarget_players(text, target, filled);
         if (out != text) {
             keep_original(ini, "game", text);
             std::ofstream fo(ini);
@@ -1575,7 +1951,7 @@ void ControllerManager::use_current_devices(const std::string& fbneo_rom_name,
         }
     } else {
         // Premier lancement : FBNeo cree le .ini depuis les reglages par joueur.
-        for (int p = 0; p < 2; ++p) {
+        for (int p = 0; p < MAX_PLAYERS; ++p) {
             if (target[p] == -2) continue;
             const std::string path = dir + "/p" + std::to_string(p + 1) + "defaults.ini";
             if (!read_all(path, text)) continue;
@@ -1596,9 +1972,12 @@ void ControllerManager::use_current_devices(const std::string& fbneo_rom_name,
             }
         }
     }
-    if (changed)
-        std::cout << "[ControllerManager] " << fbneo_rom_name << ": pads set for this game "
-                  << "P1=" << (target[0] >= 0 ? "js" + std::to_string(target[0]) : target[0] == -1 ? "keyboard" : "untouched")
-                  << " P2=" << (target[1] >= 0 ? "js" + std::to_string(target[1]) : target[1] == -1 ? "none" : "untouched")
-                  << std::endl;
+    if (changed) {
+        std::cout << "[ControllerManager] " << fbneo_rom_name << ": pads set for this game";
+        for (int p = 0; p < MAX_PLAYERS; ++p)
+            std::cout << " P" << p + 1 << "="
+                      << (target[p] >= 0 ? "js" + std::to_string(target[p])
+                          : target[p] == -1 ? (p == 0 ? "keyboard" : "none") : "untouched");
+        std::cout << std::endl;
+    }
 }

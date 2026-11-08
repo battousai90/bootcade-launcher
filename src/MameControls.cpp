@@ -3,10 +3,6 @@
 #include "ControllerManager.h"
 #include "AppContext.h"
 #include "Platform.h"
-#ifndef _WIN32
-#include <linux/joystick.h>
-#include <sys/ioctl.h>
-#endif
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstdio>
@@ -15,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <algorithm>
 #include <vector>
 
 namespace MameControls {
@@ -23,32 +20,52 @@ namespace {
 
 /* Ce que MAME met par defaut sur chaque commande, SANS ses codes manette.
  *
- * Releve sur MAME 0.289 par script Lua (ioport:type_seq), pas recopie d'une
- * documentation. On garde ces touches a cote de la liaison du joueur : le
- * clavier doit continuer de marcher. Les codes JOYCODE sont retires, sinon
- * le bouton 1 de la manette declencherait encore P1_BUTTON1 apres avoir ete
- * deplace ailleurs. La souris et le pistolet du joueur 1 restent ; ceux du
- * joueur 2 n'ont pas de nom stable sans le peripherique, on les laisse. */
+ * Tire du source de MAME 0.289 (src/emu/inpttype.ipp) par un script, pas
+ * recopie a la main : joueurs 1 a 4, pieces et departs 1 a 4, les deux
+ * sticks des jeux a deux manches et toutes les commandes analogiques. Les
+ * lignes du joueur 1 ont ete comparees a un releve fait dans MAME par script
+ * Lua (ioport:type_seq) : identiques.
+ *
+ * On garde ces touches a cote de la liaison du joueur : le clavier doit
+ * continuer de marcher. La souris et le pistolet de CHAQUE joueur restent
+ * aussi (MOUSECODE_2, GUNCODE_2... pour le joueur 2) : les retirer laissait
+ * sans viseur le deuxieme pistolet. Les codes JOYCODE sont retires, sinon le
+ * bouton 1 de la manette declencherait encore P1_BUTTON1 apres avoir ete
+ * deplace ailleurs ; MAME 0.289 n'en met d'ailleurs que sur Start et Select.
+ *
+ * Colonnes : type, sequence standard, increment, decrement. */
 struct Defaults { const char* type; const char* standard; const char* increment; const char* decrement; };
 
 const Defaults kDefaults[] = {
-    {"COIN1",  "KEYCODE_5", "", ""},
-    {"COIN2",  "KEYCODE_6", "", ""},
+    {"COIN1", "KEYCODE_5", "", ""},
+    {"COIN2", "KEYCODE_6", "", ""},
+    {"COIN3", "KEYCODE_7", "", ""},
+    {"COIN4", "KEYCODE_8", "", ""},
     {"START1", "KEYCODE_1", "", ""},
     {"START2", "KEYCODE_2", "", ""},
-    {"P1_JOYSTICK_UP",    "KEYCODE_UP",    "", ""},
-    {"P1_JOYSTICK_DOWN",  "KEYCODE_DOWN",  "", ""},
-    {"P1_JOYSTICK_LEFT",  "KEYCODE_LEFT",  "", ""},
+    {"START3", "KEYCODE_3", "", ""},
+    {"START4", "KEYCODE_4", "", ""},
+    {"P1_JOYSTICK_UP", "KEYCODE_UP", "", ""},
+    {"P1_JOYSTICK_DOWN", "KEYCODE_DOWN", "", ""},
+    {"P1_JOYSTICK_LEFT", "KEYCODE_LEFT", "", ""},
     {"P1_JOYSTICK_RIGHT", "KEYCODE_RIGHT", "", ""},
-    {"P1_BUTTON1",  "KEYCODE_LCONTROL OR MOUSECODE_1_BUTTON1 OR GUNCODE_1_BUTTON1", "", ""},
-    {"P1_BUTTON2",  "KEYCODE_LALT OR MOUSECODE_1_BUTTON3 OR GUNCODE_1_BUTTON2", "", ""},
-    {"P1_BUTTON3",  "KEYCODE_SPACE OR MOUSECODE_1_BUTTON2", "", ""},
-    {"P1_BUTTON4",  "KEYCODE_LSHIFT", "", ""},
-    {"P1_BUTTON5",  "KEYCODE_Z", "", ""},
-    {"P1_BUTTON6",  "KEYCODE_X", "", ""},
-    {"P1_BUTTON7",  "KEYCODE_C", "", ""},
-    {"P1_BUTTON8",  "KEYCODE_V", "", ""},
-    {"P1_BUTTON9",  "KEYCODE_B", "", ""},
+    {"P1_JOYSTICKLEFT_UP", "KEYCODE_E", "", ""},
+    {"P1_JOYSTICKLEFT_DOWN", "KEYCODE_D", "", ""},
+    {"P1_JOYSTICKLEFT_LEFT", "KEYCODE_S", "", ""},
+    {"P1_JOYSTICKLEFT_RIGHT", "KEYCODE_F", "", ""},
+    {"P1_JOYSTICKRIGHT_UP", "KEYCODE_I", "", ""},
+    {"P1_JOYSTICKRIGHT_DOWN", "KEYCODE_K", "", ""},
+    {"P1_JOYSTICKRIGHT_LEFT", "KEYCODE_J", "", ""},
+    {"P1_JOYSTICKRIGHT_RIGHT", "KEYCODE_L", "", ""},
+    {"P1_BUTTON1", "KEYCODE_LCONTROL OR MOUSECODE_1_BUTTON1 OR GUNCODE_1_BUTTON1", "", ""},
+    {"P1_BUTTON2", "KEYCODE_LALT OR MOUSECODE_1_BUTTON3 OR GUNCODE_1_BUTTON2", "", ""},
+    {"P1_BUTTON3", "KEYCODE_SPACE OR MOUSECODE_1_BUTTON2", "", ""},
+    {"P1_BUTTON4", "KEYCODE_LSHIFT", "", ""},
+    {"P1_BUTTON5", "KEYCODE_Z", "", ""},
+    {"P1_BUTTON6", "KEYCODE_X", "", ""},
+    {"P1_BUTTON7", "KEYCODE_C", "", ""},
+    {"P1_BUTTON8", "KEYCODE_V", "", ""},
+    {"P1_BUTTON9", "KEYCODE_B", "", ""},
     {"P1_BUTTON10", "KEYCODE_N", "", ""},
     {"P1_BUTTON11", "KEYCODE_M", "", ""},
     {"P1_BUTTON12", "KEYCODE_COMMA", "", ""},
@@ -56,41 +73,154 @@ const Defaults kDefaults[] = {
     {"P1_BUTTON14", "KEYCODE_SLASH", "", ""},
     {"P1_BUTTON15", "KEYCODE_RSHIFT", "", ""},
     {"P1_BUTTON16", "", "", ""},
-    {"P2_JOYSTICK_UP",    "KEYCODE_R", "", ""},
-    {"P2_JOYSTICK_DOWN",  "KEYCODE_F", "", ""},
-    {"P2_JOYSTICK_LEFT",  "KEYCODE_D", "", ""},
+    {"P1_PADDLE", "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
+    {"P1_PADDLE_V", "MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
+    {"P1_DIAL", "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
+    {"P1_DIAL_V", "MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
+    {"P1_POSITIONAL", "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
+    {"P1_POSITIONAL_V", "MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
+    {"P1_AD_STICK_X", "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
+    {"P1_AD_STICK_Y", "MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
+    {"P1_AD_STICK_Z", "", "KEYCODE_Z", "KEYCODE_A"},
+    {"P1_TRACKBALL_X", "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
+    {"P1_TRACKBALL_Y", "MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
+    {"P1_LIGHTGUN_X", "GUNCODE_1_XAXIS OR MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
+    {"P1_LIGHTGUN_Y", "GUNCODE_1_YAXIS OR MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
+    {"P1_PEDAL", "", "KEYCODE_LCONTROL", ""},
+    {"P1_PEDAL2", "", "KEYCODE_LALT", ""},
+    {"P1_PEDAL3", "", "KEYCODE_SPACE", ""},
+    {"P2_JOYSTICK_UP", "KEYCODE_R", "", ""},
+    {"P2_JOYSTICK_DOWN", "KEYCODE_F", "", ""},
+    {"P2_JOYSTICK_LEFT", "KEYCODE_D", "", ""},
     {"P2_JOYSTICK_RIGHT", "KEYCODE_G", "", ""},
-    {"P2_BUTTON1", "KEYCODE_A", "", ""},
-    {"P2_BUTTON2", "KEYCODE_S", "", ""},
-    {"P2_BUTTON3", "KEYCODE_Q", "", ""},
+    {"P2_JOYSTICKLEFT_UP", "", "", ""},
+    {"P2_JOYSTICKLEFT_DOWN", "", "", ""},
+    {"P2_JOYSTICKLEFT_LEFT", "", "", ""},
+    {"P2_JOYSTICKLEFT_RIGHT", "", "", ""},
+    {"P2_JOYSTICKRIGHT_UP", "", "", ""},
+    {"P2_JOYSTICKRIGHT_DOWN", "", "", ""},
+    {"P2_JOYSTICKRIGHT_LEFT", "", "", ""},
+    {"P2_JOYSTICKRIGHT_RIGHT", "", "", ""},
+    {"P2_BUTTON1", "KEYCODE_A OR MOUSECODE_2_BUTTON1 OR GUNCODE_2_BUTTON1", "", ""},
+    {"P2_BUTTON2", "KEYCODE_S OR MOUSECODE_2_BUTTON3 OR GUNCODE_2_BUTTON2", "", ""},
+    {"P2_BUTTON3", "KEYCODE_Q OR MOUSECODE_2_BUTTON2", "", ""},
     {"P2_BUTTON4", "KEYCODE_W", "", ""},
     {"P2_BUTTON5", "KEYCODE_E", "", ""},
-    {"P1_PADDLE",      "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
-    {"P1_DIAL",        "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
-    {"P1_POSITIONAL",  "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
-    {"P1_AD_STICK_X",  "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
-    {"P1_TRACKBALL_X", "MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
-    {"P1_LIGHTGUN_X",  "GUNCODE_1_XAXIS OR MOUSECODE_1_XAXIS", "KEYCODE_RIGHT", "KEYCODE_LEFT"},
-    {"P1_AD_STICK_Y",  "MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
-    {"P1_TRACKBALL_Y", "MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
-    {"P1_PADDLE_V",    "MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
-    {"P1_DIAL_V",      "MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
-    {"P1_LIGHTGUN_Y",  "GUNCODE_1_YAXIS OR MOUSECODE_1_YAXIS", "KEYCODE_DOWN", "KEYCODE_UP"},
-    {"P1_PEDAL",       "", "KEYCODE_LCONTROL", ""},
-    {"P1_PEDAL2",      "", "KEYCODE_LALT", ""},
-    {"P2_PADDLE",      "", "KEYCODE_G", "KEYCODE_D"},
-    {"P2_DIAL",        "", "KEYCODE_G", "KEYCODE_D"},
-    {"P2_POSITIONAL",  "", "KEYCODE_G", "KEYCODE_D"},
-    {"P2_AD_STICK_X",  "", "KEYCODE_G", "KEYCODE_D"},
-    {"P2_TRACKBALL_X", "", "KEYCODE_G", "KEYCODE_D"},
-    {"P2_LIGHTGUN_X",  "", "KEYCODE_G", "KEYCODE_D"},
-    {"P2_AD_STICK_Y",  "", "KEYCODE_F", "KEYCODE_R"},
-    {"P2_TRACKBALL_Y", "", "KEYCODE_F", "KEYCODE_R"},
-    {"P2_PADDLE_V",    "", "KEYCODE_F", "KEYCODE_R"},
-    {"P2_DIAL_V",      "", "KEYCODE_F", "KEYCODE_R"},
-    {"P2_LIGHTGUN_Y",  "", "KEYCODE_F", "KEYCODE_R"},
-    {"P2_PEDAL",       "", "KEYCODE_A", ""},
-    {"P2_PEDAL2",      "", "KEYCODE_S", ""},
+    {"P2_BUTTON6", "", "", ""},
+    {"P2_BUTTON7", "", "", ""},
+    {"P2_BUTTON8", "", "", ""},
+    {"P2_BUTTON9", "", "", ""},
+    {"P2_BUTTON10", "", "", ""},
+    {"P2_BUTTON11", "", "", ""},
+    {"P2_BUTTON12", "", "", ""},
+    {"P2_BUTTON13", "", "", ""},
+    {"P2_BUTTON14", "", "", ""},
+    {"P2_BUTTON15", "", "", ""},
+    {"P2_BUTTON16", "", "", ""},
+    {"P2_PADDLE", "MOUSECODE_2_XAXIS", "KEYCODE_G", "KEYCODE_D"},
+    {"P2_PADDLE_V", "MOUSECODE_2_YAXIS", "KEYCODE_F", "KEYCODE_R"},
+    {"P2_DIAL", "MOUSECODE_2_XAXIS", "KEYCODE_G", "KEYCODE_D"},
+    {"P2_DIAL_V", "MOUSECODE_2_YAXIS", "KEYCODE_F", "KEYCODE_R"},
+    {"P2_POSITIONAL", "MOUSECODE_2_XAXIS", "KEYCODE_G", "KEYCODE_D"},
+    {"P2_POSITIONAL_V", "MOUSECODE_2_YAXIS", "KEYCODE_F", "KEYCODE_R"},
+    {"P2_AD_STICK_X", "MOUSECODE_2_XAXIS", "KEYCODE_G", "KEYCODE_D"},
+    {"P2_AD_STICK_Y", "MOUSECODE_2_YAXIS", "KEYCODE_F", "KEYCODE_R"},
+    {"P2_AD_STICK_Z", "", "", ""},
+    {"P2_TRACKBALL_X", "MOUSECODE_2_XAXIS", "KEYCODE_G", "KEYCODE_D"},
+    {"P2_TRACKBALL_Y", "MOUSECODE_2_YAXIS", "KEYCODE_F", "KEYCODE_R"},
+    {"P2_LIGHTGUN_X", "GUNCODE_2_XAXIS OR MOUSECODE_2_XAXIS", "KEYCODE_G", "KEYCODE_D"},
+    {"P2_LIGHTGUN_Y", "GUNCODE_2_YAXIS OR MOUSECODE_2_YAXIS", "KEYCODE_F", "KEYCODE_R"},
+    {"P2_PEDAL", "", "KEYCODE_A", ""},
+    {"P2_PEDAL2", "", "KEYCODE_S", ""},
+    {"P2_PEDAL3", "", "KEYCODE_Q", ""},
+    {"P3_JOYSTICK_UP", "KEYCODE_I", "", ""},
+    {"P3_JOYSTICK_DOWN", "KEYCODE_K", "", ""},
+    {"P3_JOYSTICK_LEFT", "KEYCODE_J", "", ""},
+    {"P3_JOYSTICK_RIGHT", "KEYCODE_L", "", ""},
+    {"P3_JOYSTICKLEFT_UP", "", "", ""},
+    {"P3_JOYSTICKLEFT_DOWN", "", "", ""},
+    {"P3_JOYSTICKLEFT_LEFT", "", "", ""},
+    {"P3_JOYSTICKLEFT_RIGHT", "", "", ""},
+    {"P3_JOYSTICKRIGHT_UP", "", "", ""},
+    {"P3_JOYSTICKRIGHT_DOWN", "", "", ""},
+    {"P3_JOYSTICKRIGHT_LEFT", "", "", ""},
+    {"P3_JOYSTICKRIGHT_RIGHT", "", "", ""},
+    {"P3_BUTTON1", "KEYCODE_RCONTROL OR GUNCODE_3_BUTTON1", "", ""},
+    {"P3_BUTTON2", "KEYCODE_RSHIFT OR GUNCODE_3_BUTTON2", "", ""},
+    {"P3_BUTTON3", "KEYCODE_ENTER", "", ""},
+    {"P3_BUTTON4", "", "", ""},
+    {"P3_BUTTON5", "", "", ""},
+    {"P3_BUTTON6", "", "", ""},
+    {"P3_BUTTON7", "", "", ""},
+    {"P3_BUTTON8", "", "", ""},
+    {"P3_BUTTON9", "", "", ""},
+    {"P3_BUTTON10", "", "", ""},
+    {"P3_BUTTON11", "", "", ""},
+    {"P3_BUTTON12", "", "", ""},
+    {"P3_BUTTON13", "", "", ""},
+    {"P3_BUTTON14", "", "", ""},
+    {"P3_BUTTON15", "", "", ""},
+    {"P3_BUTTON16", "", "", ""},
+    {"P3_PADDLE", "MOUSECODE_3_XAXIS", "KEYCODE_L", "KEYCODE_J"},
+    {"P3_PADDLE_V", "MOUSECODE_3_YAXIS", "KEYCODE_K", "KEYCODE_I"},
+    {"P3_DIAL", "MOUSECODE_3_XAXIS", "KEYCODE_L", "KEYCODE_J"},
+    {"P3_DIAL_V", "MOUSECODE_3_YAXIS", "KEYCODE_K", "KEYCODE_I"},
+    {"P3_POSITIONAL", "MOUSECODE_3_XAXIS", "KEYCODE_L", "KEYCODE_J"},
+    {"P3_POSITIONAL_V", "MOUSECODE_3_YAXIS", "KEYCODE_K", "KEYCODE_I"},
+    {"P3_AD_STICK_X", "MOUSECODE_3_XAXIS", "KEYCODE_L", "KEYCODE_J"},
+    {"P3_AD_STICK_Y", "MOUSECODE_3_YAXIS", "KEYCODE_K", "KEYCODE_I"},
+    {"P3_AD_STICK_Z", "", "", ""},
+    {"P3_TRACKBALL_X", "MOUSECODE_3_XAXIS", "KEYCODE_L", "KEYCODE_J"},
+    {"P3_TRACKBALL_Y", "MOUSECODE_3_YAXIS", "KEYCODE_K", "KEYCODE_I"},
+    {"P3_LIGHTGUN_X", "GUNCODE_3_XAXIS OR MOUSECODE_3_XAXIS", "KEYCODE_L", "KEYCODE_J"},
+    {"P3_LIGHTGUN_Y", "GUNCODE_3_YAXIS OR MOUSECODE_3_YAXIS", "KEYCODE_K", "KEYCODE_I"},
+    {"P3_PEDAL", "", "KEYCODE_RCONTROL", ""},
+    {"P3_PEDAL2", "", "KEYCODE_RSHIFT", ""},
+    {"P3_PEDAL3", "", "KEYCODE_ENTER", ""},
+    {"P4_JOYSTICK_UP", "KEYCODE_8_PAD", "", ""},
+    {"P4_JOYSTICK_DOWN", "KEYCODE_2_PAD", "", ""},
+    {"P4_JOYSTICK_LEFT", "KEYCODE_4_PAD", "", ""},
+    {"P4_JOYSTICK_RIGHT", "KEYCODE_6_PAD", "", ""},
+    {"P4_JOYSTICKLEFT_UP", "", "", ""},
+    {"P4_JOYSTICKLEFT_DOWN", "", "", ""},
+    {"P4_JOYSTICKLEFT_LEFT", "", "", ""},
+    {"P4_JOYSTICKLEFT_RIGHT", "", "", ""},
+    {"P4_JOYSTICKRIGHT_UP", "", "", ""},
+    {"P4_JOYSTICKRIGHT_DOWN", "", "", ""},
+    {"P4_JOYSTICKRIGHT_LEFT", "", "", ""},
+    {"P4_JOYSTICKRIGHT_RIGHT", "", "", ""},
+    {"P4_BUTTON1", "KEYCODE_0_PAD", "", ""},
+    {"P4_BUTTON2", "KEYCODE_DEL_PAD", "", ""},
+    {"P4_BUTTON3", "KEYCODE_ENTER_PAD", "", ""},
+    {"P4_BUTTON4", "", "", ""},
+    {"P4_BUTTON5", "", "", ""},
+    {"P4_BUTTON6", "", "", ""},
+    {"P4_BUTTON7", "", "", ""},
+    {"P4_BUTTON8", "", "", ""},
+    {"P4_BUTTON9", "", "", ""},
+    {"P4_BUTTON10", "", "", ""},
+    {"P4_BUTTON11", "", "", ""},
+    {"P4_BUTTON12", "", "", ""},
+    {"P4_BUTTON13", "", "", ""},
+    {"P4_BUTTON14", "", "", ""},
+    {"P4_BUTTON15", "", "", ""},
+    {"P4_BUTTON16", "", "", ""},
+    {"P4_PADDLE", "MOUSECODE_4_XAXIS", "KEYCODE_6_PAD", "KEYCODE_4_PAD"},
+    {"P4_PADDLE_V", "MOUSECODE_4_YAXIS", "KEYCODE_2_PAD", "KEYCODE_8_PAD"},
+    {"P4_DIAL", "MOUSECODE_4_XAXIS", "KEYCODE_6_PAD", "KEYCODE_4_PAD"},
+    {"P4_DIAL_V", "MOUSECODE_4_YAXIS", "KEYCODE_2_PAD", "KEYCODE_8_PAD"},
+    {"P4_POSITIONAL", "MOUSECODE_4_XAXIS", "KEYCODE_6_PAD", "KEYCODE_4_PAD"},
+    {"P4_POSITIONAL_V", "MOUSECODE_4_YAXIS", "KEYCODE_2_PAD", "KEYCODE_8_PAD"},
+    {"P4_AD_STICK_X", "MOUSECODE_4_XAXIS", "KEYCODE_6_PAD", "KEYCODE_4_PAD"},
+    {"P4_AD_STICK_Y", "MOUSECODE_4_YAXIS", "KEYCODE_2_PAD", "KEYCODE_8_PAD"},
+    {"P4_AD_STICK_Z", "", "", ""},
+    {"P4_TRACKBALL_X", "MOUSECODE_4_XAXIS", "KEYCODE_6_PAD", "KEYCODE_4_PAD"},
+    {"P4_TRACKBALL_Y", "MOUSECODE_4_YAXIS", "KEYCODE_2_PAD", "KEYCODE_8_PAD"},
+    {"P4_LIGHTGUN_X", "GUNCODE_4_XAXIS OR MOUSECODE_4_XAXIS", "KEYCODE_6_PAD", "KEYCODE_4_PAD"},
+    {"P4_LIGHTGUN_Y", "GUNCODE_4_YAXIS OR MOUSECODE_4_YAXIS", "KEYCODE_2_PAD", "KEYCODE_8_PAD"},
+    {"P4_PEDAL", "", "KEYCODE_0_PAD", ""},
+    {"P4_PEDAL2", "", "KEYCODE_DEL_PAD", ""},
+    {"P4_PEDAL3", "", "KEYCODE_ENTER_PAD", ""},
 };
 
 const Defaults& defaults_for(const std::string& type) {
@@ -138,18 +268,28 @@ std::string key_code(int code) {
 
 /* Une manette telle que MAME la verra.
  *
- * Sous -joystickprovider sdljoy, SDL numerote les boutons exactement comme
- * /dev/input/js* : meme parcours des codes BTN_*. Les axes, non : SDL sort
- * les chapeaux (ABS_HAT0X a ABS_HAT3Y) de la liste des axes pour en faire des
- * « hats ». La table des axes de joydev (JSIOCGAXMAP) dit, pour chaque numero
- * d'axe de Bootcade, de quel code ABS il s'agit, donc ou il tombe chez SDL. */
+ * Sous Linux, MAME est lance avec -joystickprovider sdljoy : SDL numerote les
+ * boutons exactement comme /dev/input/js*. Les axes, non : SDL sort les
+ * chapeaux (ABS_HAT0X a ABS_HAT3Y) de la liste des axes pour en faire des
+ * « hats », et nomme les axes restants dans l'ordre (XAXIS, YAXIS, ZAXIS...).
+ *
+ * Sous Windows, la version officielle de MAME n'a pas les pilotes SDL : on
+ * passe par DirectInput (-joystickprovider dinput), qui nomme chaque axe par
+ * ce qu'il est (X, Y, Z, Rx, Ry, Rz) et le premier chapeau HAT1. Les boutons
+ * gardent l'ordre de winmm, que Bootcade lit.
+ *
+ * Dans les deux cas, ControllerManager::axis_codes dit pour chaque numero
+ * d'axe de Bootcade de quel code ABS il s'agit. */
 struct Pad {
     int joy = 0;                  // JOYCODE_<joy>
-    std::vector<int> axmap;       // numero joydev -> code ABS
+    std::vector<int> codes;       // numero d'axe Bootcade -> code ABS, -1 inconnu
     std::string id;               // fragment de l'identifiant SDL, ou vide
 };
 
+constexpr int kAbsX = 0x00, kAbsY = 0x01;              // ABS_X, ABS_Y
 constexpr int kAbsHat0X = 0x10, kAbsHat3Y = 0x17;
+
+bool is_hat(int code) { return code >= kAbsHat0X && code <= kAbsHat3Y; }
 
 // Le chemin de la manette du joueur. Les numeros jsN changent quand on
 // branche les manettes dans un autre ordre ; le nom, lui, suit la manette.
@@ -176,7 +316,8 @@ std::string read_first_line(const std::string& path) {
  * 00 ») et <mapdevice> y cherche une SOUS-CHAINE. Le GUID porte, en petit-
  * boutiste, le bus, une empreinte du nom, puis vendeur, produit et version
  * separes de zeros : ces trois-la se lisent dans /sys, on n'a pas besoin de
- * refaire l'empreinte. */
+ * refaire l'empreinte. Vide sous Windows : pas de /sys, et DirectInput ne
+ * nomme pas les manettes ainsi. */
 std::string sdl_id_fragment(const std::string& js_path) {
     const auto slash = js_path.rfind('/');
     const std::string node = js_path.substr(slash == std::string::npos ? 0 : slash + 1);
@@ -202,65 +343,100 @@ Pad open_pad(const PlayerConfig& player, int joy) {
     pad.joy = joy;
     const std::string path = resolve_path(player);
     if (path.empty()) return pad;
+#ifndef _WIN32
     pad.id = sdl_id_fragment(path);
-#ifdef _WIN32
-    return pad;   // Windows : manettes a une etape suivante
-#else
-    const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK);
-    if (fd < 0) return pad;
-    uint8_t count = 0;
-    uint8_t map[ABS_CNT] = {};
-    if (ioctl(fd, JSIOCGAXES, &count) >= 0 && ioctl(fd, JSIOCGAXMAP, map) >= 0)
-        pad.axmap.assign(map, map + count);
-    close(fd);
-    return pad;
 #endif
+    pad.codes = ControllerManager::axis_codes(path);
+    return pad;
 }
 
-// Numero d'axe chez SDL, ou -1 pour un chapeau ou un axe inconnu.
-int sdl_axis(const Pad& pad, int axis) {
-    if (axis < 0 || axis >= (int)pad.axmap.size()) return -1;
-    const int code = pad.axmap[axis];
-    if (code >= kAbsHat0X && code <= kAbsHat3Y) return -1;
-    int n = 0;
-    for (int i = 0; i < axis; ++i)
-        if (pad.axmap[i] < kAbsHat0X || pad.axmap[i] > kAbsHat3Y) ++n;
-    return n;
-}
-
-const char* axis_item(int sdl_index) {
+/* Le nom MAME d'un axe de Bootcade, ou nullptr pour un chapeau ou un axe
+ * inconnu. */
+const char* axis_name(const Pad& pad, int axis) {
+    if (axis < 0 || axis >= (int)pad.codes.size()) return nullptr;
+    const int code = pad.codes[axis];
+    if (code < 0 || is_hat(code)) return nullptr;
+#ifdef _WIN32
+    // DirectInput : le nom suit l'axe lui-meme.
+    static const char* const di[6] = {"XAXIS", "YAXIS", "ZAXIS", "RXAXIS", "RYAXIS", "RZAXIS"};
+    return code < 6 ? di[code] : nullptr;
+#else
+    // SDL : les axes restants, dans l'ordre, chapeaux exclus.
     static const char* const names[] = {"XAXIS", "YAXIS", "ZAXIS", "RXAXIS",
                                         "RYAXIS", "RZAXIS", "SLIDER1", "SLIDER2"};
-    return sdl_index >= 0 && sdl_index < 8 ? names[sdl_index] : nullptr;
+    int n = 0;
+    for (int i = 0; i < axis; ++i)
+        if (pad.codes[i] < 0 || !is_hat(pad.codes[i])) ++n;
+    return n < 8 ? names[n] : nullptr;
+#endif
 }
 
 std::string joy(const Pad& pad) { return "JOYCODE_" + std::to_string(pad.joy) + "_"; }
 
+// « XAXIS_LEFT_SWITCH » : la moitie d'un axe vue comme un bouton. MAME nomme
+// les moities d'apres l'axe : gauche/droite pour X, haut/bas pour Y, sinon
+// negatif/positif.
+std::string axis_switch(const Pad& pad, const char* item, int dir) {
+    if (!item) return "";
+    const std::string it = item;
+    const char* half = it == "XAXIS" ? (dir < 0 ? "LEFT" : "RIGHT")
+                     : it == "YAXIS" ? (dir < 0 ? "UP" : "DOWN")
+                                     : (dir < 0 ? "NEG" : "POS");
+    return joy(pad) + it + "_" + half + "_SWITCH";
+}
+
+/* Le stick gauche de la manette, pour une direction.
+ *
+ * MAME 0.289 ne met AUCUN code manette sur les directions : seul le pilote
+ * sdlgame en ajoute, et Bootcade lance MAME avec un autre pilote. Le stick
+ * gauche, c'est ABS_X / ABS_Y sur toutes les manettes : on le cherche par son
+ * code, pas par sa place. Ajoute a cote de la liaison du joueur, la croix et
+ * le stick marchent tous les deux. */
+std::string stick_switch(const Pad* pad, GameAction action) {
+    if (!pad || !is_direction_action(action)) return "";
+    const bool x = action == GameAction::LEFT || action == GameAction::RIGHT;
+    const int dir = (action == GameAction::LEFT || action == GameAction::UP) ? -1 : 1;
+    const int code = x ? kAbsX : kAbsY;
+    for (int i = 0; i < (int)pad->codes.size(); ++i)
+        if (pad->codes[i] == code) return axis_switch(*pad, axis_name(*pad, i), dir);
+    return "";
+}
+
 // Code MAME d'une liaison numerique, vide si elle n'a pas d'equivalent.
+/* Un bouton de souris pour MAME. Une seule souris (multimouse 0 les reunit
+ * toutes en MOUSECODE_1). Les numeros suivent le pilote : sous Linux, SDL
+ * range gauche, milieu, droit (le clic droit est BUTTON3, d'ou les defauts de
+ * MAME « P1_BUTTON2 = MOUSECODE_1_BUTTON3 ») ; sous Windows, rawinput et
+ * DirectInput rangent gauche, droit, milieu. */
+std::string mouse_button_code(int button) {
+#ifdef _WIN32
+    static const char* const kItem[3] = {"BUTTON1", "BUTTON2", "BUTTON3"};
+#else
+    static const char* const kItem[3] = {"BUTTON1", "BUTTON3", "BUTTON2"};
+#endif
+    if (button < 0 || button > 2) return "";
+    return std::string("MOUSECODE_1_") + kItem[button];
+}
+
 std::string digital_code(const InputBinding& b, const Pad* pad) {
     if (!b.valid) return "";
     if (b.source == InputSource::KEY) return key_code(b.key);
+    if (b.source == InputSource::MOUSE) return mouse_button_code(b.button);
     if (!pad) return "";
     if (!b.is_axis) {
         if (b.button < 0 || b.button >= 32) return "";
         return joy(*pad) + "BUTTON" + std::to_string(b.button + 1);
     }
-    if (b.axis < 0 || b.axis >= (int)pad->axmap.size()) return "";
-    const int code = pad->axmap[b.axis];
-    if (code >= kAbsHat0X && code <= kAbsHat3Y) {
+    if (b.axis < 0 || b.axis >= (int)pad->codes.size()) return "";
+    const int code = pad->codes[b.axis];
+    if (is_hat(code)) {
         const int hat = (code - kAbsHat0X) / 2 + 1;
         const bool x = ((code - kAbsHat0X) % 2) == 0;
         const char* dir = x ? (b.axis_dir < 0 ? "LEFT" : "RIGHT")
                             : (b.axis_dir < 0 ? "UP" : "DOWN");
         return joy(*pad) + "HAT" + std::to_string(hat) + dir;
     }
-    const int idx = sdl_axis(*pad, b.axis);
-    const char* item = axis_item(idx);
-    if (!item) return "";
-    const char* half = idx == 0 ? (b.axis_dir < 0 ? "LEFT" : "RIGHT")
-                     : idx == 1 ? (b.axis_dir < 0 ? "UP" : "DOWN")
-                                : (b.axis_dir < 0 ? "NEG" : "POS");
-    return joy(*pad) + item + "_" + half + "_SWITCH";
+    return axis_switch(*pad, axis_name(*pad, b.axis), b.axis_dir);
 }
 
 // « a OR b OR c », sans doublon et sans element vide.
@@ -316,7 +492,9 @@ std::vector<const char*> analog_ports(AnalogRole role) {
         case AnalogRole::BRAKE:    return {"PEDAL2"};
         case AnalogRole::AIM_X:    return {"AD_STICK_X", "LIGHTGUN_X", "TRACKBALL_X"};
         case AnalogRole::AIM_Y:    return {"AD_STICK_Y", "LIGHTGUN_Y", "TRACKBALL_Y",
-                                           "PADDLE_V", "DIAL_V"};
+                                           "PADDLE_V", "DIAL_V", "POSITIONAL_V"};
+        case AnalogRole::LEVER:    return {"AD_STICK_Z"};
+        case AnalogRole::PEDAL3:   return {"PEDAL3"};
         default:                   return {};
     }
 }
@@ -337,17 +515,35 @@ bool uses_pad(const ControllerConfig& cfg) {
     return false;
 }
 
+bool uses_mouse(const ControllerConfig& cfg) {
+    for (const auto& p : cfg.players)
+        if (p.uses_mouse()) return true;
+    return false;
+}
+
+const char* joystick_provider() {
+#ifdef _WIN32
+    return "dinput";
+#else
+    return "sdljoy";
+#endif
+}
+
 std::string ctrlr_xml(const ControllerConfig& cfg) {
-    // Une manette par joueur, JOYCODE_1 pour le premier. Deux joueurs sur la
-    // meme manette partagent son numero.
-    Pad pads[2];
-    bool has_pad[2] = {false, false};
-    for (int p = 0; p < 2 && p < (int)cfg.players.size(); ++p) {
+    /* Un numero MAME par manette, dans l'ordre des joueurs : JOYCODE_1 pour la
+     * manette du joueur 1, JOYCODE_2 pour la suivante qui n'a pas encore de
+     * numero, etc. Deux joueurs sur la meme manette partagent son numero. */
+    const int players = std::min<int>(MAX_PLAYERS, (int)cfg.players.size());
+    Pad pads[MAX_PLAYERS];
+    bool has_pad[MAX_PLAYERS] = {};
+    int next_joy = 1;
+    for (int p = 0; p < players; ++p) {
         const auto& player = cfg.players[p];
         if (player.device_path.empty()) continue;
-        const bool shared = p == 1 && has_pad[0]
-                         && player.device_path == cfg.players[0].device_path;
-        pads[p] = open_pad(player, shared ? 1 : p + 1);
+        int shared = -1;
+        for (int q = 0; q < p && shared < 0; ++q)
+            if (has_pad[q] && cfg.players[q].device_path == player.device_path) shared = q;
+        pads[p] = open_pad(player, shared >= 0 ? pads[shared].joy : next_joy++);
         has_pad[p] = true;
     }
 
@@ -360,22 +556,29 @@ std::string ctrlr_xml(const ControllerConfig& cfg) {
 
     /* Epingler chaque manette sur son numero.
      *
-     * Sans cela MAME numerote dans l'ordre ou SDL trouve les peripheriques,
-     * qui n'est pas celui des js*. Deux manettes identiques donnent le meme
-     * fragment : MAME rangerait les deux sur la premiere trouvee, et l'on
-     * s'en remet alors a l'ordre de SDL. */
-    const bool same_model = has_pad[0] && has_pad[1] && pads[0].joy != pads[1].joy
-                         && pads[0].id == pads[1].id;
-    for (int p = 0; p < 2; ++p) {
-        if (!has_pad[p] || pads[p].id.empty() || same_model) continue;
-        if (p == 1 && pads[1].joy == 1) continue;           // manette partagee
+     * Sans cela MAME numerote dans l'ordre ou il trouve les peripheriques, qui
+     * n'est pas celui des js*. Deux manettes identiques donnent le meme
+     * fragment : MAME rangerait les deux sur la premiere trouvee, on n'epingle
+     * donc pas celles-la et l'on s'en remet a l'ordre de MAME. */
+    for (int p = 0; p < players; ++p) {
+        if (!has_pad[p] || pads[p].id.empty()) continue;
+        bool first_use = true, twin = false;
+        for (int q = 0; q < players; ++q) {
+            if (q == p || !has_pad[q]) continue;
+            if (pads[q].joy == pads[p].joy && q < p) first_use = false;
+            if (pads[q].joy != pads[p].joy && pads[q].id == pads[p].id) twin = true;
+        }
+        if (!first_use || twin) continue;
         out << "            <mapdevice device=\"" << pads[p].id
             << "\" controller=\"JOYCODE_" << pads[p].joy << "\" />\n";
     }
 
-    for (int p = 0; p < 2 && p < (int)cfg.players.size(); ++p) {
-        const auto& player = cfg.players[p];
-        if (!player_configured(player)) continue;             // MAME garde ses defauts
+    for (int p = 0; p < players; ++p) {
+        if (!player_configured(cfg.players[p])) continue;     // MAME garde ses defauts
+        // Le second stick par defaut fait partie de ce qu'on ecrit, pas du
+        // profil enregistre.
+        PlayerConfig player = cfg.players[p];
+        ControllerManager::fill_right_stick(player);
         const Pad* pad = has_pad[p] ? &pads[p] : nullptr;
         const std::string pn = "P" + std::to_string(p + 1) + "_";
 
@@ -383,13 +586,20 @@ std::string ctrlr_xml(const ControllerConfig& cfg) {
             std::vector<std::string> parts;
             auto it = player.bindings.find(action);
             if (it != player.bindings.end()) parts.push_back(digital_code(it->second, pad));
+            parts.push_back(stick_switch(pad, action));     // vide hors directions
             for (const auto& d : split_or(defaults_for(type).standard)) parts.push_back(d);
             write_port(out, type, join_or(parts));
         };
-        digital(GameAction::UP,    pn + "JOYSTICK_UP");
-        digital(GameAction::DOWN,  pn + "JOYSTICK_DOWN");
-        digital(GameAction::LEFT,  pn + "JOYSTICK_LEFT");
-        digital(GameAction::RIGHT, pn + "JOYSTICK_RIGHT");
+        static const char* const kDir[4] = {"UP", "DOWN", "LEFT", "RIGHT"};
+        for (int d = 0; d < 4; ++d) {
+            const auto dir = static_cast<GameAction>((int)GameAction::UP + d);
+            // Le stick principal, et le stick gauche des jeux a deux manches.
+            digital(dir, pn + "JOYSTICK_" + kDir[d]);
+            digital(dir, pn + "JOYSTICKLEFT_" + kDir[d]);
+        }
+        for (int d = 0; d < 4; ++d)
+            digital(static_cast<GameAction>((int)GameAction::RSTICK_UP + d),
+                    pn + "JOYSTICKRIGHT_" + kDir[d]);
         for (int b = 1; b <= MAX_GAME_BUTTONS; ++b)
             digital(button_action(b), pn + "BUTTON" + std::to_string(b));
         digital(GameAction::START, "START" + std::to_string(p + 1));
@@ -406,7 +616,7 @@ std::string ctrlr_xml(const ControllerConfig& cfg) {
             const auto role = static_cast<AnalogRole>(r);
             auto it = player.analog.find(role);
             AnalogBinding b = it != player.analog.end() ? it->second
-                            : (pad ? default_analog_binding(role) : AnalogBinding{});
+                            : (pad ? ControllerManager::default_analog(player, role) : AnalogBinding{});
             // Avec une manette on ecrit la commande meme sans axe utilisable :
             // les defauts de MAME y mettent des codes manette (la pedale sur
             // le bouton 1) qui entreraient en conflit avec les liaisons du
@@ -420,8 +630,11 @@ std::string ctrlr_xml(const ControllerConfig& cfg) {
                 // Un axe entier, pas une moitie : une gachette va de -32767
                 // relachee a +32767 enfoncee, et MAME ramene lui-meme le bas
                 // de course d'une pedale a zero.
-                if (const char* item = axis_item(sdl_axis(*pad, b.index)))
+                if (const char* item = axis_name(*pad, b.index))
                     axis = joy(*pad) + item + (b.invert ? "_REVERSE" : "");
+            } else if (b.source == AnalogSource::MOUSE_AXIS && (b.index == 0 || b.index == 1)) {
+                axis = std::string("MOUSECODE_1_") + (b.index == 0 ? "XAXIS" : "YAXIS")
+                     + (b.invert ? "_REVERSE" : "");
             }
             if (!pad && axis.empty() && inc_key.empty() && dec_key.empty()) continue;
             for (const char* port : analog_ports(role)) {
