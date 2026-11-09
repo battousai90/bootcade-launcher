@@ -60,6 +60,11 @@
 
 
   <releases>
+    <release version="2.1.2" date="2026-11-09">
+      <description>
+        <p>Bootcade 2.1.2</p>
+      </description>
+    </release>
     <release version="2.1.1" date="2026-11-08">
       <description>
         <p>Add ready-made controller profiles, mouse input, a launch log for games that fail to start, and a filter search box listing every manufacturer and genre</p>
