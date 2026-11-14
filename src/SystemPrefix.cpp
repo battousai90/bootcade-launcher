@@ -20,5 +20,6 @@ std::string get_fbneo_system_prefix(const std::string& game_system) {
     else if (game_system == "GBA" || game_system == "Game Boy Advance") return "gba_";
     else if (game_system == "Astrocade Home Computer" || game_system == "Bally Astrocade") return "astro_";
     else if (game_system == "Atari 2600") return "a26_";
+    else if (game_system == "Sega 32X") return "s32x_";
     return ""; // Arcade / Neo Geo have no prefix
 }

@@ -223,12 +223,12 @@ std::string folder_for(const std::string& emulator, const std::string& system) {
     if (emulator == "mame") return "Arcade/MAME";
     if (emulator != "fbneo") return {};
     static const std::map<std::string, std::string> fbneo = {
-        {"Arcade", "arcade"}, {"Neo Geo", "arcade"},
+        {"Arcade", "arcade"}, {"Neo Geo", "arcade"}, {"Atari 2600", "a2600"},
         {"Astrocade Home Computer", "astrocade"}, {"ColecoVision", "coleco"},
         {"FDS", "fds"}, {"Fairchild Channel F", "channelf"}, {"GBA", "gba"},
         {"Game Gear", "gamegear"}, {"MSX 1", "msx"}, {"Master System", "sms"},
         {"Megadrive", "megadrive"}, {"NES", "nes"}, {"Neo Geo Pocket", "ngp"},
-        {"PC-Engine", "pce"}, {"SNES", "snes"}, {"Sega SG-1000", "sg1000"},
+        {"PC-Engine", "pce"}, {"SNES", "snes"}, {"Sega 32X", "32x"}, {"Sega SG-1000", "sg1000"},
         {"SuprGrafx", "sgx"}, {"TurboGrafx 16", "tg16"}, {"ZX Spectrum", "spectrum"},
     };
     auto it = fbneo.find(system);
