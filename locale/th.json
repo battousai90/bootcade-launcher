@@ -2220,5 +2220,16 @@
   "Last launch log…": "บันทึกการเปิดครั้งล่าสุด…",
   "Type part of a manufacturer, genre, series or year, then pick it in the list.": "พิมพ์บางส่วนของผู้ผลิต ประเภท ซีรีส์ หรือปี แล้วเลือกจากรายการ",
   "Find a filter…": "ค้นหาตัวกรอง…",
-  "No filter matches": "ไม่มีตัวกรองที่ตรงกัน"
+  "No filter matches": "ไม่มีตัวกรองที่ตรงกัน",
+  "+%1": "+%1",
+  "%1 and %2": "%1 และ %2",
+  "This DAT lists the same games twice: %1 (%2). The DAT group \"%3\" was not loaded.": "DAT นี้แสดงเกมเดียวกันซ้ำสองครั้ง: %1 (%2) กลุ่ม DAT \"%3\" ไม่ได้โหลด",
+  "These DATs list the same games: %1 (%2). The DAT group \"%3\" was not loaded.": "DAT เหล่านี้แสดงเกมเดียวกัน: %1 (%2) กลุ่ม DAT \"%3\" ไม่ได้โหลด",
+  "Nothing was changed: your game list is kept as it is.": "ไม่มีอะไรเปลี่ยนแปลง: รายการเกมของคุณยังคงเหมือนเดิม",
+  "The DAT group was not loaded": "กลุ่ม DAT ไม่ได้โหลด",
+  "Same games listed twice": "เกมเดียวกันถูกแสดงซ้ำสองครั้ง",
+  "Not loaded": "ไม่ได้โหลด",
+  "Not loaded : its DAT files list the same games twice.": "ไม่ได้โหลด: ไฟล์ DAT ของกลุ่มนี้แสดงเกมเดียวกันซ้ำสองครั้ง",
+  "These DATs are the same DAT: %1. The DAT group \"%2\" was not loaded.": "DAT เหล่านี้เป็น DAT เดียวกัน: %1 กลุ่ม DAT \"%2\" ไม่ได้โหลด",
+  "right content in another folder": "เนื้อหาถูกต้องแต่อยู่ในโฟลเดอร์อื่น"
 }

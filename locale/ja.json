@@ -2220,5 +2220,16 @@
   "Last launch log…": "最後の起動ログ…",
   "Type part of a manufacturer, genre, series or year, then pick it in the list.": "メーカー、ジャンル、シリーズ、年の一部を入力し、リストから選びます。",
   "Find a filter…": "フィルターを検索…",
-  "No filter matches": "一致するフィルターはありません"
+  "No filter matches": "一致するフィルターはありません",
+  "+%1": "+%1",
+  "%1 and %2": "%1 と %2",
+  "This DAT lists the same games twice: %1 (%2). The DAT group \"%3\" was not loaded.": "この DAT は同じゲームを二重に記載しています: %1 (%2)。DAT グループ「%3」は読み込まれませんでした。",
+  "These DATs list the same games: %1 (%2). The DAT group \"%3\" was not loaded.": "これらの DAT は同じゲームを記載しています: %1 (%2)。DAT グループ「%3」は読み込まれませんでした。",
+  "Nothing was changed: your game list is kept as it is.": "何も変更されていません。ゲームリストはそのままです。",
+  "The DAT group was not loaded": "DAT グループは読み込まれませんでした",
+  "Same games listed twice": "同じゲームが二重に記載されています",
+  "Not loaded": "未読み込み",
+  "Not loaded : its DAT files list the same games twice.": "未読み込み: DAT ファイルが同じゲームを二重に記載しています。",
+  "These DATs are the same DAT: %1. The DAT group \"%2\" was not loaded.": "これらの DAT は同じ DAT です: %1。DAT グループ「%2」は読み込まれませんでした。",
+  "right content in another folder": "正しい内容が別のフォルダーにあります"
 }

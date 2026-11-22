@@ -193,6 +193,7 @@ add_executable(bootcade
     src/SettingsUi.cpp
     src/LaunchLog.cpp
     src/DatParser.cpp
+    src/DatCmpText.cpp
     src/RomScanner.cpp
     src/RomArchive.cpp
     src/RomInbox.cpp

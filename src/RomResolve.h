@@ -171,8 +171,15 @@ public:
     const Archive* for_game(const Game& game) const;
     // The archives named `set` in a folder named `folder` (a directory of
     // that name under a root, or a root of that name), compared without
-    // case. Where a DAT's archives must be, and nowhere else.
-    std::vector<const Archive*> in_folder(const std::string& folder, const std::string& set) const;
+    // case. Where a DAT's archives must be, and nowhere else. `dir` : the
+    // sub-folder the DAT files the set in (Game::dat_dir, "A/B"), the
+    // archive then being <folder>/A/B/<set>.zip.
+    std::vector<const Archive*> in_folder(const std::string& folder, const std::string& set,
+                                          const std::string& dir = "") const;
+    // The archives named `set` anywhere inside a folder named `folder`, at
+    // any depth : where a set the DAT files elsewhere in its folder may have
+    // been left (at its root instead of its sub-folder, or the reverse).
+    std::vector<const Archive*> in_tree(const std::string& folder, const std::string& set) const;
     const Archive* by_path(const std::string& path) const;
     const std::unordered_map<std::string, Archive>& all() const { return m_archives; }
     size_t         size() const { return m_archives.size(); }
@@ -230,11 +237,18 @@ private:
 };
 
 // The CHDs `disks` of the archive `set` (DatLayout), looked for in its folder
-// of `folder` under each root : <root>/<folder>/<set>/<disk>.chd, or
-// <root>/<set>/<disk>.chd when the root is that folder. Judged by the SHA1
+// of `folder` under each root : <root>/<folder>/<dir>/<set>/<disk>.chd, or
+// <root>/<dir>/<set>/<disk>.chd when the root is that folder (`dir` : the
+// DAT's sub-folder for the set, empty at its root). Judged by the SHA1
 // their header declares.
 DiskResult evaluate_layout_disks(const std::string& set, const std::vector<DatLayout::DiskEntry>& disks,
-                                 const std::vector<std::string>& roots, const std::string& folder);
+                                 const std::vector<std::string>& roots, const std::string& folder,
+                                 const std::string& dir = "");
+
+// Whether the file `path` sits in <folder>/<dir> : its parent directories,
+// read upwards, are dir's components then `folder` (compared without case).
+// `dir` empty : its parent is named `folder`.
+bool sits_in(const std::string& path, const std::string& folder, const std::string& dir);
 
 // ── The playable status (games.status, what the game list shows) ───────────
 //

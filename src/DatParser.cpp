@@ -4,6 +4,8 @@
 #include "DatabaseManager.h"
 #include "DatSource.h"
 #include "MameCatalog.h"
+#include "DatCmpText.h"
+#include "DatLayout.h"
 #include <pugixml.hpp>
 #include <fstream>
 #include <stdlib.h>
@@ -21,6 +23,23 @@ namespace {
 bool is_set_node(const pugi::xml_node& n) {
     const char* tag = n.name();
     return std::strcmp(tag, "game") == 0 || std::strcmp(tag, "machine") == 0;
+}
+
+// The ROM lines of a set, every one in the DAT's order. A ROM never dumped
+// (status="nodump") keeps its line, without a CRC even if the DAT writes
+// one : there is nothing to verify it against, and every reader skips a
+// line without CRC. Read the same way for the database and in memory
+// (Rebuild from DAT files), so both see the same sets.
+void read_roms(const pugi::xml_node& game_node, Game& game) {
+    for (auto rom_node : game_node.children("rom")) {
+        Rom rom;
+        rom.name  = rom_node.attribute("name").value();
+        rom.size  = rom_node.attribute("size").as_ullong();
+        rom.merge = rom_node.attribute("merge").value();
+        if (std::strcmp(rom_node.attribute("status").value(), "nodump") != 0)
+            rom.crc = rom_node.attribute("crc").value();
+        game.roms.push_back(std::move(rom));
+    }
 }
 
 // Les CHD d'un set : le DAT « CHDs (merged) » de MAME n'a que cela. Un disque
@@ -49,6 +68,39 @@ void read_devices(const pugi::xml_node& game_node, Game& game) {
     }
 }
 
+// The sets of a datafile, in file order. They sit under the root or inside
+// <dir name="..."> elements, which may nest : every depth is read, and the
+// names of the <dir> a set sits in are its dir path ("A/B"), the sub-folder
+// of the DAT's folder ClrMamePro and RomVault file it in. Made safe by
+// DatLayout::safe_dir : it never leaves the DAT's folder.
+struct SetNode {
+    pugi::xml_node node;
+    std::string    dir;
+};
+void collect_sets(const pugi::xml_node& parent, std::vector<SetNode>& out, const std::string& dir = "") {
+    for (auto n : parent.children()) {
+        if (n.type() != pugi::node_element) continue;
+        if (is_set_node(n)) out.push_back({n, DatLayout::safe_dir(dir)});
+        else if (std::strcmp(n.name(), "dir") == 0)
+            collect_sets(n, out, dir + "/" + n.attribute("name").value());
+        else if (std::strcmp(n.name(), "header") != 0) collect_sets(n, out, dir);
+    }
+}
+
+// A datafile's root, from a Logiqx XML file or a ClrMamePro text one (told
+// apart by their content), or a null node with `error` set.
+pugi::xml_node load_datafile(const std::string& filepath, pugi::xml_document& doc, std::string& error) {
+    if (DatCmpText::is_file(filepath)) {
+        if (!DatCmpText::load_file(filepath, doc, &error)) return {};
+    } else {
+        pugi::xml_parse_result result = doc.load_file(filepath.c_str());
+        if (!result) { error = result.description(); return {}; }
+    }
+    pugi::xml_node root = doc.child("datafile");
+    if (!root) error = "pas de <datafile>";
+    return root;
+}
+
 } // namespace
 
 std::vector<Game> DatParser::parse(const std::string& filepath) {
@@ -56,24 +108,21 @@ std::vector<Game> DatParser::parse(const std::string& filepath) {
     std::string emulator = DatSource::emulator_of_path(filepath);
     if (emulator.empty()) emulator = "fbneo";
     pugi::xml_document doc;
-    pugi::xml_parse_result result = doc.load_file(filepath.c_str());
-
-    if (!result) {
-        std::cerr << "Erreur : impossible de charger " << filepath << " (" << result.description() << ")" << std::endl;
+    std::string error;
+    auto games_node = load_datafile(filepath, doc, error);
+    if (!games_node) {
+        std::cerr << "Erreur : impossible de charger " << filepath << " (" << error << ")" << std::endl;
         return {};
     }
 
     std::vector<Game> games;
-    auto games_node = doc.child("datafile");
-    if (!games_node) {
-        std::cerr << "Erreur : pas de <datafile> dans " << filepath << std::endl;
-        return {};
-    }
-
-    for (auto game_node : games_node.children()) {
-        if (!is_set_node(game_node)) continue;
+    std::vector<SetNode> set_nodes;
+    collect_sets(games_node, set_nodes);
+    for (const auto& set : set_nodes) {
+        const pugi::xml_node game_node = set.node;
         Game game;
         game.name = game_node.attribute("name").value();
+        game.dat_dir = set.dir;
         game.description = game_node.child("description").text().get();
         game.year = game_node.child("year").text().get();
         game.manufacturer = game_node.child("manufacturer").text().get();
@@ -110,20 +159,7 @@ std::vector<Game> DatParser::parse(const std::string& filepath) {
         game.players = game_node.child("players").text().as_int(0);
         game.fb_hiscore = game_node.child("hiscore").text().as_int(0) != 0;
 
-        for (auto rom_node : game_node.children("rom")) {
-            // Skip ROMs with status="nodump" (optional files without CRC)
-            std::string status = rom_node.attribute("status").value();
-            if (status == "nodump") {
-                continue;
-            }
-            
-            Rom rom;
-            rom.name = rom_node.attribute("name").value();
-            rom.size = rom_node.attribute("size").as_ullong();
-            rom.crc = rom_node.attribute("crc").value();
-            rom.merge = rom_node.attribute("merge").value();
-            game.roms.push_back(rom);
-        }
+        read_roms(game_node, game);
         read_disks(game_node, game);
         read_devices(game_node, game);
 
@@ -246,16 +282,10 @@ int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<Datab
                               const std::string& dat_source, std::string* note, std::string* declared_merge,
                               const std::string& emulator) {
     pugi::xml_document doc;
-    pugi::xml_parse_result result = doc.load_file(filepath.c_str());
-
-    if (!result) {
-        std::cerr << "Erreur : impossible de charger " << filepath << " (" << result.description() << ")" << std::endl;
-        return -1;
-    }
-
-    auto games_node = doc.child("datafile");
+    std::string error;
+    auto games_node = load_datafile(filepath, doc, error);
     if (!games_node) {
-        std::cerr << "Erreur : pas de <datafile> dans " << filepath << std::endl;
+        std::cerr << "Erreur : impossible de charger " << filepath << " (" << error << ")" << std::endl;
         return -1;
     }
 
@@ -294,10 +324,13 @@ int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<Datab
     int games_count = 0;
     bool error_occurred = false;
 
-    for (auto game_node : games_node.children()) {
-        if (!is_set_node(game_node)) continue;
+    std::vector<SetNode> set_nodes;
+    collect_sets(games_node, set_nodes);
+    for (const auto& set : set_nodes) {
+        const pugi::xml_node game_node = set.node;
         Game game;
         game.name = game_node.attribute("name").value();
+        game.dat_dir = set.dir;
         game.description = game_node.child("description").text().get();
         game.year = game_node.child("year").text().get();
         game.manufacturer = game_node.child("manufacturer").text().get();
@@ -335,15 +368,7 @@ int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<Datab
         game.players = game_node.child("players").text().as_int(0);
         game.fb_hiscore = game_node.child("hiscore").text().as_int(0) != 0;
 
-        // Parse ROMs
-        for (auto rom_node : game_node.children("rom")) {
-            Rom rom;
-            rom.name = rom_node.attribute("name").value();
-            rom.size = rom_node.attribute("size").as_ullong();
-            rom.crc = rom_node.attribute("crc").value();
-            rom.merge = rom_node.attribute("merge").value();
-            game.roms.push_back(rom);
-        }
+        read_roms(game_node, game);
         read_disks(game_node, game);
         read_devices(game_node, game);
 
@@ -374,6 +399,47 @@ int DatParser::importDatafile(const std::string& filepath, std::shared_ptr<Datab
     return games_count;
 }
 
+std::vector<std::pair<std::string, std::string>> DatParser::dirPaths(const std::string& filepath, bool* readable) {
+    std::vector<std::pair<std::string, std::string>> out;
+    if (readable) *readable = false;
+    if (datKind(filepath) != DatKind::Datafile) {
+        // A -listxml has no <dir> ; a file that is no DAT has nothing.
+        if (readable) *readable = std::filesystem::is_regular_file(std::filesystem::path(filepath));
+        return out;
+    }
+    // Most DATs (every FinalBurn Neo one) have no <dir> at all : told by a
+    // plain text search, without building the tree.
+    if (!DatCmpText::is_file(filepath)) {
+        std::ifstream in(std::filesystem::path(filepath), std::ios::binary);
+        if (!in) return out;
+        static const std::string kDir = "<dir";
+        std::vector<char> chunk(1 << 20);
+        std::string buf, carry;
+        bool any = false;
+        while (in && !any) {
+            in.read(chunk.data(), (std::streamsize)chunk.size());
+            const size_t got = (size_t)in.gcount();
+            if (!got) break;
+            buf.assign(carry);
+            buf.append(chunk.data(), got);
+            any = buf.find(kDir) != std::string::npos;
+            carry = buf.size() >= kDir.size() ? buf.substr(buf.size() - (kDir.size() - 1)) : buf;
+        }
+        if (in.bad()) return out;
+        if (!any) { if (readable) *readable = true; return out; }
+    }
+    pugi::xml_document doc;
+    std::string error;
+    auto root = load_datafile(filepath, doc, error);
+    if (!root) return out;
+    if (readable) *readable = true;
+    std::vector<SetNode> sets;
+    collect_sets(root, sets);
+    for (const auto& s : sets)
+        if (!s.dir.empty()) out.emplace_back(s.node.attribute("name").value(), s.dir);
+    return out;
+}
+
 bool DatParser::isSoftwareListHeader(const std::string& headerName) {
     std::string h = headerName;
     std::transform(h.begin(), h.end(), h.begin(), [](unsigned char c) { return (char)std::tolower(c); });
@@ -384,6 +450,25 @@ DatParser::DatInfo DatParser::inspect(const std::string& filepath) {
     DatInfo info;
     info.kind = datKind(filepath);
     if (info.kind == DatKind::None) return info;
+
+    // A ClrMamePro text DAT : read whole into its datafile tree, then the
+    // same fields and counts as from the XML.
+    if (info.kind == DatKind::Datafile && DatCmpText::is_file(filepath)) {
+        pugi::xml_document doc;
+        if (!DatCmpText::load_file(filepath, doc)) return info;
+        const pugi::xml_node header = doc.child("datafile").child("header");
+        info.name     = header.child("name").text().get();
+        info.version  = header.child("version").text().get();
+        info.declared = declaredMerge(header);
+        std::vector<SetNode> sets;
+        collect_sets(doc.child("datafile"), sets);
+        for (const auto& set : sets) {
+            if (std::strcmp(set.node.attribute("isdevice").value(), "yes") == 0) ++info.isdevice;
+            for (auto ref : set.node.children("device_ref")) { (void)ref; ++info.device_refs; }
+        }
+        return info;
+    }
+
     std::ifstream in(std::filesystem::path(filepath), std::ios::binary);
     if (!in) return info;
 
@@ -458,6 +543,8 @@ DatParser::DatKind DatParser::datKind(const std::string& filepath) {
     } else {
         head.clear();
     }
+    // A ClrMamePro text DAT, told by its first block.
+    if (DatCmpText::looks_like(head)) return DatKind::Datafile;
     auto tag_at = [&](const char* tag) {
         const size_t len = std::strlen(tag);
         for (size_t p = head.find(tag); p != std::string::npos; p = head.find(tag, p + 1)) {

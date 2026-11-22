@@ -123,21 +123,27 @@ Verdict evaluate(const Game& game, const Archive* own,
     bool all_present = true, all_correct = true;
     bool own_missing = false;         // une ROM propre au jeu manque
     bool inherited_missing = false;   // seules des ROMs heritees manquent
-    for (const auto& rom : game.roms) {
+    // The name each line takes in the archive : two lines of one name are
+    // stored as "<name>" and "<stem>_<n><ext>" (DatLayout::archive_names), and
+    // a line repeating an earlier one asks for nothing more.
+    const std::vector<std::string> stored = DatLayout::archive_names(game.roms);
+    for (size_t li = 0; li < game.roms.size(); ++li) {
+        const Rom& rom = game.roms[li];
         if (rom.crc.empty()) continue;   // nodump: nothing to verify against
+        if (stored[li].empty()) continue;   // a repeat of an earlier line
 
         RomVerdict r;
-        r.name      = rom.name;
+        r.name      = stored[li];
         r.crc       = parse_crc_hex(rom.crc);
         r.size      = (uint64_t)rom.size;
         r.inherited = rom.is_inherited();
 
         // The set's own archive is always consulted first : it may carry a
         // copy of an inherited ROM, and the emulator is happy either way.
-        Probe p = probe(own, rom.name, r.crc);
+        Probe p = probe(own, r.name, r.crc);
         r.state = p.state;
         r.found_crc = p.crc;
-        if (has_data(p.state) && p.entry != rom.name) r.found_as = p.entry;
+        if (has_data(p.state) && p.entry != r.name) r.found_as = p.entry;
 
         // An inherited ROM the set's own zip cannot vouch for is looked
         // for up the romof chain (parent, then the parent's parent, then the
@@ -156,7 +162,7 @@ Verdict evaluate(const Game& game, const Archive* own,
                     r.inherited_from = ancestor.name;
                     const Archive* a = archive_for(ancestor);
                     if (a) r.found_in = a->path;
-                    if (q.entry != rom.name) r.found_as = q.entry;
+                    if (q.entry != r.name) r.found_as = q.entry;
                     break;
                 }
                 if (ancestor.romof == name) break;   // a set naming itself as parent
@@ -261,6 +267,12 @@ DiskResult evaluate_disks(const Game& game, const std::vector<std::string>& root
             for (const auto& [set, disk] : homes) {
                 candidates.push_back(fs::path(root) / set / (disk + ".chd"));
                 if (!folder.empty()) candidates.push_back(fs::path(root) / folder / set / (disk + ".chd"));
+                // In the sub-folder its DAT files the set in, too (<dir>).
+                if (!game.dat_dir.empty()) {
+                    candidates.push_back(fs::path(root) / fs::path(game.dat_dir) / set / (disk + ".chd"));
+                    if (!folder.empty())
+                        candidates.push_back(fs::path(root) / folder / fs::path(game.dat_dir) / set / (disk + ".chd"));
+                }
             }
             for (const fs::path& p : candidates) {
                 if (!fs::is_regular_file(p, ec)) continue;
@@ -359,12 +371,56 @@ CacheIndex::CacheIndex(std::shared_ptr<DatabaseManager> db, const std::vector<st
     m_cache_files = usable.size();
 }
 
-std::vector<const Archive*> CacheIndex::in_folder(const std::string& folder, const std::string& set) const {
+namespace {
+// "A/B" as its components.
+std::vector<std::string> dir_parts(const std::string& dir) {
+    std::vector<std::string> out;
+    std::string part;
+    for (char c : dir) {
+        if (c == '/' || c == '\\') { if (!part.empty()) out.push_back(part); part.clear(); }
+        else part += c;
+    }
+    if (!part.empty()) out.push_back(part);
+    return out;
+}
+} // namespace
+
+bool sits_in(const std::string& path, const std::string& folder, const std::string& dir) {
+    fs::path at = fs::path(path).parent_path();
+    const std::vector<std::string> parts = dir_parts(dir);
+    for (auto it = parts.rbegin(); it != parts.rend(); ++it) {
+        if (lower(at.filename().string()) != lower(*it)) return false;
+        at = at.parent_path();
+    }
+    return lower(at.filename().string()) == lower(folder);
+}
+
+std::vector<const Archive*> CacheIndex::in_folder(const std::string& folder, const std::string& set,
+                                                  const std::string& dir) const {
     std::vector<const Archive*> out;
-    auto it = m_by_folder.find(lower(folder) + '\x1f' + lower(set));
+    const std::vector<std::string> parts = dir_parts(dir);
+    // Indexed by the folder right above the archive : the last component of
+    // `dir` when there is one, the rest is checked on the path.
+    auto it = m_by_folder.find(lower(parts.empty() ? folder : parts.back()) + '\x1f' + lower(set));
     if (it == m_by_folder.end()) return out;
     for (const auto& path : it->second)
-        if (const Archive* a = by_path(path)) out.push_back(a);
+        if (parts.empty() || sits_in(path, folder, dir))
+            if (const Archive* a = by_path(path)) out.push_back(a);
+    return out;
+}
+
+std::vector<const Archive*> CacheIndex::in_tree(const std::string& folder, const std::string& set) const {
+    std::vector<const Archive*> out;
+    auto it = m_by_stem.find(lower(set));
+    if (it == m_by_stem.end() || folder.empty()) return out;
+    const std::string want = lower(folder);
+    for (const auto& path : it->second) {
+        bool inside = false;
+        for (fs::path at = fs::path(path).parent_path(); !inside && at.has_relative_path(); at = at.parent_path())
+            inside = lower(at.filename().string()) == want;
+        if (inside)
+            if (const Archive* a = by_path(path)) out.push_back(a);
+    }
     return out;
 }
 
@@ -384,6 +440,7 @@ const Archive* CacheIndex::for_game(const Game& game) const {
     // candidate by how many of the set's ROMs it satisfies by name and CRC; the
     // folder name only settles a genuine tie.
     const std::string folder = expected_folder(game);
+    const std::vector<std::string> stored = DatLayout::archive_names(game.roms);
     const Archive* best = nullptr;
     int  best_score = -1;
     bool best_dir_match = false;
@@ -391,7 +448,8 @@ const Archive* CacheIndex::for_game(const Game& game) const {
         const Archive* a = by_path(path);
         if (!a) continue;
         const std::string parent_dir = lower(fs::path(path).parent_path().filename().string());
-        const bool dir_match = !folder.empty() && parent_dir == lower(folder);
+        // Where the DAT files it : <folder>, or its sub-folder <folder>/<dat_dir>.
+        const bool dir_match = !folder.empty() && sits_in(path, folder, game.dat_dir);
         // One DAT, one folder. Two MAME DATs may define the same name on
         // purpose (Pleasuredome's neogeo in "ROMs (split)" holds its own ROMs,
         // in "ROMs (bios-devices)" everything it needs) : the zip in the other
@@ -400,12 +458,13 @@ const Archive* CacheIndex::for_game(const Game& game) const {
         if (game.emulator == "mame" && !dir_match && m_headers.count(parent_dir))
             continue;
         int score = 0;
-        for (const auto& rom : game.roms) {
-            if (rom.crc.empty()) continue;
+        for (size_t li = 0; li < game.roms.size(); ++li) {
+            const Rom& rom = game.roms[li];
+            if (rom.crc.empty() || stored[li].empty()) continue;
             unsigned long want = parse_crc_hex(rom.crc);
-            auto it = a->crc_by_name.find(rom.name);
+            auto it = a->crc_by_name.find(stored[li]);
             if (it == a->crc_by_name.end())
-                it = a->crc_by_name.find(RomScanner::normalize_name(rom.name));
+                it = a->crc_by_name.find(RomScanner::normalize_name(stored[li]));
             if (it != a->crc_by_name.end() && it->second == want) ++score;
         }
         if (score > best_score || (score == best_score && dir_match && !best_dir_match)) {
@@ -659,7 +718,9 @@ const DatLayout::Archive* LayoutBook::archive_for(const Game& game, std::string*
 }
 
 DiskResult evaluate_layout_disks(const std::string& set, const std::vector<DatLayout::DiskEntry>& disks,
-                                 const std::vector<std::string>& roots, const std::string& folder) {
+                                 const std::vector<std::string>& roots, const std::string& folder,
+                                 const std::string& dir) {
+    const fs::path sub = dir.empty() ? fs::path() : fs::path(dir);
     DiskResult res;
     if (disks.empty()) return res;
     std::error_code ec;
@@ -672,9 +733,9 @@ DiskResult evaluate_layout_disks(const std::string& set, const std::vector<DatLa
             if (root.empty()) continue;
             const fs::path base(root);
             std::vector<fs::path> candidates;
-            if (!folder.empty()) candidates.push_back(base / folder / set / (d.name + ".chd"));
+            if (!folder.empty()) candidates.push_back(base / folder / sub / set / (d.name + ".chd"));
             if (lower(base.filename().string()) == lower(folder) || folder.empty())
-                candidates.push_back(base / set / (d.name + ".chd"));
+                candidates.push_back(base / sub / set / (d.name + ".chd"));
             for (const fs::path& p : candidates) {
                 if (!fs::is_regular_file(p, ec)) continue;
                 const std::string sha1 = chd_header_sha1(p.string());

@@ -2,6 +2,7 @@
 // src/RomScanner.cpp
 #include "RomScanner.h"
 #include "RomResolve.h"
+#include "DatLayout.h"
 #include "DatSource.h"
 #include "RomArchive.h"
 #include <filesystem>
@@ -183,7 +184,13 @@ void RomScanner::check_availability(Game& game, const std::string& roms_path) {
     bool all_correct = true;
     
 
-    for (const auto& rom : game.roms) {
+    // Under the name each line takes in the archive (DatLayout::archive_names) ;
+    // a line repeating an earlier one is nothing more to check.
+    const std::vector<std::string> stored = DatLayout::archive_names(game.roms);
+    for (size_t li = 0; li < game.roms.size(); ++li) {
+        if (stored[li].empty()) continue;
+        Rom rom = game.roms[li];
+        rom.name = stored[li];
         std::string rom_path = roms_path + "/" + rom.name;
         std::string zip_path = roms_path + "/" + game.name + ".zip";
         bool rom_found = false;
@@ -280,7 +287,11 @@ void RomScanner::check_availability_db(const std::string& game_name, const std::
     
     std::string zip_path = roms_path + "/" + game_name + ".zip";
 
-    for (const auto& rom : game.roms) {
+    const std::vector<std::string> stored = DatLayout::archive_names(game.roms);
+    for (size_t li = 0; li < game.roms.size(); ++li) {
+        if (stored[li].empty()) continue;
+        Rom rom = game.roms[li];
+        rom.name = stored[li];
         std::string rom_path = roms_path + "/" + rom.name;
         bool rom_found = false;
 

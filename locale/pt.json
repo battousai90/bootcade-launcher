@@ -2220,5 +2220,16 @@
   "Last launch log…": "Registro do último início…",
   "Type part of a manufacturer, genre, series or year, then pick it in the list.": "Digite parte de um fabricante, gênero, série ou ano e escolha-o na lista.",
   "Find a filter…": "Procurar um filtro…",
-  "No filter matches": "Nenhum filtro corresponde"
+  "No filter matches": "Nenhum filtro corresponde",
+  "+%1": "+%1",
+  "%1 and %2": "%1 e %2",
+  "This DAT lists the same games twice: %1 (%2). The DAT group \"%3\" was not loaded.": "Este DAT lista os mesmos jogos duas vezes: %1 (%2). O grupo DAT «%3» não foi carregado.",
+  "These DATs list the same games: %1 (%2). The DAT group \"%3\" was not loaded.": "Estes DAT listam os mesmos jogos: %1 (%2). O grupo DAT «%3» não foi carregado.",
+  "Nothing was changed: your game list is kept as it is.": "Nada foi alterado: a sua lista de jogos fica como estava.",
+  "The DAT group was not loaded": "O grupo DAT não foi carregado",
+  "Same games listed twice": "Mesmos jogos listados duas vezes",
+  "Not loaded": "Não carregado",
+  "Not loaded : its DAT files list the same games twice.": "Não carregado: os seus ficheiros DAT listam os mesmos jogos duas vezes.",
+  "These DATs are the same DAT: %1. The DAT group \"%2\" was not loaded.": "Estes DAT são o mesmo DAT: %1. O grupo DAT «%2» não foi carregado.",
+  "right content in another folder": "conteúdo correto noutra pasta"
 }

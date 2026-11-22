@@ -179,6 +179,32 @@ std::vector<std::string> files_to_load(const std::vector<Group>& groups,
 // The file names one group selects among what its folder holds.
 std::set<std::string> selected_in_folder(const Group& g);
 
+// ── The same set in two DATs ────────────────────────────────────────────────
+//
+// The database keeps one row per set : emulator, set name, and the system
+// the DAT's header names (DatParser::extractSystemFromHeader). Two DATs a
+// group loads that list the same set (or one DAT listing it twice) describe
+// it twice, and nothing says which is right. As in RomVault, such a group
+// is not loaded at all : the database stays as it was, and the player is
+// told which files and which sets. Nothing depends on a file's name or on
+// who publishes it.
+struct SameSets {
+    std::string emulator;
+    std::string group;               // the group's name, "" when no group holds the files
+    std::vector<std::string> files;  // the DAT file names involved, sorted
+    std::vector<std::string> sets;   // the set names listed more than once, sorted
+};
+// Among `paths` (files_to_load), every emulator whose DATs list a set more
+// than once. Empty when none. Only the headers and set names are read, and
+// remembered per file (path, size, date) for the session : a second check of
+// unchanged files costs a few file dates.
+std::vector<SameSets> same_sets(const std::vector<std::string>& paths);
+// The same check on the DAT files one group selects in its folder.
+std::vector<SameSets> same_sets_in_group(const Group& g);
+// What the player reads, translated : the files, the first few sets and how
+// many more, and that the group was not loaded.
+std::string same_sets_message(const SameSets& s);
+
 // ── Which emulator the ROM manager works for ────────────────────────────────
 //
 // The Library audits against one group (rom_manager.library_group, else the
@@ -236,12 +262,15 @@ bool fetch_direct(const std::string& url, const std::string& folder,
                   const std::function<bool()>& cancelled = nullptr,
                   bool unpack = true);
 
-// Where each DAT of a folder came from, kept next to them in
-// ".bootcade-sources.json" : the credit follows the files, whatever group
+// Where each DAT of a folder came from, kept in config.json
+// (rom_manager.dat_sources) : the credit follows the files, whatever group
 // uses them. source_of() is "" for a file with no recorded source.
 void record_source(const std::string& folder, const std::vector<std::string>& files,
                    const Site& site, const std::string& url);
 std::string source_of(const std::string& folder, const std::string& file);
+// Moves the sources an earlier version kept inside the groups' folders into
+// config.json, once.
+void adopt_sources(const std::vector<Group>& groups);
 
 // ── HTTP contract ───────────────────────────────────────────────────────────
 

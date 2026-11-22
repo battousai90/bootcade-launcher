@@ -81,9 +81,10 @@ struct SetPlan {
     std::string game_name;
     std::string system;
     std::string dat_header;      // the folder of its DAT = outbox subfolder name
+    std::string dat_dir;         // the sub-folder its DAT files it in, "" at the root ("A/B")
     std::string description;
     Action      action = Action::Incomplete;
-    std::string dest_path;       // <outbox>/<dat_header>/<game_name>.zip
+    std::string dest_path;       // <outbox>/<dat_header>/<dat_dir>/<game_name>.zip
     std::string trigger_archive; // inbox archive that surfaced this set
 
     std::vector<PiecePlan>   pieces;

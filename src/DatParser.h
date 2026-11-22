@@ -24,6 +24,9 @@ public:
     // What a file in a DAT folder is. A .dat is a Logiqx datafile (as it
     // always was) unless its root is <mame> ; a .xml counts only when its
     // root is <datafile> or <mame>, so unrelated XML files are left alone.
+    // A ClrMamePro text DAT (told by its content, see DatCmpText.h) is a
+    // Datafile too : it is read into the same tree. In both, sets are read
+    // at any depth of <dir> elements.
     enum class DatKind { None, Datafile, MameListxml };
     static DatKind datKind(const std::string& filepath);
 
@@ -42,6 +45,12 @@ public:
     // "MAME Software List …" : media lists, which the ROM Manager does not
     // import (yet).
     static bool isSoftwareListHeader(const std::string& headerName);
+
+    // The sets of a datafile that sit in a <dir>, with their dir path (see
+    // Game::dat_dir) ; sets at the root are left out, so a DAT without <dir>
+    // gives nothing. `readable` : false when the file could not be read.
+    static std::vector<std::pair<std::string, std::string>> dirPaths(const std::string& filepath,
+                                                                     bool* readable = nullptr);
     static bool parseAllDatsToDatabase(const std::string& directory, std::shared_ptr<DatabaseManager> db);
     static bool synchronizeDatsToDatabase(const std::string& directory, std::shared_ptr<DatabaseManager> db);
 

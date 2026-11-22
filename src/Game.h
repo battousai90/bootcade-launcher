@@ -223,6 +223,12 @@ struct Game {
     // the ROM manager names its output folders after, so a rebuilt tree drops
     // straight into a library laid out from the same DATs.
     std::string dat_header = "";
+    // Where the DAT files the set, under its folder : the <dir name="..">
+    // elements it sits in, joined by '/' ("A/B"), empty for a set at the
+    // root (every FinalBurn Neo DAT). ClrMamePro and RomVault keep such a set
+    // at <DAT folder>/A/B/<set>.zip, and so does the ROM Manager. Made safe
+    // when read (DatLayout::safe_dir) : never absolute, never "..".
+    std::string dat_dir = "";
 
     // Play tracking & favourites
     bool        is_favorite     = false;

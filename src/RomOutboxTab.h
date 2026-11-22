@@ -135,6 +135,9 @@ private:
         // A CHD in <system folder>/<set>/ : `path` is the .chd file, and it
         // lands in <destination>/<set>/.
         bool        disk = false;
+        // The sub-folder of the system folder it sits in, "" at its root :
+        // the DAT's <dir> path for its set ("A/B"), as Import wrote it.
+        std::string sub;
         std::string emulator = "fbneo";   // from the system folder's name
         std::string destination;      // resolved directory, empty when unmapped
         bool        dest_exists = false;

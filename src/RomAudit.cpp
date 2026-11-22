@@ -21,9 +21,12 @@ namespace {
  * Certains DAT listent le meme fichier plusieurs fois dans un set (les DAT
  * MAME de Pleasuredome : « basic200.rom » trois fois dans abc110, meme
  * CRC). Un zip ne tient pas deux entrees du meme nom : RomVault range les
- * copies sous « basic200_0.rom », « basic200_1.rom ». La base, elle, ne
- * garde qu'une ligne par nom de ROM, donc ces copies semblaient en trop, et
- * Fix les retirait — RomVault les reclamait ensuite comme manquantes.
+ * copies sous « basic200_0.rom », « basic200_1.rom ». Le DAT ne demande
+ * pas ces copies a part (meme nom, meme CRC : DatLayout::archive_names ne
+ * les range nulle part), donc elles semblaient en trop, et Fix les
+ * retirait — RomVault les reclamait ensuite comme manquantes. Deux lignes du
+ * meme nom et de CRC differents, elles, sont deux ROMs : la seconde est
+ * exigee sous « <nom>_<n><ext> », le layout la liste sous ce nom.
  *
  * Une entree « <nom>_<n><ext> » n'est donc pas en trop quand le set attend
  * « <nom><ext> » et qu'elle a exactement le meme contenu (meme CRC) : c'est
@@ -234,15 +237,17 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         e.cloneof        = g.cloneof;
         e.is_bios        = g.is_bios;
         e.dat_header     = folder;
+        e.dat_dir        = arc->dir;
         e.archive_is_own = arc->name == g.name;
 
         // The archive : named after `arc` (the set's own, or its parent's in
         // merged), in the DAT's folder. Several candidates (the same folder
         // name under two roots) : the one that holds most of what is needed.
         const RomResolve::Archive* own = nullptr;
+        const RomResolve::Archive* misplaced = nullptr;
         if (!arc->entries.empty()) {
             int best = -1;
-            for (const RomResolve::Archive* cand : index.in_folder(folder, arc->name)) {
+            for (const RomResolve::Archive* cand : index.in_folder(folder, arc->name, arc->dir)) {
                 int score = 0;
                 for (size_t i : need)
                     if (RomResolve::probe_rom(cand, arc->entries[i].name, arc->entries[i].crc) == RomState::Present) ++score;
@@ -251,6 +256,21 @@ Report audit(std::shared_ptr<DatabaseManager> db,
             if (own) {
                 e.archive = own->path;
                 e.archive_found = true;
+            } else if (e.archive_is_own) {
+                // Not where the DAT files it, but its archive, named after it
+                // and holding every entry it needs, sits elsewhere in the
+                // DAT's folder : misplaced. The first such one in path order.
+                std::vector<const RomResolve::Archive*> cands = index.in_tree(folder, arc->name);
+                std::sort(cands.begin(), cands.end(),
+                          [](const RomResolve::Archive* x, const RomResolve::Archive* y) { return x->path < y->path; });
+                for (const RomResolve::Archive* cand : cands) {
+                    bool all = true;
+                    for (size_t i : need)
+                        if (RomResolve::probe_rom(cand, arc->entries[i].name, arc->entries[i].crc) != RomState::Present) { all = false; break; }
+                    if (!all) continue;
+                    misplaced = cand;
+                    break;
+                }
             }
         }
 
@@ -305,11 +325,25 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         }
         e.status = zip_status;
 
+        // A misplaced archive : the set's content, every entry present, in
+        // the wrong folder. The ROMs are where the DAT puts them, the file is
+        // not : incorrect, and repaired by moving it (Fix).
+        if (misplaced && zip_status == "missing") {
+            e.archive           = misplaced->path;
+            e.archive_found     = true;
+            e.misplaced_archive = true;
+            e.absent            = 0;
+            for (auto& r : e.roms) { r.state = RomState::Present; r.found_in.clear(); r.found_as.clear(); }
+            zip_status = e.status = "incorrect";
+            log(cb, "  " + misplaced->path + " is " + g.name + ", filed by its DAT in \""
+                    + (arc->dir.empty() ? folder : folder + "/" + arc->dir) + "\"");
+        }
+
         // Its CHDs, in the folder of its archive's set.
         if (!need_disks.empty()) {
             std::vector<DatLayout::DiskEntry> disks;
             for (size_t i : need_disks) disks.push_back(arc->disks[i]);
-            const RomResolve::DiskResult d = RomResolve::evaluate_layout_disks(arc->name, disks, roms_paths, folder);
+            const RomResolve::DiskResult d = RomResolve::evaluate_layout_disks(arc->name, disks, roms_paths, folder, arc->dir);
             for (const auto& v : d.disks) {
                 RomEntry r;
                 r.name       = v.name + ".chd";
@@ -343,6 +377,7 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         // too : its row still says what it is, it just is not counted.
         e.repairable = (e.status != "available");
         for (const auto& r : e.roms) {
+            if (e.misplaced_archive && !r.is_disk) continue;   // its file holds them all
             // A CHD is never rebuilt : one that is not right keeps the set
             // from being repaired, whatever `found_in` says of it.
             if (r.is_disk ? r.state != RomState::Present
@@ -493,7 +528,7 @@ Report audit(std::shared_ptr<DatabaseManager> db,
         std::unordered_map<size_t, std::vector<size_t>> claims;   // orphan → sets it holds
         for (size_t gi = 0; gi < rep.games.size(); ++gi) {
             const GameEntry& e = rep.games[gi];
-            if (e.ignored || e.is_chd || e.has_disks || !e.archive_is_own || e.archive_found ||
+            if (e.ignored || e.is_chd || e.has_disks || !e.archive_is_own || e.archive_found || e.misplaced_archive ||
                 e.status != "missing" || e.roms.empty())
                 continue;
             auto range = crc_to_archive.equal_range(e.roms.front().crc);
@@ -501,7 +536,7 @@ Report audit(std::shared_ptr<DatabaseManager> db,
             for (auto it = range.first; it != range.second; ++it) {
                 auto o = orphan_at.find(it->second);
                 if (o == orphan_at.end() || !seen.insert(o->second).second) continue;
-                if (fs::path(o->first).parent_path().filename().string() != e.dat_header) continue;
+                if (!RomResolve::sits_in(o->first, e.dat_header, e.dat_dir)) continue;
                 const RomResolve::Archive& a = index.all().at(o->first);
                 if (a.entries.size() != e.roms.size()) continue;
                 bool same = true;
