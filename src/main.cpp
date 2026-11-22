@@ -196,6 +196,11 @@ int main(int argc, char *argv[]) {
         database->clearRomCache();
         database->clearDirectorySnapshots();
     }
+    // Les sources des DAT qu'une version precedente gardait dans un fichier
+    // cache de chaque dossier passent dans config.json, une fois : sans
+    // attendre que le joueur ouvre le ROM Manager. Un dossier sans ce fichier
+    // ne coute qu'un stat.
+    DatSource::adopt_sources(DatSource::load_groups());
 
     /* Diagnostics du gestionnaire de ROMs, sur le modele de
      * BOOTCADE_MAME_GENDAT : sans ouvrir la fenetre principale, puis quitter.
@@ -240,6 +245,7 @@ int main(int argc, char *argv[]) {
             const std::string scope = std::string(upd) == "1" ? std::string() : std::string(upd);
             DATUpdateDialog dialog(host, database, "the active DAT groups",
                                    DATUpdateDialog::files_for_update(scope), scope);
+            dialog.close_when_done();
             dialog.start_update();
             dialog.run();
             std::cout << "[UPDATEDAT] seconds=" << std::chrono::duration_cast<std::chrono::milliseconds>(

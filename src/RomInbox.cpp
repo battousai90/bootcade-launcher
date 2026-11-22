@@ -527,6 +527,7 @@ Report analyze(const std::string& inbox_dir,
             plan.game_name       = layout->name;
             plan.system          = cand_system;
             plan.dat_header      = sanitize_component(folder);
+            plan.dat_dir         = layout->dir;
             plan.description     = owner_set ? owner_set->description : found->description;
             plan.trigger_archive = arc.path;
 
@@ -645,7 +646,7 @@ Report analyze(const std::string& inbox_dir,
             // than on a stored status, which can be stale.
             bool library_has_set = false;
             if (lib_index)
-                for (const RomResolve::Archive* cand : lib_index->in_folder(folder, layout->name)) {
+                for (const RomResolve::Archive* cand : lib_index->in_folder(folder, layout->name, layout->dir)) {
                     bool all = true;
                     for (const auto& entry : layout->entries)
                         if (RomResolve::probe_rom(cand, entry.name, entry.crc) != RomResolve::RomState::Present) { all = false; break; }
@@ -698,7 +699,7 @@ Report analyze(const std::string& inbox_dir,
                 continue;
             }
 
-            plan.dest_path = (fs::path(outbox_dir) / plan.dat_header /
+            plan.dest_path = (fs::path(outbox_dir) / plan.dat_header / fs::path(plan.dat_dir) /
                               (sanitize_component(plan.game_name) + ".zip")).string();
             plan.selected = actionable;
 
@@ -727,7 +728,7 @@ Report analyze(const std::string& inbox_dir,
             for (auto& plan : incomplete_only) {
                 if (from_inbox(plan) < top) continue;
                 make_partial(plan);
-                plan.dest_path = (fs::path(outbox_dir) / plan.dat_header /
+                plan.dest_path = (fs::path(outbox_dir) / plan.dat_header / fs::path(plan.dat_dir) /
                                   (sanitize_component(plan.game_name) + ".zip")).string();
                 plan.selected = plan.partial;
                 std::string key = plan.game_name + '\x1f' + plan.system;
@@ -761,7 +762,7 @@ Report analyze(const std::string& inbox_dir,
     // next ones copying it (apply()).
     if (!chd_paths.empty()) {
         report(cb, 98.0, _("Matching CHDs…"));
-        struct DiskTarget { std::string folder, set, system, description; DatLayout::DiskEntry disk; };
+        struct DiskTarget { std::string folder, dir, set, system, description; DatLayout::DiskEntry disk; };
         std::unordered_map<std::string, std::vector<DiskTarget>> by_sha1;
         std::unordered_set<std::string> seen_target;
         for (const auto& g : book.games()) {
@@ -771,9 +772,9 @@ Report analyze(const std::string& inbox_dir,
             if (!arc) continue;
             for (size_t di : book.layout_of(g.dat_source).disks_of(g.name)) {
                 const DatLayout::DiskEntry& d = arc->disks[di];
-                if (!seen_target.insert(folder + '\x1f' + arc->name + '\x1f' + d.name).second) continue;
+                if (!seen_target.insert(folder + '\x1f' + arc->dir + '\x1f' + arc->name + '\x1f' + d.name).second) continue;
                 const Game* owner = book.game(arc->name, g.system);
-                by_sha1[d.sha1].push_back({folder, arc->name, g.system, owner ? owner->description : g.description, d});
+                by_sha1[d.sha1].push_back({folder, arc->dir, arc->name, g.system, owner ? owner->description : g.description, d});
             }
         }
         for (const auto& path : chd_paths) {
@@ -796,9 +797,10 @@ Report analyze(const std::string& inbox_dir,
                 plan.game_name       = t.set;
                 plan.system          = t.system;
                 plan.dat_header      = sanitize_component(t.folder);
+                plan.dat_dir         = t.dir;
                 plan.description     = t.description;
                 plan.trigger_archive = path;
-                plan.dest_path       = (fs::path(outbox_dir) / plan.dat_header / sanitize_component(t.set)
+                plan.dest_path       = (fs::path(outbox_dir) / plan.dat_header / fs::path(t.dir) / sanitize_component(t.set)
                                         / (t.disk.name + ".chd")).string();
                 PiecePlan piece;
                 piece.target_name = t.disk.name + ".chd";
@@ -809,10 +811,11 @@ Report analyze(const std::string& inbox_dir,
                 plan.pieces.push_back(std::move(piece));
                 if (fs::path(path).stem().string() != t.disk.name) plan.renamed_entries = 1;
                 const bool in_library = options.use_library &&
-                    RomResolve::evaluate_layout_disks(t.set, {t.disk}, options.roms_paths, t.folder).status == "available";
+                    RomResolve::evaluate_layout_disks(t.set, {t.disk}, options.roms_paths, t.folder, t.dir).status == "available";
                 plan.action   = in_library ? Action::AlreadyInLibrary : Action::Move;
                 plan.selected = !in_library;
-                log(cb, "  CHD " + fs::path(path).filename().string() + " → " + t.folder + "/" + t.set + "/"
+                log(cb, "  CHD " + fs::path(path).filename().string() + " → " + t.folder + "/"
+                        + (t.dir.empty() ? std::string() : t.dir + "/") + t.set + "/"
                         + t.disk.name + ".chd" + (in_library ? " (already in the library)" : ""));
                 rep.sets.push_back(std::move(plan));
             }
@@ -992,7 +995,7 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
                 for (const auto& p : plan.pieces) if (p.resolved) written_crcs.insert(p.crc);
                 if (already == relocated.end()) relocated[plan.trigger_archive] = plan.dest_path;
                 describe(plan, RomManifest::action::Moved);
-                log(cb, "moved   " + plan.game_name + " → " + plan.dat_header);
+                log(cb, "moved   " + plan.game_name + " → " + plan.dat_header + (plan.dat_dir.empty() ? std::string() : "/" + plan.dat_dir));
             } else {
                 res.failed++;
                 res.errors.push_back(plan.game_name + ": " + error);
@@ -1012,7 +1015,7 @@ ApplyResult apply(const Report& report_in, const Callbacks& cb) {
                 std::string extra = plan.pieces_from_library
                                         ? " (" + std::to_string(plan.pieces_from_library) + " from library)"
                                         : "";
-                log(cb, "rebuilt " + plan.game_name + " → " + plan.dat_header + extra);
+                log(cb, "rebuilt " + plan.game_name + " → " + plan.dat_header + (plan.dat_dir.empty() ? std::string() : "/" + plan.dat_dir) + extra);
             } else {
                 res.failed++;
                 res.errors.push_back(plan.game_name + ": " + error);

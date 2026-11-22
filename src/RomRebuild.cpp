@@ -507,7 +507,8 @@ Report analyze(std::shared_ptr<DatabaseManager> db, const Options& options, cons
             ap.dat    = dat;
             ap.folder = folder;
             if (auto g = game_of.find(a.name); g != game_of.end()) ap.description = g->second->description;
-            const fs::path base = fs::path(options.dest_dir) / folder;
+            // In the sub-folder the DAT files the set in (its <dir>), if any.
+            const fs::path base = fs::path(options.dest_dir) / folder / fs::path(a.dir);
             if (!a.entries.empty()) ap.dest_path = (base / (RomBuild::sanitize_component(a.name) + ext)).string();
             if (!a.disks.empty())   ap.disk_dir  = (base / RomBuild::sanitize_component(a.name)).string();
             if (auto n = needs_of.find(a.name); n != needs_of.end()) ap.needs.assign(n->second.begin(), n->second.end());

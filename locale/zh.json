@@ -2220,5 +2220,16 @@
   "Last launch log…": "上次启动日志…",
   "Type part of a manufacturer, genre, series or year, then pick it in the list.": "输入制造商、类型、系列或年份的一部分，然后在列表中选择。",
   "Find a filter…": "查找筛选…",
-  "No filter matches": "没有匹配的筛选"
+  "No filter matches": "没有匹配的筛选",
+  "+%1": "+%1",
+  "%1 and %2": "%1 和 %2",
+  "This DAT lists the same games twice: %1 (%2). The DAT group \"%3\" was not loaded.": "此 DAT 重复列出了相同的游戏：%1（%2）。DAT 分组“%3”未加载。",
+  "These DATs list the same games: %1 (%2). The DAT group \"%3\" was not loaded.": "这些 DAT 列出了相同的游戏：%1（%2）。DAT 分组“%3”未加载。",
+  "Nothing was changed: your game list is kept as it is.": "没有任何更改：你的游戏列表保持原样。",
+  "The DAT group was not loaded": "DAT 分组未加载",
+  "Same games listed twice": "相同的游戏被列出两次",
+  "Not loaded": "未加载",
+  "Not loaded : its DAT files list the same games twice.": "未加载：其 DAT 文件重复列出了相同的游戏。",
+  "These DATs are the same DAT: %1. The DAT group \"%2\" was not loaded.": "这些 DAT 是同一个 DAT：%1。DAT 分组“%2”未加载。",
+  "right content in another folder": "内容正确，但在另一个文件夹中"
 }

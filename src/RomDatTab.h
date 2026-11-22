@@ -208,6 +208,9 @@ private:
     std::string         m_url_group;
     Gtk::Label          m_source_hint;
     Gtk::Label          m_status;
+    Gtk::Box            m_same_sets_slot{Gtk::ORIENTATION_VERTICAL, 0};
+    std::string         m_same_sets_text;
+    void                show_same_sets();
 
     SettingsUi::Table*  m_table = nullptr;
     Gtk::Box            m_info_column{Gtk::ORIENTATION_HORIZONTAL, SettingsUi::kCardSpacing};

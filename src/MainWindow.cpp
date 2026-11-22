@@ -4133,7 +4133,19 @@ void MainWindow::run_fbneo_scan() {
         std::cout << "[INFO] Reloading DAT files to database..." << std::endl;
         // Same corpus as Update DAT : what the active DAT groups select.
         bool loaded_any = false;
-        for (const auto& f : DatSource::files_to_load(DatSource::load_groups()))
+        const auto files = DatSource::files_to_load(DatSource::load_groups());
+        // Two DATs listing the same set : the group is refused, as Update DAT
+        // refuses it, before anything is loaded.
+        const auto same = DatSource::same_sets(files);
+        if (!same.empty()) {
+            std::string text;
+            for (const auto& s : same) text += (text.empty() ? "" : "\n\n") + DatSource::same_sets_message(s);
+            SettingsUi::notice(*this, _("Same games listed twice"), text, "bc-warning.svg");
+            m_status_label.set_text(_("The DAT group was not loaded"));
+            m_status_label.show();
+            return;
+        }
+        for (const auto& f : files)
             if (DatParser::parseToDatabase(f, m_database) > 0) loaded_any = true;
         if (!loaded_any) {
             m_status_label.set_text(_("Error: Failed to load DAT files"));

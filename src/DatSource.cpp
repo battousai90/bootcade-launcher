@@ -2,15 +2,19 @@
 #include "DatSource.h"
 #include "Platform.h"
 #include "DatParser.h"
+#include "DatCmpText.h"
+#include "MameCatalog.h"
 
 #include "AppContext.h"
 #include "MameSooner.h"
 #include "i18n.h"
 
 #include <archive.h>
+#include <cstring>
 #include <archive_entry.h>
 #include "CurlInit.h"
 #include <glibmm/checksum.h>
+#include <glibmm/ustring.h>
 #include <nlohmann/json.hpp>
 #include <pugixml.hpp>
 
@@ -20,6 +24,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -103,10 +109,11 @@ std::string effective_merge(const DatTraits& traits, const DatRule* rule) {
     auto known = [](const std::string& m) {
         return m == kMergeSplit || m == kMergeNonMerged || m == kMergeMerged;
     };
-    if (known(traits.declared) && !(rule && rule->override_dat && known(rule->merge)))
+    const bool chosen = rule && (known(rule->merge) || rule->merge == kMergeAsListed);
+    if (known(traits.declared) && !(chosen && rule->override_dat))
         return traits.declared;
-    if (rule && known(rule->merge)) return rule->merge;
-    return kMergeSplit;
+    if (chosen && known(rule->merge)) return rule->merge;
+    return "";   // as the DAT lists its sets
 }
 
 const Group* group_of(const std::vector<Group>& groups, const std::string& file) {
@@ -490,12 +497,8 @@ std::vector<std::string> source_paths() {
 std::vector<std::string> files_to_load(const std::vector<Group>& groups, std::vector<std::string>* conflicts) {
     std::vector<std::string> out;
     std::map<std::string, std::string> seen;   // file name → folder it was taken from
-    // Deux DAT d'un meme emulateur sous le meme en-tete decrivent le meme
-    // dossier de la collection, donc les memes sets : la base n'en garde
-    // qu'un par nom (emulateur, set, systeme) et refusait le second set par
-    // set. Typiquement deux groupes actifs pour la meme chose (les DAT
-    // Pleasuredome 0.289 et ceux de Sooner) : le premier gagne, et on le dit.
-    std::map<std::string, std::string> headers;   // emulator + header → path that carries it
+    // Deux DAT d'un meme groupe sous le meme en-tete (deux copies d'un DAT)
+    // ne sont plus departages ici : same_sets() refuse le groupe et le dit.
     for (const auto& g : groups) {
         if (!g.active) continue;
         for (const auto& f : selected_in_folder(g)) {
@@ -506,23 +509,209 @@ std::vector<std::string> files_to_load(const std::vector<Group>& groups, std::ve
                 continue;
             }
             const std::string path = (fs::path(g.folder) / f).string();
-            const std::string header = read_header(path, 0).name;
-            if (!header.empty()) {
-                const std::string key = g.emulator + '\x1f' + header;
-                auto h = headers.find(key);
-                if (h != headers.end()) {
-                    if (conflicts)
-                        conflicts->push_back(f + " (" + g.name + ") ignored : same DAT as " + h->second
-                                             + " (\"" + header + "\"), already loaded");
-                    continue;
-                }
-                headers[key] = path;
-            }
             seen[f] = g.folder;
             out.push_back(path);
         }
     }
     return out;
+}
+
+// ── The same set in two DATs ────────────────────────────────────────────────
+
+namespace {
+
+// What one DAT file says for the check : the system its sets are filed
+// under, and their names in file order. Remembered with the file's size and
+// date, so an unchanged file is read once per session.
+struct SetNames {
+    uintmax_t            size = 0;
+    fs::file_time_type   mtime{};
+    std::string          header;   // the header's name, "" when none
+    std::string          system;
+    std::vector<std::string> names;
+};
+
+std::mutex g_set_names_mutex;
+std::map<std::string, SetNames> g_set_names;
+
+// The sets of a datafile, at any depth of <dir> elements, as DatParser
+// imports them : <game> or <machine>, the header left aside.
+void collect_set_names(const pugi::xml_node& parent, std::vector<std::string>& out) {
+    for (auto n : parent.children()) {
+        if (n.type() != pugi::node_element) continue;
+        if (std::strcmp(n.name(), "game") == 0 || std::strcmp(n.name(), "machine") == 0)
+            out.emplace_back(n.attribute("name").value());
+        else if (std::strcmp(n.name(), "header") != 0)
+            collect_set_names(n, out);
+    }
+}
+
+// The same reading DatParser::parseToDatabase makes of the file, set names
+// and system only. A file it imports nothing from (a software list, a file
+// that does not parse) gives no name : it cannot collide.
+void read_set_names(const std::string& path, SetNames& out) {
+    const DatParser::DatKind kind = DatParser::datKind(path);
+    if (kind == DatParser::DatKind::MameListxml) {
+        std::vector<Game> sets;
+        if (MameCatalog::read_listxml_file(path, sets) < 0) return;
+        out.header = MameCatalog::kHeader;
+        out.system = DatParser::extractSystemFromHeader(MameCatalog::kHeader);
+        out.names.reserve(sets.size());
+        for (auto& g : sets) out.names.push_back(std::move(g.name));
+        return;
+    }
+    if (kind != DatParser::DatKind::Datafile) return;
+    pugi::xml_document doc;
+    if (DatCmpText::is_file(path)) {
+        if (!DatCmpText::load_file(path, doc)) return;
+    } else if (!doc.load_file(path.c_str())) {
+        return;
+    }
+    const pugi::xml_node root = doc.child("datafile");
+    if (!root) return;
+    out.system = "Unknown";
+    if (auto header = root.child("header")) {
+        const std::string name = header.child("name").text().get();
+        if (DatParser::isSoftwareListHeader(name)) return;
+        out.header = name;
+        out.system = DatParser::extractSystemFromHeader(name);
+    }
+    if (root.child("software")) return;
+    collect_set_names(root, out.names);
+}
+
+// The names and system of one file, from the session's memory when the
+// file has not changed since.
+SetNames set_names_of(const std::string& path) {
+    std::error_code ec;
+    const uintmax_t size = fs::file_size(path, ec);
+    if (ec) return {};
+    const fs::file_time_type mtime = fs::last_write_time(path, ec);
+    if (ec) return {};
+    {
+        std::lock_guard<std::mutex> lk(g_set_names_mutex);
+        auto it = g_set_names.find(path);
+        if (it != g_set_names.end() && it->second.size == size && it->second.mtime == mtime) return it->second;
+    }
+    SetNames sn;
+    sn.size = size;
+    sn.mtime = mtime;
+    read_set_names(path, sn);
+    std::lock_guard<std::mutex> lk(g_set_names_mutex);
+    g_set_names[path] = sn;
+    return sn;
+}
+
+struct ToCheck {
+    std::string path, emulator, group;
+};
+
+std::vector<SameSets> check_same_sets(const std::vector<ToCheck>& files) {
+    struct Seen {
+        std::map<std::string, size_t> first;   // system + name → index in `files`
+        std::map<std::string, size_t> headers; // header name → index in `files`
+        std::set<std::string> files, sets;
+        std::string group;
+    };
+    std::map<std::string, Seen> by_emu;
+    for (size_t i = 0; i < files.size(); ++i) {
+        const SetNames sn = set_names_of(files[i].path);
+        if (sn.names.empty()) continue;
+        Seen& seen = by_emu[files[i].emulator];
+        if (seen.group.empty()) seen.group = files[i].group;
+        const std::string file = fs::path(files[i].path).filename().string();
+        // Two DATs under the same header are the same DAT twice (two copies,
+        // two versions) : refused even when their sets happen to differ.
+        if (!sn.header.empty()) {
+            auto [h, fresh] = seen.headers.emplace(sn.header, i);
+            if (!fresh) {
+                seen.files.insert(fs::path(files[h->second].path).filename().string());
+                seen.files.insert(file);
+            }
+        }
+        for (const auto& name : sn.names) {
+            auto [it, fresh] = seen.first.emplace(sn.system + '\x1f' + name, i);
+            if (fresh) continue;
+            seen.files.insert(fs::path(files[it->second].path).filename().string());
+            seen.files.insert(file);
+            seen.sets.insert(name);
+        }
+    }
+    std::vector<SameSets> out;
+    for (auto& [emu, seen] : by_emu) {
+        if (seen.files.empty()) continue;
+        SameSets s;
+        s.emulator = emu;
+        s.group = seen.group;
+        s.files.assign(seen.files.begin(), seen.files.end());
+        s.sets.assign(seen.sets.begin(), seen.sets.end());
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+}  // namespace
+
+std::vector<SameSets> same_sets(const std::vector<std::string>& paths) {
+    const std::vector<Group> groups = load_groups();
+    std::vector<ToCheck> files;
+    files.reserve(paths.size());
+    std::error_code ec;
+    for (const auto& path : paths) {
+        ToCheck c{path, "", ""};
+        // The group whose folder holds the file says its emulator, as
+        // DatParser::parseToDatabase is told (emulator_of_path).
+        const fs::path p(path);
+        const fs::path dir = fs::weakly_canonical(p.parent_path(), ec);
+        for (const auto& g : groups) {
+            if (!g.active || g.folder.empty() || !g.selects(p.filename().string())) continue;
+            if (fs::weakly_canonical(fs::path(g.folder), ec) != dir) continue;
+            c.emulator = g.emulator;
+            c.group = g.name;
+            break;
+        }
+        if (c.emulator.empty())
+            c.emulator = DatParser::datKind(path) == DatParser::DatKind::MameListxml ? "mame" : "fbneo";
+        if (c.group.empty()) c.group = p.parent_path().filename().string();
+        files.push_back(std::move(c));
+    }
+    return check_same_sets(files);
+}
+
+std::vector<SameSets> same_sets_in_group(const Group& g) {
+    std::vector<ToCheck> files;
+    for (const auto& f : selected_in_folder(g))
+        files.push_back({(fs::path(g.folder) / f).string(), g.emulator, g.name});
+    return check_same_sets(files);
+}
+
+std::string same_sets_message(const SameSets& s) {
+    // At most four files and three sets by name : the rest is a count.
+    auto list = [](const std::vector<std::string>& items, size_t shown, bool last_with_and) {
+        std::vector<std::string> head(items.begin(), items.begin() + std::min(shown, items.size()));
+        const size_t more = items.size() - head.size();
+        std::string text;
+        if (more) {
+            for (const auto& h : head) text += h + ", ";
+            text += Glib::ustring::compose(_("+%1"), (int)more).raw();
+        } else if (last_with_and && head.size() > 1) {
+            for (size_t i = 0; i + 1 < head.size(); ++i) text += (i ? ", " : "") + head[i];
+            text = Glib::ustring::compose(_("%1 and %2"), text, head.back()).raw();
+        } else {
+            for (size_t i = 0; i < head.size(); ++i) text += (i ? ", " : "") + head[i];
+        }
+        return text;
+    };
+    const std::string files = list(s.files, 4, true), sets = list(s.sets, 3, false);
+    // Same header, no set in common : the files alone say it.
+    if (s.sets.empty())
+        return Glib::ustring::compose(_("These DATs are the same DAT: %1. The DAT group \"%2\" was not loaded."),
+                                      files, s.group).raw();
+    return (s.files.size() == 1
+        ? Glib::ustring::compose(_("This DAT lists the same games twice: %1 (%2). The DAT group \"%3\" was not loaded."),
+                                 files, sets, s.group)
+        : Glib::ustring::compose(_("These DATs list the same games: %1 (%2). The DAT group \"%3\" was not loaded."),
+                                 files, sets, s.group)).raw();
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
@@ -828,28 +1017,87 @@ bool fetch_direct(const std::string& url, const std::string& folder,
     return ok;
 }
 
-static const char* kSourcesFile = ".bootcade-sources.json";
+// Sources live in config.json, under rom_manager.dat_sources : folder → file
+// → {source, homepage, url, date}. The credit follows the files, whatever
+// group uses them.
+namespace {
+
+const char* kLegacySourcesFile = ".bootcade-sources.json";
+
+nlohmann::json read_config() {
+    nlohmann::json j;
+    std::ifstream fi(AppContext::get_config_path());
+    if (fi) { try { fi >> j; } catch (...) { j = nlohmann::json{}; } }
+    if (!j.is_object()) j = nlohmann::json::object();
+    return j;
+}
+
+bool write_config(const nlohmann::json& j) {
+    std::ofstream fo(AppContext::get_config_path(), std::ios::trunc);
+    if (!fo) return false;
+    fo << j.dump(4);
+    fo.close();
+    return (bool)fo;
+}
+
+nlohmann::json& sources_entry(nlohmann::json& j, const std::string& folder) {
+    if (!j.contains("rom_manager") || !j["rom_manager"].is_object()) j["rom_manager"] = nlohmann::json::object();
+    auto& all = j["rom_manager"]["dat_sources"];
+    if (!all.is_object()) all = nlohmann::json::object();
+    auto& one = all[same_folder_key(folder)];
+    if (!one.is_object()) one = nlohmann::json::object();
+    return one;
+}
+
+// A folder written by an earlier version keeps its sources in a file of its
+// own : they move into config.json once, then the file goes. An entry the
+// config already has stays as it is.
+void adopt_legacy_sources(const std::string& folder) {
+    if (folder.empty()) return;
+    std::error_code ec;
+    const fs::path legacy = fs::path(folder) / kLegacySourcesFile;
+    if (!fs::is_regular_file(legacy, ec)) return;
+    nlohmann::json old;
+    { std::ifstream in(legacy); if (in) { try { in >> old; } catch (...) { old = nlohmann::json{}; } } }
+    if (old.is_object() && !old.empty()) {
+        nlohmann::json j = read_config();
+        auto& entry = sources_entry(j, folder);
+        for (auto it = old.begin(); it != old.end(); ++it)
+            if (it.value().is_object() && !entry.contains(it.key())) entry[it.key()] = it.value();
+        if (!write_config(j)) return;   // the file stays until its content is safe
+    }
+    fs::remove(legacy, ec);
+}
+
+}  // namespace
 
 void record_source(const std::string& folder, const std::vector<std::string>& files,
                    const Site& site, const std::string& url) {
-    const fs::path path = fs::path(folder) / kSourcesFile;
-    nlohmann::json j = nlohmann::json::object();
-    { std::ifstream in(path); if (in) { try { in >> j; } catch (...) { j = nlohmann::json::object(); } } }
-    if (!j.is_object()) j = nlohmann::json::object();
+    if (folder.empty() || files.empty()) return;
+    adopt_legacy_sources(folder);
+    nlohmann::json j = read_config();
+    auto& entry = sources_entry(j, folder);
     for (const auto& f : files)
-        j[f] = {{"source", site.source}, {"homepage", site.homepage}, {"url", url_decode(url)}, {"date", now_iso()}};
-    std::ofstream out(path, std::ios::trunc);
-    out << j.dump(2) << "\n";
+        entry[f] = {{"source", site.source}, {"homepage", site.homepage}, {"url", url_decode(url)}, {"date", now_iso()}};
+    write_config(j);
 }
 
 std::string source_of(const std::string& folder, const std::string& file) {
-    std::ifstream in(fs::path(folder) / kSourcesFile);
-    if (!in) return {};
-    nlohmann::json j;
-    try { in >> j; } catch (...) { return {}; }
-    if (!j.is_object() || !j.contains(file) || !j[file].is_object()) return {};
-    const auto& s = j[file];
+    if (folder.empty()) return {};
+    adopt_legacy_sources(folder);
+    const nlohmann::json j = read_config();
+    const std::string key = same_folder_key(folder);
+    if (!j.contains("rom_manager") || !j["rom_manager"].is_object()) return {};
+    const auto& rm = j["rom_manager"];
+    if (!rm.contains("dat_sources") || !rm["dat_sources"].is_object()) return {};
+    const auto& all = rm["dat_sources"];
+    if (!all.contains(key) || !all[key].is_object() || !all[key].contains(file) || !all[key][file].is_object()) return {};
+    const auto& s = all[key][file];
     return s.value("source", "") + " — " + s.value("homepage", "");
+}
+
+void adopt_sources(const std::vector<Group>& groups) {
+    for (const auto& g : groups) adopt_legacy_sources(g.folder);
 }
 
 std::string mame_manifest_url(const std::string& channel) {
@@ -1024,7 +1272,43 @@ bool download(const std::string& manifest_url, const RemoteFile& file,
 
 // ── Header ──────────────────────────────────────────────────────────────────
 
+// A ClrMamePro text DAT : its `clrmamepro ( ... )` block comes first, before
+// the first set. That block alone is read, as the text reader gives it.
+static Header read_text_header(const std::string& path, int preview_lines) {
+    Header h;
+    std::ifstream in(path);
+    std::string line, head_text;
+    int n = 0;
+    auto starts_set = [](const std::string& l) {
+        const size_t p = l.find_first_not_of(" \t\r");
+        if (p == std::string::npos) return false;
+        for (const char* k : {"game", "machine", "resource"}) {
+            const size_t len = std::strlen(k);
+            if (l.compare(p, len, k) == 0 && l.find('(', p + len) != std::string::npos
+                && l.find_first_not_of(" \t", p + len) == l.find('(', p + len)) return true;
+        }
+        return false;
+    };
+    while (std::getline(in, line) && n < 400) {
+        if (n < preview_lines) h.preview.push_back(line);
+        ++n;
+        if (starts_set(line)) break;
+        head_text += line + "\n";
+    }
+    while ((int)h.preview.size() < preview_lines && std::getline(in, line)) h.preview.push_back(line);
+    pugi::xml_document doc;
+    if (!DatCmpText::load_string(head_text, doc)) return h;
+    auto hd = doc.child("datafile").child("header");
+    h.name        = hd.child("name").text().get();
+    h.description = hd.child("description").text().get();
+    h.version     = hd.child("version").text().get();
+    h.date        = hd.child("date").text().get();
+    h.author      = hd.child("author").text().get();
+    return h;
+}
+
 Header read_header(const std::string& path, int preview_lines) {
+    if (DatCmpText::is_file(path)) return read_text_header(path, preview_lines);
     Header h;
     std::ifstream in(path);
     std::string line;

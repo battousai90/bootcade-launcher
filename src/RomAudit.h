@@ -59,6 +59,9 @@ struct RomEntry {
 
 struct GameEntry {
     std::string name, system, description, dat_header;
+    // The sub-folder of its DAT's folder the DAT files the set's archive in
+    // (DatLayout::Archive::dir) : "" at the root, "A/B" for <folder>/A/B.
+    std::string dat_dir;
     std::string archive;              // archive that should hold the set
     bool        archive_found = false;
     std::string cloneof;              // parent's short name, empty if this is an original
@@ -101,6 +104,11 @@ struct GameEntry {
     // missing set plus an orphan, and Fix MOVES the archive to Import, which
     // files it under the right name : a copy left the old one behind.
     bool misnamed_archive = false;
+    // `archive` is named after the set and holds exactly its content, but
+    // in another folder of its DAT's than the one the DAT files it in (at
+    // the root instead of A/B, or the reverse). Fixed like a misnamed one :
+    // MOVED to Import, which files it where the DAT says.
+    bool misplaced_archive = false;
     // Le BIOS ou le parent absent sans lequel ce set ne peut pas tourner
     // (« BIOS msx.zip »), vide s'il ne lui manque rien. Ne change pas le
     // verdict du set (conforme ou non au DAT) : il dit seulement pourquoi un

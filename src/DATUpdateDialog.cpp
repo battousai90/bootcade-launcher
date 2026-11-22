@@ -10,7 +10,9 @@
 #include <thread>
 #include <iostream>
 #include <filesystem>
+#include <chrono>
 #include <ctime>
+#include <sstream>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -155,6 +157,44 @@ void DATUpdateDialog::worker_thread() {
             if (!any) {
                 log("No DAT files found in: " + m_dat_path, Level::Error);
                 log("Nothing was changed : your game list is kept as it is.", Level::Ok);
+                m_failed.store(true);
+                m_update_finished.store(true);
+                m_finished_dispatcher();
+                return;
+            }
+        }
+
+        // Avant de toucher a la base, toujours : deux DAT du lot qui listent
+        // le meme set (meme emulateur, meme nom, meme systeme) le decrivent
+        // deux fois. Comme RomVault, on refuse le groupe en entier et on le
+        // dit ; la base reste telle qu'elle etait. Seuls les en-tetes et les
+        // noms de sets sont lus.
+        {
+            update_progress(0.15, "", "Checking DAT files...");
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto same = DatSource::same_sets(m_files);
+            const double secs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - t0).count() / 1000.0;
+            std::ostringstream took;
+            took << secs;
+            std::cout << "[SAMESETS] files=" << m_files.size() << " refused=" << same.size()
+                      << " seconds=" << took.str() << std::endl;
+            log("Checked " + std::to_string(m_files.size()) + " DAT files for sets listed twice ("
+                + took.str() + " s)", Level::Muted);
+            if (!same.empty()) {
+                std::string text;
+                for (const auto& s : same) {
+                    const std::string msg = DatSource::same_sets_message(s);
+                    std::cout << "[SAMESETS] " << s.emulator << " group=\"" << s.group << "\" files=" << s.files.size()
+                              << " sets=" << s.sets.size() << " : " << msg << std::endl;
+                    log(msg, Level::Error);
+                    text += (text.empty() ? "" : "\n\n") + msg;
+                }
+                log(_("Nothing was changed: your game list is kept as it is."), Level::Ok);
+                {
+                    std::lock_guard<std::mutex> lk(m_shared_mutex);
+                    m_refusal = text;
+                }
                 m_failed.store(true);
                 m_update_finished.store(true);
                 m_finished_dispatcher();
@@ -370,7 +410,19 @@ void DATUpdateDialog::on_update_finished() {
     m_cancel_button->set_sensitive(false);
     m_close_button->set_sensitive(true);
 
-    if (m_cancelled.load()) {
+    std::string refusal;
+    {
+        std::lock_guard<std::mutex> lk(m_shared_mutex);
+        refusal = m_refusal;
+    }
+    if (!refusal.empty()) {
+        // Le refus se lit en haut de la boite, pas seulement dans le journal.
+        m_step_label->set_text(_("The DAT group was not loaded"));
+        auto* card = SettingsUi::warning_card(_("Same games listed twice"), refusal);
+        m_body.pack_start(*card, Gtk::PACK_SHRINK);
+        m_body.reorder_child(*card, 0);
+        card->show_all();
+    } else if (m_cancelled.load()) {
         m_step_label->set_text(_("Operation cancelled"));
         add_log_message("Operation cancelled by user", Level::Warn);
     } else {
@@ -378,12 +430,14 @@ void DATUpdateDialog::on_update_finished() {
     }
 
     on_progress_update();
+    // L'etape du worker (« Checking DAT files... ») ne doit pas recouvrir le refus.
+    if (!refusal.empty()) m_step_label->set_text(_("The DAT group was not loaded"));
 
     // Une mise a jour qui s'est bien passee n'a rien a faire acquitter : la
     // boite se retire d'elle-meme et la bibliotheque revient sans un clic.
     // Une annulation ou une erreur, elle, reste affichee : son journal est le
     // seul compte rendu de ce qui s'est produit.
-    if (!m_cancelled.load() && !m_failed.load()) {
+    if (m_close_always || (!m_cancelled.load() && !m_failed.load())) {
         m_autoclose = Glib::signal_timeout().connect_seconds(
             [this]() { hide(); return false; }, kAutoCloseSeconds);
     }

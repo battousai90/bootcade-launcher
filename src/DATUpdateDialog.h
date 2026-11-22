@@ -30,6 +30,9 @@ public:
     virtual ~DATUpdateDialog();
 
     void start_update();
+    // Without anyone to click Close (the BOOTCADE_UPDATE_DAT diagnostic) :
+    // the box closes itself after the same delay whatever the outcome.
+    void close_when_done() { m_close_always = true; }
     // What was left out before loading (DatSource::files_to_load) : shown in
     // the log, not only in the terminal.
     void note_conflicts(const std::vector<std::string>& conflicts);
@@ -37,6 +40,9 @@ public:
     // The games were wiped and (partly) reloaded : whoever shows them must
     // read them again, even when the update was stopped half-way.
     bool database_changed() const { return m_database_changed.load(); }
+    // The DATs list the same set twice : nothing was loaded and the database
+    // was left as it was. The text says which files and sets.
+    std::string refusal() const { std::lock_guard<std::mutex> lk(m_shared_mutex); return m_refusal; }
 
 private:
     using Level = SettingsUi::LogPanel::Level;
@@ -58,6 +64,7 @@ private:
     std::atomic<bool> m_cancelled{false};
     std::atomic<bool> m_failed{false};
     std::atomic<bool> m_database_changed{false};
+    bool m_close_always = false;
 
     // UI Components
     Gtk::Box m_main_box{Gtk::ORIENTATION_VERTICAL, 0};
@@ -93,5 +100,8 @@ private:
     std::string m_current_file;
     std::string m_current_message;
     std::vector<std::pair<std::string, Level>> m_log_messages;
+    // Why the DAT group was refused (DatSource::same_sets_message), for the
+    // player ; empty when it was not.
+    std::string m_refusal;
     std::atomic<bool> m_update_finished{false};
 };

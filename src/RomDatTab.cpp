@@ -330,6 +330,9 @@ void RomDatTab::build_group_card() {
     m_status.get_style_context()->add_class("set-sub");
     m_status.set_ellipsize(Pango::ELLIPSIZE_END);
     body->pack_start(m_status, Gtk::PACK_SHRINK);
+    // The refusal, when the group's DATs list the same set twice (update_summary).
+    m_same_sets_slot.set_no_show_all(true);
+    body->pack_start(m_same_sets_slot, Gtk::PACK_SHRINK);
     m_group_card.body->pack_start(*body, Gtk::PACK_SHRINK);
 
     m_group_sub.set_xalign(1.0f);
@@ -527,6 +530,7 @@ void RomDatTab::build_table() {
                     {"mode", N_("Read as")}})
         grid_row(m_rule_grid, r++, _(kv.second), m_rule_values, kv.first);
     rule.body->pack_start(m_rule_grid, Gtk::PACK_SHRINK);
+    m_combo_merge.append(DatSource::kMergeAsListed,  _("As the DAT lists"));
     m_combo_merge.append(DatSource::kMergeSplit,     _("Split — a clone holds only its own ROMs"));
     m_combo_merge.append(DatSource::kMergeNonMerged, _("Non-merged — every set holds all it needs"));
     m_combo_merge.append(DatSource::kMergeMerged,    _("Merged — clones inside their parent's archive"));
@@ -824,14 +828,18 @@ void RomDatTab::rebuild_group_list() {
         // Deux groupes peuvent porter les memes noms de sets (mslug) : dire
         // quel emulateur chacun decrit evite de les confondre.
         sub += " · " + EmulatorVariants::short_name(g.emulator, g.variant);
-        sub = (g.active ? std::string(_("Active")) : std::string(_("Inactive"))) + " · " + sub;
+        // Ses DAT listent deux fois le meme set : actif, il n'est pas charge.
+        const bool refused = g.active && !DatSource::same_sets_in_group(g).empty();
+        sub = (refused ? std::string(_("Not loaded")) : g.active ? std::string(_("Active")) : std::string(_("Inactive")))
+            + " · " + sub;
         auto* state = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 6);
         auto* dot = Gtk::make_managed<Gtk::Box>(Gtk::ORIENTATION_HORIZONTAL, 0);
         dot->get_style_context()->add_class("set-dot");
-        dot->get_style_context()->add_class(g.active ? "set-ok" : "set-off");
+        dot->get_style_context()->add_class(refused ? "set-err" : g.active ? "set-ok" : "set-off");
         dot->set_valign(Gtk::ALIGN_CENTER);
-        dot->set_tooltip_text(g.active ? _("Active : its DAT files are loaded and it can be audited.")
-                                       : _("Inactive : loads nothing, not offered for audit."));
+        dot->set_tooltip_text(refused ? _("Not loaded : its DAT files list the same games twice.")
+                              : g.active ? _("Active : its DAT files are loaded and it can be audited.")
+                                         : _("Inactive : loads nothing, not offered for audit."));
         // Un seul groupe actif par emulateur : l'interrupteur en allume un et
         // eteint l'autre. Celui qui est allume ne s'eteint pas seul : il faut
         // toujours un groupe pour juger la collection de cet emulateur.
@@ -1280,6 +1288,7 @@ void RomDatTab::refresh() {
     // Re-read : the groups (config.json), the folder, the database.
     std::string keep_id = m_groups.empty() ? "" : group().id;
     m_groups = DatSource::load_groups();
+    DatSource::adopt_sources(m_groups);
     if (m_groups.empty()) return;   // load_groups always builds one; belt and braces
     if (m_current >= m_groups.size()) m_current = 0;
     for (size_t i = 0; i < m_groups.size(); ++i) if (m_groups[i].id == keep_id) m_current = i;
@@ -1406,6 +1415,24 @@ void RomDatTab::update_summary() {
     else if (compared) m_status.set_text(updates ? Glib::ustring::compose(_("%1 update(s) available on the server for this group."), updates)
                                                  : Glib::ustring(_("Every DAT file of this group is up to date with the server.")));
     else m_status.set_text(Glib::ustring::compose(_("%1 DAT file(s) in the folder, %2 in this group."), on_disk, in));
+    show_same_sets();
+}
+
+// The same check Update DAT makes before loading anything : the group's DATs
+// listing a set twice are refused, and the group says so here. Unchanged
+// files are not read again (DatSource::same_sets remembers them).
+void RomDatTab::show_same_sets() {
+    std::string text;
+    for (const auto& s : DatSource::same_sets_in_group(group()))
+        text += (text.empty() ? "" : "\n\n") + DatSource::same_sets_message(s);
+    if (text == m_same_sets_text) return;
+    m_same_sets_text = text;
+    ui::destroy_children(m_same_sets_slot);
+    if (text.empty()) { m_same_sets_slot.hide(); return; }
+    auto* card = ui::warning_card(_("Same games listed twice"), text);
+    m_same_sets_slot.pack_start(*card, Gtk::PACK_SHRINK);
+    card->show_all();
+    m_same_sets_slot.show();
 }
 
 void RomDatTab::on_selection_changed() {
@@ -1481,7 +1508,7 @@ void RomDatTab::show_dat_rule(int index) {
         set("links", it->linked ? std::string(_("parents, shared ROMs, devices"))
                                 : std::string(_("none : every set is read as it is")));
         set("declared", it->declared.empty() ? std::string(_("nothing")) : merge_label(it->declared));
-        set("mode", mode.empty() ? std::string(_("as it is")) : merge_label(mode));
+        set("mode", mode.empty() ? std::string(_("As the DAT lists")) : merge_label(mode));
     }
     const bool linked = it && it->games && it->linked;
     m_rule_merge_line.set_visible(linked);
@@ -1492,7 +1519,7 @@ void RomDatTab::show_dat_rule(int index) {
     const bool declares   = it && !it->declared.empty();
     m_combo_merge.set_active_id(declares && !overridden ? it->declared
                                 : rule && !rule->merge.empty() ? rule->merge
-                                : std::string(DatSource::kMergeSplit));
+                                : std::string(DatSource::kMergeAsListed));
     m_check_override.set_active(overridden);
     // With a mode the DAT declares, the choice only counts when overriding.
     m_combo_merge.set_sensitive(linked && (!declares || overridden));
