@@ -61,9 +61,11 @@ constexpr const char* kDefaultManifestUrl = "https://files.bootcade.duckdns.org/
 //                and devices' ROMs included ;
 //   merged     : a parent's archive holds its clones too ; clones have none.
 // The mode the DAT's header declares (clrmamepro forcemerging, romcenter
-// rommode) applies unless the user overrides it ; a linked DAT declaring
-// nothing is split, as in RomVault. A DAT without links is read as it is :
-// no mode at all. Nothing depends on where a DAT comes from or on its name.
+// rommode) applies unless the user overrides it. A DAT declaring nothing,
+// with or without links, is read as it lists its sets : each set holds
+// exactly the ROMs and disks the DAT writes in it, nothing removed, nothing
+// added. Nothing depends on where a DAT comes from or on its name.
+constexpr const char* kMergeAsListed  = "as-listed";   // a rule's choice : read as the DAT lists
 constexpr const char* kMergeSplit     = "split";
 constexpr const char* kMergeNonMerged = "non-merged";
 constexpr const char* kMergeMerged    = "merged";

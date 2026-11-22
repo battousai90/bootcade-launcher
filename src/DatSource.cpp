@@ -103,10 +103,11 @@ std::string effective_merge(const DatTraits& traits, const DatRule* rule) {
     auto known = [](const std::string& m) {
         return m == kMergeSplit || m == kMergeNonMerged || m == kMergeMerged;
     };
-    if (known(traits.declared) && !(rule && rule->override_dat && known(rule->merge)))
+    const bool chosen = rule && (known(rule->merge) || rule->merge == kMergeAsListed);
+    if (known(traits.declared) && !(chosen && rule->override_dat))
         return traits.declared;
-    if (rule && known(rule->merge)) return rule->merge;
-    return kMergeSplit;
+    if (chosen && known(rule->merge)) return rule->merge;
+    return "";   // as the DAT lists its sets
 }
 
 const Group* group_of(const std::vector<Group>& groups, const std::string& file) {

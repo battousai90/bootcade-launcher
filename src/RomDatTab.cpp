@@ -527,6 +527,7 @@ void RomDatTab::build_table() {
                     {"mode", N_("Read as")}})
         grid_row(m_rule_grid, r++, _(kv.second), m_rule_values, kv.first);
     rule.body->pack_start(m_rule_grid, Gtk::PACK_SHRINK);
+    m_combo_merge.append(DatSource::kMergeAsListed,  _("As the DAT lists"));
     m_combo_merge.append(DatSource::kMergeSplit,     _("Split — a clone holds only its own ROMs"));
     m_combo_merge.append(DatSource::kMergeNonMerged, _("Non-merged — every set holds all it needs"));
     m_combo_merge.append(DatSource::kMergeMerged,    _("Merged — clones inside their parent's archive"));
@@ -1481,7 +1482,7 @@ void RomDatTab::show_dat_rule(int index) {
         set("links", it->linked ? std::string(_("parents, shared ROMs, devices"))
                                 : std::string(_("none : every set is read as it is")));
         set("declared", it->declared.empty() ? std::string(_("nothing")) : merge_label(it->declared));
-        set("mode", mode.empty() ? std::string(_("as it is")) : merge_label(mode));
+        set("mode", mode.empty() ? std::string(_("As the DAT lists")) : merge_label(mode));
     }
     const bool linked = it && it->games && it->linked;
     m_rule_merge_line.set_visible(linked);
@@ -1492,7 +1493,7 @@ void RomDatTab::show_dat_rule(int index) {
     const bool declares   = it && !it->declared.empty();
     m_combo_merge.set_active_id(declares && !overridden ? it->declared
                                 : rule && !rule->merge.empty() ? rule->merge
-                                : std::string(DatSource::kMergeSplit));
+                                : std::string(DatSource::kMergeAsListed));
     m_check_override.set_active(overridden);
     // With a mode the DAT declares, the choice only counts when overriding.
     m_combo_merge.set_sensitive(linked && (!declares || overridden));
