@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
+#include <iterator>
 #include <unordered_set>
 
 namespace DatLayout {
@@ -56,6 +58,72 @@ std::string entry_path(const std::string& name) {
     return out;
 }
 
+std::string safe_dir(const std::string& raw) {
+    std::string out, part;
+    auto flush = [&] {
+        if (part.empty() || part == "." || part == "..") { part.clear(); return; }
+#ifdef _WIN32
+        for (char& c : part)
+            if ((unsigned char)c < 32 || std::strchr("<>:\"|?*", c)) c = '_';
+        if (part.back() == '.' || part.back() == ' ') part.back() = '_';
+        // CON, PRN, AUX, NUL, COM1-9, LPT1-9, alone or before an extension.
+        std::string stem = lower(part.substr(0, part.find('.')));
+        while (!stem.empty() && stem.back() == ' ') stem.pop_back();
+        static const char* kReserved[] = {"con", "prn", "aux", "nul"};
+        bool reserved = std::find_if(std::begin(kReserved), std::end(kReserved),
+                                     [&](const char* r) { return stem == r; }) != std::end(kReserved);
+        if (stem.size() == 4 && (stem.compare(0, 3, "com") == 0 || stem.compare(0, 3, "lpt") == 0)
+            && stem[3] >= '1' && stem[3] <= '9')
+            reserved = true;
+        if (reserved) part = "_" + part;
+#endif
+        if (!out.empty()) out += '/';
+        out += part;
+        part.clear();
+    };
+    for (char c : raw) {
+        if (c == '/' || c == '\\') flush();
+        else part += c;
+    }
+    flush();
+    return out;
+}
+
+std::vector<std::string> archive_names(const std::vector<Rom>& roms, bool (*placed)(const Rom&)) {
+    std::vector<std::string> out(roms.size());
+    std::unordered_set<std::string> taken;            // every name a placed line asks for
+    for (const auto& r : roms)
+        if (!r.crc.empty() && (!placed || placed(r))) taken.insert(entry_path(r.name));
+    std::unordered_map<std::string, int> later;       // name -> later lines seen
+    std::unordered_set<std::string> seen;             // name \x1f crc already placed
+    std::unordered_set<std::string> given;            // names handed out
+    for (size_t i = 0; i < roms.size(); ++i) {
+        const Rom& r = roms[i];
+        if (r.crc.empty() || (placed && !placed(r))) continue;
+        const std::string path = entry_path(r.name);
+        if (!given.count(path)) {   // the first line of this name keeps it
+            given.insert(path);
+            seen.insert(path + '\x1f' + lower(r.crc));
+            out[i] = path;
+            continue;
+        }
+        const int n0 = later[path]++;
+        if (!seen.insert(path + '\x1f' + lower(r.crc)).second) continue;   // a repeat
+        const auto slash = path.rfind('/');
+        const auto dot   = path.rfind('.');
+        const size_t stem_end = (dot == std::string::npos || (slash != std::string::npos && dot < slash))
+                                    ? path.size() : dot;
+        std::string name;
+        for (int n = n0;; ++n) {
+            name = path.substr(0, stem_end) + "_" + std::to_string(n) + path.substr(stem_end);
+            if (!taken.count(name) && !given.count(name)) break;
+        }
+        given.insert(name);
+        out[i] = name;
+    }
+    return out;
+}
+
 Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode,
                const Options& options) : m_mode(mode) {
     const std::vector<const Game*>& linked = options.linked;
@@ -80,12 +148,14 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode,
     };
 
     // A set's own ROMs : those the DAT does not mark merge=, each once.
+    // Under the name archive_names gives it among the set's own.
     auto own_roms = [](const Game& g, std::vector<Entry>& out) {
-        std::unordered_set<std::string> seen;
-        for (const auto& r : g.roms) {
-            if (r.crc.empty() || r.is_inherited()) continue;
-            if (!seen.insert(r.name + '\x1f' + lower(r.crc)).second) continue;
-            out.push_back({entry_path(r.name), crc_of(r.crc), (uint64_t)r.size, ""});
+        const std::vector<std::string> names =
+            archive_names(g.roms, [](const Rom& r) { return !r.is_inherited(); });
+        for (size_t i = 0; i < g.roms.size(); ++i) {
+            if (names[i].empty()) continue;
+            const Rom& r = g.roms[i];
+            out.push_back({names[i], crc_of(r.crc), (uint64_t)r.size, ""});
         }
     };
     auto own_disks = [&](const Game& g, std::vector<DiskEntry>& out) {
@@ -129,6 +199,7 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode,
         for (const Game* p : parents) {
             Archive a;
             a.name = p->name;
+            a.dir  = p->dat_dir;
             own_roms(*p, a.entries);
             own_disks(*p, a.disks);
             std::vector<size_t> p_entries(a.entries.size()), p_disks(a.disks.size());
@@ -190,20 +261,26 @@ Layout::Layout(const std::vector<const Game*>& sets, const std::string& mode,
     for (const Game* g : sets) {
         Archive a;
         a.name = g->name;
+        a.dir  = g->dat_dir;
         if (mode == "split") {
             own_roms(*g, a.entries);
             own_disks(*g, a.disks);
         } else {
             // As it is, or non-merged : every ROM and disk the set lists.
-            std::unordered_set<std::string> seen, names;
-            for (const auto& r : g->roms) {
-                if (r.crc.empty() || !seen.insert(r.name + '\x1f' + lower(r.crc)).second) continue;
-                names.insert(entry_path(r.name));
-                a.entries.push_back({entry_path(r.name), crc_of(r.crc), (uint64_t)r.size, "", r.is_inherited()});
+            std::unordered_set<std::string> names;
+            const std::vector<std::string> stored = archive_names(g->roms);
+            for (size_t i = 0; i < g->roms.size(); ++i) {
+                if (stored[i].empty()) continue;
+                const Rom& r = g->roms[i];
+                names.insert(stored[i]);
+                a.entries.push_back({stored[i], crc_of(r.crc), (uint64_t)r.size, "", r.is_inherited()});
             }
             std::unordered_set<std::string> disk_names;
             for (const auto& d : g->disks) {
-                if (parents_disk(*g, d, find(g->cloneof))) continue;   // the parent's one copy
+                // As listed is exactly what the DAT writes : the emulator's
+                // reading of a clone's disk (disk_is_parents) only applies to
+                // the modes that place things by their links.
+                if (!mode.empty() && parents_disk(*g, d, find(g->cloneof))) continue;   // the parent's one copy
                 if (disk_names.insert(d.name).second) a.disks.push_back({d.name, lower(d.sha1), ""});
             }
             if (mode == "non-merged") {

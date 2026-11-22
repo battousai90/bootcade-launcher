@@ -549,7 +549,9 @@ void RomLibraryTab::populate() {
         systems.insert(g.system);
 
         // A CHD set is a folder named after the set, not a zip.
-        std::string expected = g.is_chd ? g.name + "/" : g.has_disks ? g.name + ".zip + " + g.name + "/" : g.name + ".zip";
+        // Under the sub-folder its DAT files it in, when it has one.
+        const std::string at = g.dat_dir.empty() ? std::string() : g.dat_dir + "/";
+        std::string expected = g.is_chd ? at + g.name + "/" : g.has_disks ? at + g.name + ".zip + " + g.name + "/" : at + g.name + ".zip";
         std::string yours = g.archive_found ? fs::path(g.archive).filename().string() + (g.is_chd ? "/" : "") : "-";
 
         const bool can_quarantine = can_quarantine_whole(g);
@@ -562,6 +564,7 @@ void RomLibraryTab::populate() {
         if (has_extras) bits.push_back(Glib::ustring::compose(_("%1 extra file(s) not needed by the DAT"), (int)g.extra_entries.size()).raw());
         if (g.is_chd && g.status != "available") bits.push_back(_("Fix not available for CHDs"));
         else if (g.misnamed_archive) bits.push_back(_("right content under another file name"));
+        else if (g.misplaced_archive) bits.push_back(_("right content in another folder"));
         else if (g.repairable) bits.push_back(_("repairable from the library"));
         else if (!g.archive_found && (g.has_disks ? g.zip_status : g.status) != "available") bits.push_back(_("no archive found"));
         int inherited = 0;
@@ -967,7 +970,7 @@ std::string RomLibraryTab::all_details_of(const Gtk::TreeModel::Row& row) const 
         << "system: " << g.system << "\n"
         << "status: " << g.status << (g.ignored ? " (ignored)" : "") << "\n";
     if (!g.cloneof.empty()) out << "parent: " << g.cloneof << "\n";
-    out << "expected: " << g.name << (g.is_chd ? "/" : ".zip") << "\n"
+    out << "expected: " << (g.dat_dir.empty() ? std::string() : g.dat_dir + "/") << g.name << (g.is_chd ? "/" : ".zip") << "\n"
         << "your file: " << (g.archive_found ? g.archive : "-") << "\n";
     for (const auto& r : g.roms) {
         if (r.is_disk) {
@@ -1116,7 +1119,7 @@ void RomLibraryTab::on_fix_clicked(std::vector<Gtk::TreeModel::Row> rows) {
         }
         const auto& g = m_audit.games[(unsigned int)row[m_cols.index]];
         std::string header = g.dat_header.empty() ? g.system : g.dat_header;
-        if (g.misnamed_archive && !g.ignored) {
+        if ((g.misnamed_archive || g.misplaced_archive) && !g.ignored) {
             m_fix.renamed.push_back(g.archive);
             continue;
         }

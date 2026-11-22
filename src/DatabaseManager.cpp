@@ -300,12 +300,14 @@ bool DatabaseManager::migrateGamesToEmulatorKey() {
         " genre TEXT DEFAULT NULL, family TEXT DEFAULT NULL, players INTEGER DEFAULT 0,"
         " fb_hiscore INTEGER DEFAULT 0, is_bios INTEGER DEFAULT 0,"
         " emulator TEXT NOT NULL DEFAULT 'fbneo',"
+        " dat_dir TEXT NOT NULL DEFAULT '',"
         " UNIQUE(emulator, name, system));");
     // Tout ce qui est deja en base vient de FinalBurn Neo : MAME n'y a jamais
     // rien ecrit avant cette colonne. Les id sont repris tels quels, la table
     // roms y renvoie par game_id.
-    steps.push_back(std::string("INSERT INTO games_migr(") + kGamesColumns + ",emulator)"
-                    " SELECT " + kGamesColumns + ",'fbneo' FROM games;");
+    // dat_dir : added by createTables() just before, empty everywhere.
+    steps.push_back(std::string("INSERT INTO games_migr(") + kGamesColumns + ",emulator,dat_dir)"
+                    " SELECT " + kGamesColumns + ",'fbneo',dat_dir FROM games;");
     steps.push_back("DROP TABLE games;");
     steps.push_back("ALTER TABLE games_migr RENAME TO games;");
 
@@ -351,6 +353,150 @@ bool DatabaseManager::migrateGamesToEmulatorKey() {
 
     setScanMetadata(kGamesEmulatorKeyMigration, 1);
     std::cerr << "[INFO] Games catalogue now keyed by emulator" << std::endl;
+    return true;
+}
+
+// ── Toutes les lignes ROM d'un set ──────────────────────────────────────────
+// `roms` portait UNIQUE(game_id, name), rempli par INSERT OR REPLACE : un set
+// qui liste deux ROMs du meme nom (meme contenu ou non) n'en gardait qu'une,
+// la derniere, sans que rien ne le dise. Le DAT fait foi : chaque ligne est
+// gardee, dans son ordre, et DatLayout::archive_names dit sous quel nom
+// chacune se range dans l'archive. SQLite ne sait pas retirer une contrainte
+// UNIQUE : la table est reconstruite, ids repris tels quels (rom_cache y
+// renvoie). Les lignes deja perdues reviennent a la prochaine lecture des
+// DAT, d'elles-memes : rien n'est demande au joueur.
+static const char* kRomsEveryLineMigration = "roms_every_line_v1";
+
+bool DatabaseManager::migrateRomsToEveryLine() {
+    sqlite3_exec(m_db,
+                 "CREATE TABLE IF NOT EXISTS scan_metadata ("
+                 " key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
+                 nullptr, nullptr, nullptr);
+    if (getScanMetadata(kRomsEveryLineMigration, 0) == 1) return true;
+
+    // La contrainte se lit dans la liste des index : celui qu'une clause
+    // UNIQUE cree porte l'origine 'u'. Une base neuve n'en a pas.
+    bool has_unique = false;
+    {
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(m_db, "PRAGMA index_list(roms);", -1, &st, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(st) == SQLITE_ROW) {
+                const std::string origin = safe_column_text(st, 3);
+                if (sqlite3_column_int(st, 2) == 1 && origin == "u") has_unique = true;
+            }
+            sqlite3_finalize(st);
+        }
+    }
+    if (!has_unique) {
+        setScanMetadata(kRomsEveryLineMigration, 1);
+        return true;
+    }
+
+    const std::vector<std::string> steps = {
+        "CREATE TABLE roms_migr ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " game_id INTEGER NOT NULL, name TEXT NOT NULL, size INTEGER, crc TEXT,"
+        " file_path TEXT, merge TEXT DEFAULT NULL,"
+        " FOREIGN KEY(game_id) REFERENCES games(id));",
+        "INSERT INTO roms_migr(id, game_id, name, size, crc, file_path, merge)"
+        " SELECT id, game_id, name, size, crc, file_path, merge FROM roms ORDER BY id;",
+        "DROP TABLE roms;",
+        "ALTER TABLE roms_migr RENAME TO roms;",
+        // Les index de la table disparue sont partis avec elle ; createTables()
+        // les recree plus loin, ceux-ci servent des cette ouverture.
+        "CREATE INDEX IF NOT EXISTS idx_roms_game_id ON roms(game_id);",
+    };
+
+    // Meme procedure que migrateGamesToEmulatorKey : rom_cache renvoie a
+    // roms(id) avec ON DELETE SET NULL, le DROP le viderait sinon.
+    sqlite3_exec(m_db, "PRAGMA foreign_keys=OFF;", nullptr, nullptr, nullptr);
+    auto restore_fk = [&]() { sqlite3_exec(m_db, "PRAGMA foreign_keys=ON;", nullptr, nullptr, nullptr); };
+
+    char* err = nullptr;
+    if (sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, &err) != SQLITE_OK) {
+        std::cerr << "[WARN] ROM lines migration could not start: " << err << std::endl;
+        sqlite3_free(err);
+        restore_fk();
+        return false;
+    }
+    for (const auto& sql : steps) {
+        if (sqlite3_exec(m_db, sql.c_str(), nullptr, nullptr, &err) != SQLITE_OK) {
+            std::cerr << "[ERROR] ROM lines migration failed: " << err << std::endl;
+            sqlite3_free(err);
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            restore_fk();
+            return false;
+        }
+    }
+    if (sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, &err) != SQLITE_OK) {
+        std::cerr << "[ERROR] ROM lines migration could not commit: " << err << std::endl;
+        sqlite3_free(err);
+        sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+        restore_fk();
+        return false;
+    }
+    restore_fk();
+
+    setScanMetadata(kRomsEveryLineMigration, 1);
+    std::cerr << "[INFO] ROM table now keeps every line of the DAT" << std::endl;
+    return true;
+}
+
+// ── Le dossier <dir> de chaque set ──────────────────────────────────────────
+// games.dat_dir vient d'arriver, vide partout : juste pour les DAT sans
+// <dir> (tous ceux de FinalBurn Neo), faux pour un DAT qui range ses sets
+// dans des <dir name="...">. Chaque DAT deja charge est relu une fois, sur
+// place : une recherche de texte suffit a ecarter ceux qui n'en ont pas, les
+// autres donnent le dossier de chacun de leurs sets, ecrit tel quel. Rien
+// n'est recharge, aucun statut ne bouge, rien n'est demande au joueur. Un
+// DAT illisible maintenant (disque absent) laisse la garde baissee : on
+// reessaie a l'ouverture suivante, et sa prochaine lecture le remplit de
+// toute facon.
+static const char* kGamesDatDirMigration = "games_dat_dir_v1";
+
+bool DatabaseManager::migrateGamesDatDir() {
+    sqlite3_exec(m_db,
+                 "CREATE TABLE IF NOT EXISTS scan_metadata ("
+                 " key TEXT PRIMARY KEY, value INTEGER NOT NULL);",
+                 nullptr, nullptr, nullptr);
+    if (getScanMetadata(kGamesDatDirMigration, 0) == 1) return true;
+
+    std::vector<std::pair<std::string, std::string>> dats;   // filename, filepath
+    {
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(m_db, "SELECT filename, filepath FROM dat_files;", -1, &st, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(st) == SQLITE_ROW)
+                dats.emplace_back(safe_column_text(st, 0), safe_column_text(st, 1));
+            sqlite3_finalize(st);
+        }
+    }
+
+    bool all_read = true;
+    size_t filled = 0;
+    sqlite3_stmt* up = nullptr;
+    if (sqlite3_prepare_v2(m_db, "UPDATE games SET dat_dir = ? WHERE dat_source = ? AND name = ?;",
+                           -1, &up, nullptr) != SQLITE_OK)
+        return false;
+    sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
+    for (const auto& [file, path] : dats) {
+        bool readable = false;
+        const auto dirs = DatParser::dirPaths(path, &readable);
+        if (!readable) { all_read = false; continue; }
+        for (const auto& [name, dir] : dirs) {
+            sqlite3_reset(up);
+            sqlite3_bind_text(up, 1, dir.c_str(),  -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(up, 2, file.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(up, 3, name.c_str(), -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(up) == SQLITE_DONE) filled += (size_t)sqlite3_changes(m_db);
+        }
+    }
+    sqlite3_finalize(up);
+    if (sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, nullptr) != SQLITE_OK) {
+        sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+        return false;
+    }
+    if (filled) std::cerr << "[INFO] " << filled << " set(s) filed in a DAT sub-folder" << std::endl;
+    if (all_read) setScanMetadata(kGamesDatDirMigration, 1);
     return true;
 }
 
@@ -405,6 +551,7 @@ bool DatabaseManager::createTables() {
             fb_hiscore INTEGER DEFAULT 0,
             is_bios INTEGER DEFAULT 0,
             emulator TEXT NOT NULL DEFAULT 'fbneo',
+            dat_dir TEXT NOT NULL DEFAULT '',
             UNIQUE(emulator, name, system)
         );
     )";
@@ -418,8 +565,7 @@ bool DatabaseManager::createTables() {
             crc TEXT,
             file_path TEXT,
             merge TEXT DEFAULT NULL,
-            FOREIGN KEY(game_id) REFERENCES games(id),
-            UNIQUE(game_id, name)
+            FOREIGN KEY(game_id) REFERENCES games(id)
         );
     )";
     
@@ -577,6 +723,10 @@ bool DatabaseManager::createTables() {
         { "players",    "ALTER TABLE games ADD COLUMN players INTEGER DEFAULT 0;" },
         { "fb_hiscore", "ALTER TABLE games ADD COLUMN fb_hiscore INTEGER DEFAULT 0;" },
         { "is_bios",    "ALTER TABLE games ADD COLUMN is_bios INTEGER DEFAULT 0;" },
+        // The <dir> path the DAT files the set under ("" at the root : every
+        // set of a DAT without <dir>, so nothing changes for them). Filled
+        // for the DATs that have some by migrateGamesDatDir(), below.
+        { "dat_dir",    "ALTER TABLE games ADD COLUMN dat_dir TEXT NOT NULL DEFAULT '';" },
     };
     // Same mechanism for the roms table. `merge` is the DAT's merge= attribute,
     // the one piece of information that tells a split set apart from a broken
@@ -636,6 +786,10 @@ bool DatabaseManager::createTables() {
     // `mslug` deux fois, une fois par emulateur. A faire avant les
     // declencheurs plus bas, qui vont lire NEW.emulator / OLD.emulator.
     migrateGamesToEmulatorKey();
+    // Chaque ligne ROM que le DAT liste, meme deux du meme nom dans un set.
+    migrateRomsToEveryLine();
+    // Le dossier <dir> de chaque set, pour les DAT qui en ont.
+    migrateGamesDatDir();
 
     // ── Sets the user chose to stop hearing about ─────────────────────────
     // Own table, no foreign key: like player_stats below, this is a decision
@@ -930,8 +1084,8 @@ bool DatabaseManager::insertGame(const Game& game) {
         INSERT INTO games 
         (name, description, year, manufacturer, system, status, video_type, orientation, 
          width, height, aspect_x, aspect_y, driver_status, comment, cloneof, romof, sourcefile, snapshot_path, dat_source, dat_header,
-         genre, family, players, fb_hiscore, is_bios, emulator)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+         genre, family, players, fb_hiscore, is_bios, emulator, dat_dir)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     )";
     
     sqlite3_stmt* stmt;
@@ -970,6 +1124,7 @@ bool DatabaseManager::insertGame(const Game& game) {
     // seul catalogue qui existait avant.
     const char* emu = game.emulator.empty() ? "fbneo" : game.emulator.c_str();
     sqlite3_bind_text(stmt, 26, emu, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 27, game.dat_dir.c_str(), -1, SQLITE_STATIC);
 
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -1027,7 +1182,10 @@ bool DatabaseManager::insertGame(const Game& game) {
 }
 
 bool DatabaseManager::insertRom(int64_t game_id, const Rom& rom) {
-    const char* sql = "INSERT OR REPLACE INTO roms (game_id, name, size, crc, merge) VALUES (?, ?, ?, ?, ?);";
+    // Every line the DAT lists, in its order (the id keeps it) : two ROMs of
+    // one set may share a name, with the same content or not. Which one keeps
+    // the name inside the archive is DatLayout::archive_names' to say.
+    const char* sql = "INSERT INTO roms (game_id, name, size, crc, merge) VALUES (?, ?, ?, ?, ?);";
     
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -1257,7 +1415,7 @@ std::vector<Game> DatabaseManager::loadAllGames(bool with_roms, const std::strin
         "sourcefile, comment, video_type, orientation, width, height, aspect_x, "
         "aspect_y, driver_status, status, snapshot_path, dat_source, dat_header, "
         "is_favorite, last_played, play_count, play_time_secs, "
-        "genre, family, players, fb_hiscore, is_bios, emulator "
+        "genre, family, players, fb_hiscore, is_bios, emulator, dat_dir "
         "FROM games WHERE (? = '' OR emulator = ?) ORDER BY description;";
 
     sqlite3_stmt* stmt = nullptr;
@@ -1313,6 +1471,7 @@ std::vector<Game> DatabaseManager::loadAllGames(bool with_roms, const std::strin
          * laisserait tous les jeux MAME se presenter comme du FinalBurn Neo. */
         game.emulator     = safe_column_text(stmt, 30);
         if (game.emulator.empty()) game.emulator = "fbneo";
+        game.dat_dir      = safe_column_text(stmt, 31);
 
         id_to_index[game_id] = games.size();
         games.push_back(std::move(game));
@@ -1332,9 +1491,9 @@ std::vector<Game> DatabaseManager::loadAllGames(bool with_roms, const std::strin
     // Restreinte au catalogue demande : les 370 000 ROMs de MAME n'ont rien a
     // faire dans un audit FinalBurn Neo, meme ecartees une par une ensuite.
     const char* roms_sql = emulator.empty()
-        ? "SELECT game_id, name, size, crc, merge FROM roms;"
+        ? "SELECT game_id, name, size, crc, merge FROM roms ORDER BY id;"
         : "SELECT r.game_id, r.name, r.size, r.crc, r.merge FROM roms r "
-          "JOIN games g ON g.id = r.game_id WHERE g.emulator = ?;";
+          "JOIN games g ON g.id = r.game_id WHERE g.emulator = ? ORDER BY r.id;";
     sqlite3_stmt* roms_stmt = nullptr;
     if (sqlite3_prepare_v2(m_db, roms_sql, -1, &roms_stmt, nullptr) == SQLITE_OK) {
         if (!emulator.empty()) sqlite3_bind_text(roms_stmt, 1, emulator.c_str(), -1, SQLITE_TRANSIENT);
@@ -1463,6 +1622,8 @@ Game DatabaseManager::buildGameFromQuery(sqlite3_stmt* stmt) {
             std::string e = safe_column_text(stmt, c);
             if (!e.empty()) game.emulator = e;
         }
+        else if (std::strcmp(cn, "dat_dir") == 0)
+            game.dat_dir = safe_column_text(stmt, c);
     }
     return game;
 }
@@ -1531,7 +1692,7 @@ Game DatabaseManager::getGame(const std::string& game_name) {
         
         // Load ROMs for this game
         int64_t game_id = sqlite3_column_int64(stmt, 0); // Get game ID from main query
-        const char* roms_sql = "SELECT name, size, crc, file_path, merge FROM roms WHERE game_id = ?;";
+        const char* roms_sql = "SELECT name, size, crc, file_path, merge FROM roms WHERE game_id = ? ORDER BY id;";
         sqlite3_stmt* roms_stmt;
         
         if (sqlite3_prepare_v2(m_db, roms_sql, -1, &roms_stmt, nullptr) == SQLITE_OK) {
@@ -1606,7 +1767,7 @@ Game DatabaseManager::getGame(const std::string& game_name, const std::string& s
         
         // Load ROMs for this game
         int64_t game_id = sqlite3_column_int64(stmt, 0); // Get game ID from main query
-        const char* roms_sql = "SELECT name, size, crc, file_path, merge FROM roms WHERE game_id = ?;";
+        const char* roms_sql = "SELECT name, size, crc, file_path, merge FROM roms WHERE game_id = ? ORDER BY id;";
         sqlite3_stmt* roms_stmt;
         
         if (sqlite3_prepare_v2(m_db, roms_sql, -1, &roms_stmt, nullptr) == SQLITE_OK) {
@@ -1637,7 +1798,7 @@ std::vector<Game> DatabaseManager::getAllGamesWithName(const std::string& game_n
     // plusieurs systemes. Depuis MAME, le meme nom existe aussi d'un
     // emulateur a l'autre : un emulateur vide rend les deux catalogues,
     // sinon la reponse s'y limite.
-    const char* sql = "SELECT id, name, description, year, manufacturer, system, cloneof, romof, sourcefile, comment, video_type, orientation, width, height, aspect_x, aspect_y, driver_status, status, snapshot_path, dat_source, dat_header, emulator FROM games WHERE name = ? AND (? = '' OR emulator = ?);";
+    const char* sql = "SELECT id, name, description, year, manufacturer, system, cloneof, romof, sourcefile, comment, video_type, orientation, width, height, aspect_x, aspect_y, driver_status, status, snapshot_path, dat_source, dat_header, emulator, dat_dir FROM games WHERE name = ? AND (? = '' OR emulator = ?);";
     
     sqlite3_stmt* stmt;
     if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -1675,9 +1836,10 @@ std::vector<Game> DatabaseManager::getAllGamesWithName(const std::string& game_n
         // explicite juste au-dessus.
         game.emulator = safe_column_text(stmt, 21);
         if (game.emulator.empty()) game.emulator = "fbneo";
+        game.dat_dir  = safe_column_text(stmt, 22);
 
         // Load ROMs for this game
-        const char* roms_sql = "SELECT name, size, crc, file_path, merge FROM roms WHERE game_id = ?;";
+        const char* roms_sql = "SELECT name, size, crc, file_path, merge FROM roms WHERE game_id = ? ORDER BY id;";
         sqlite3_stmt* roms_stmt;
         if (sqlite3_prepare_v2(m_db, roms_sql, -1, &roms_stmt, nullptr) == SQLITE_OK) {
             sqlite3_bind_int64(roms_stmt, 1, game_id);
@@ -2388,12 +2550,18 @@ std::unordered_map<std::string, std::string> DatabaseManager::snapshotStatusSign
 
         // r.name is NULL for games with no ROMs (LEFT JOIN produced a single row).
         if (sqlite3_column_type(stmt, 3) != SQLITE_NULL) {
-            cur_sig += safe_column_text(stmt, 3);
-            cur_sig += ':';
-            cur_sig += std::to_string(sqlite3_column_int64(stmt, 4));
-            cur_sig += ':';
-            cur_sig += safe_column_text(stmt, 5);
-            cur_sig += '|';
+            // A line repeating the one before it (same name, size and CRC :
+            // the ORDER BY puts them side by side) asks for nothing more. The
+            // database keeps every line since roms_every_line_v1, it kept one
+            // before : without this, every set a DAT lists a ROM twice in
+            // would look changed on the first update and lose its status.
+            std::string line = safe_column_text(stmt, 3) + ':'
+                             + std::to_string(sqlite3_column_int64(stmt, 4)) + ':'
+                             + safe_column_text(stmt, 5) + '|';
+            const bool repeat = cur_sig.size() >= line.size()
+                && (cur_sig.size() == line.size() || cur_sig[cur_sig.size() - line.size() - 1] == '|')
+                && cur_sig.compare(cur_sig.size() - line.size(), line.size(), line) == 0;
+            if (!repeat) cur_sig += line;
         }
     }
     flush();

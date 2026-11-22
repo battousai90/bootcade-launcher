@@ -333,6 +333,10 @@ private:
     // table : SQLite ne sait pas remplacer une contrainte UNIQUE en place.
     // Jouee une seule fois, sous sa propre garde de version.
     bool migrateGamesToEmulatorKey();
+    // roms : UNIQUE(game_id, name) retiree, chaque ligne du DAT gardee.
+    bool migrateRomsToEveryLine();
+    // games.dat_dir : rempli une fois depuis les DAT deja charges.
+    bool migrateGamesDatDir();
     Game buildGameFromQuery(sqlite3_stmt* stmt);
     // Same check as isRomFileCached(), but against a statement the caller already
     // prepared : getOutdatedRomFiles() walks potentially tens of thousands of

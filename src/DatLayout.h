@@ -32,6 +32,7 @@
 // archive, they only lend their ROMs. And it reads the DAT alone
 // (`strict_dat`), without the one rule taken from an emulator : an FBNeo
 // clone repeating its parent's disk without merge= (disk_is_parents).
+// As listed ("") never applies that rule : it is the DAT, line for line.
 //
 // check() says what a mode needs that a DAT does not say, before anything is
 // laid out : a DAT without links, ROMs inherited but not marked, a link to a
@@ -63,6 +64,11 @@ struct DiskEntry {
 
 struct Archive {
     std::string            name;     // the archive's set : "<name>.zip", "<name>/" for CHDs
+    // Where the DAT files that set under its folder (Game::dat_dir) : "" at
+    // the root, else "A/B" for <DAT folder>/A/B/<name>.zip and its CHDs in
+    // <DAT folder>/A/B/<name>/. A merged archive is its parent's : in the
+    // parent's dir, wherever the DAT lists the clones.
+    std::string            dir;
     std::vector<Entry>     entries;
     std::vector<DiskEntry> disks;
 };
@@ -133,5 +139,30 @@ bool natural_less(const std::string& a, const std::string& b);
 // A DAT's own spelling of a path inside an archive ('\' in merged DATs) and
 // an archive's ('/') name the same entry.
 std::string entry_path(const std::string& name);
+
+// The <dir> path a DAT gives a set, as a path that stays inside the DAT's
+// folder : its components joined by '/', a backslash read as a separator too, the
+// empty ones, "." and ".." left out (a DAT has no business leaving its
+// folder). Nothing else is changed on Linux : every name a valid DAT writes
+// stays as it is. On Windows, a character the file system refuses
+// (<>:"|?* and control characters) becomes '_', so does a trailing dot or
+// space, and a reserved device name (CON, NUL, COM1...) gets a '_' in front.
+std::string safe_dir(const std::string& raw);
+
+// The name each line of `roms` (one set, in the DAT's order) takes inside its
+// archive, by index ; empty for a line that adds nothing to it. `placed` says
+// which lines go in that archive (null : every one) ; a line without CRC
+// (nodump) never does.
+//
+// A zip holds one entry per name, a DAT may list a name twice in a set. The
+// rule is RomVault's, the one the audit already accepts for copies
+// (RomAudit duplicate_copy) : the first line of a name keeps it, each later
+// line of that name is "<stem>_<n><ext>", n counting from 0 over the later
+// lines in DAT order (a third line is "_1"), skipping a name the set already
+// uses. A later line with the same name AND the same CRC is a repeat : its
+// copy is optional, nothing more is asked for it (empty here), but it still
+// takes its number. "a.rom" c1, "a.rom" c1, "a.rom" c2 : "a.rom", "", "a_1.rom".
+std::vector<std::string> archive_names(const std::vector<Rom>& roms,
+                                       bool (*placed)(const Rom&) = nullptr);
 
 } // namespace DatLayout
